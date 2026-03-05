@@ -23,8 +23,7 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 }
 
 # Remove existing entry (idempotent)
-claude mcp remove $ServerName 2>$null
-if ($LASTEXITCODE) { $LASTEXITCODE = 0 }
+try { claude mcp remove $ServerName 2>&1 | Out-Null } catch {}
 
 if ($Local) {
     # ── Local build mode ──
@@ -58,7 +57,7 @@ if ($Local) {
     }
 
     Write-Info "Registering MCP server (local build)..."
-    claude mcp add --scope user --transport stdio --env UE_REMOTE_CONTROL_PORT=30010 $ServerName -- node $DistIndex
+    claude mcp add -s user -t stdio $ServerName -e UE_REMOTE_CONTROL_PORT=30010 -- node $DistIndex
 } else {
     # ── npx mode (default) ──
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -67,7 +66,7 @@ if ($Local) {
     }
 
     Write-Info "Registering MCP server (npx)..."
-    claude mcp add --scope user --transport stdio --env UE_REMOTE_CONTROL_PORT=30010 $ServerName -- npx -y blueprint-extractor-mcp@latest
+    claude mcp add -s user -t stdio $ServerName -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@latest
 }
 
 Write-Info "Done! MCP server '$ServerName' registered globally."

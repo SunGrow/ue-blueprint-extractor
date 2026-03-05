@@ -60,18 +60,16 @@ if [ "$LOCAL" = true ]; then
 
     info "Registering MCP server (local build)..."
     claude mcp add \
-        --scope user \
-        --transport stdio \
-        --env UE_REMOTE_CONTROL_PORT=30010 \
+        -s user -t stdio \
         "${SERVER_NAME}" \
+        -e UE_REMOTE_CONTROL_PORT=30010 \
         -- node "${DIST_INDEX}"
 else
     info "Registering MCP server (npx)..."
     claude mcp add \
-        --scope user \
-        --transport stdio \
-        --env UE_REMOTE_CONTROL_PORT=30010 \
+        -s user -t stdio \
         "${SERVER_NAME}" \
+        -e UE_REMOTE_CONTROL_PORT=30010 \
         -- npx -y blueprint-extractor-mcp@latest
 fi
 

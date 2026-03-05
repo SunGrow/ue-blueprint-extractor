@@ -142,7 +142,7 @@ If the package is published to npm, run the install script — it registers a si
 Or register manually:
 
 ```bash
-claude mcp add --scope user --transport stdio --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@latest
 ```
 
 **Option B: Local build**
