@@ -4,6 +4,30 @@ UE5 editor plugin that extracts Blueprint and StateTree data to structured JSON 
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
+## Repository Structure
+
+```
+ue-blueprint-extractor/
+├── BlueprintExtractor/              # UE5 plugin — copy this into your project's Plugins/
+│   ├── BlueprintExtractor.uplugin
+│   └── Source/BlueprintExtractor/
+│       ├── BlueprintExtractor.Build.cs
+│       ├── Public/                  # Headers (Library, Subsystem, Types, Settings, Schema)
+│       └── Private/                 # Implementation
+│           ├── Extractors/          # ClassLevel, Variable, Component, Graph, StateTree, Timeline, Bytecode
+│           └── NodeExtractors/      # Visitor pattern: CallFunction, Event, Variable, FlowControl, Macro, Timeline
+├── MCP/                             # MCP server for Claude Code (published to npm as blueprint-extractor-mcp)
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── src/
+│       ├── index.ts                 # MCP tool definitions (5 tools)
+│       ├── ue-client.ts             # UE Remote Control HTTP client
+│       └── types.ts                 # Shared TypeScript types
+├── install-mcp.ps1                  # Register MCP server with Claude Code (Windows)
+├── install-mcp.sh                   # Register MCP server with Claude Code (macOS/Linux)
+└── README.md
+```
+
 ## Installation
 
 Copy the `BlueprintExtractor/` folder into any UE5 project's `Plugins/` directory and rebuild.
@@ -129,7 +153,7 @@ The plugin includes an MCP (Model Context Protocol) server that lets Claude Code
 
 **Option A: npx (recommended)**
 
-If the package is published to npm, run the install script — it registers a single `npx` command with Claude Code:
+Run the install script — it registers the npm package with Claude Code via `npx`:
 
 ```bash
 # Windows (PowerShell)
@@ -147,7 +171,7 @@ claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30
 
 **Option B: Local build**
 
-Build the MCP server from source (useful for development or if the npm package is not yet published):
+Build the MCP server from source (useful for development):
 
 ```bash
 # Windows (PowerShell)
