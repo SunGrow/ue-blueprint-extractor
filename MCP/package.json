@@ -4,9 +4,16 @@
   "description": "MCP server for UE5 BlueprintExtractor plugin",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "blueprint-extractor-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

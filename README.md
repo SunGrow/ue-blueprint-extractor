@@ -2,6 +2,8 @@
 
 UE5 editor plugin that extracts Blueprint and StateTree data to structured JSON for C++ conversion and analysis.
 
+> Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
+
 ## Installation
 
 Copy the `BlueprintExtractor/` folder into any UE5 project's `Plugins/` directory and rebuild.
@@ -109,7 +111,7 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
   +-- StateTreeExtractor           (editor data, state hierarchy)
   +-- BlueprintJsonSchema          (pin type serialization, flag bitmasks)
 
-MCP Server (Node.js/TypeScript)    (stdio transport, bridges Claude Code ↔ UE Remote Control)
+MCP Server (Node.js/TypeScript)    (stdio transport, bridges Claude Code <-> UE Remote Control)
   +-- UEClient                     (HTTP client for PUT /remote/object/call)
 ```
 
@@ -125,7 +127,9 @@ The plugin includes an MCP (Model Context Protocol) server that lets Claude Code
 
 ### Setup
 
-Run the install script from the plugin root. It builds the MCP server and registers it globally with Claude Code (user scope — available across all projects):
+**Option A: npx (recommended)**
+
+If the package is published to npm, run the install script — it registers a single `npx` command with Claude Code:
 
 ```bash
 # Windows (PowerShell)
@@ -133,6 +137,24 @@ Run the install script from the plugin root. It builds the MCP server and regist
 
 # macOS / Linux
 ./install-mcp.sh
+```
+
+Or register manually:
+
+```bash
+claude mcp add --scope user --transport stdio --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
+```
+
+**Option B: Local build**
+
+Build the MCP server from source (useful for development or if the npm package is not yet published):
+
+```bash
+# Windows (PowerShell)
+.\install-mcp.ps1 -Local
+
+# macOS / Linux
+./install-mcp.sh --local
 ```
 
 Then restart Claude Code. The 5 tools will appear automatically.
@@ -150,10 +172,10 @@ Then restart Claude Code. The 5 tools will appear automatically.
 ### Architecture
 
 ```
-Claude Code  ←stdio→  MCP Server (Node.js)  ←HTTP→  UE5 Editor (Remote Control API)
-                                                         ↓
+Claude Code  <-stdio->  MCP Server (Node.js)  <-HTTP->  UE5 Editor (Remote Control API)
+                                                         |
                                                   BlueprintExtractorSubsystem
-                                                         ↓
+                                                         |
                                                   BlueprintExtractorLibrary (existing)
 ```
 
@@ -165,6 +187,16 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 |----------|---------|-------------|
 | `UE_REMOTE_CONTROL_HOST` | `127.0.0.1` | UE editor host |
 | `UE_REMOTE_CONTROL_PORT` | `30010` | Remote Control HTTP port |
+
+## Publishing (Maintainers)
+
+To publish the MCP server to npm:
+
+```bash
+cd MCP
+npm login
+npm publish --access public
+```
 
 ## Requirements
 
