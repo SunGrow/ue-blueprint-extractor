@@ -8,16 +8,54 @@ const client = new UEClient();
 
 const server = new McpServer({
   name: 'blueprint-extractor',
-  version: '1.0.0',
+  version: '1.1.0',
 });
 
+// Shared scope enum with detailed descriptions
+const scopeEnum = z.enum([
+  'ClassLevel',
+  'Variables',
+  'Components',
+  'FunctionsShallow',
+  'Full',
+  'FullWithBytecode',
+]);
+
 // Tool 1: extract_blueprint
-server.tool(
+server.registerTool(
   'extract_blueprint',
-  'Extract a UE5 Blueprint asset to JSON. Returns the full Blueprint structure including class info, variables, components, and graph data.',
   {
-    asset_path: z.string().describe('UE asset path, e.g. /Game/Blueprints/BP_Character'),
-    scope: z.enum(['ClassLevel', 'Variables', 'Components', 'FunctionsShallow', 'Full', 'FullWithBytecode']).default('Full').describe('Extraction depth'),
+    title: 'Extract Blueprint',
+    description: `Extract a UE5 Blueprint asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first to find the correct asset path if you don't already have it.
+- Start with the narrowest scope that answers your question — each level includes everything from the previous:
+  * ClassLevel — parent class, interfaces, class flags, metadata (~1-2KB)
+  * Variables — + all variables with types, defaults, flags (~2-10KB)
+  * Components — + SCS component tree with property overrides (~5-20KB)
+  * FunctionsShallow — + function/event graph names only (~5-25KB)
+  * Full — + complete graph nodes, pins, and connections (~20-500KB+)
+  * FullWithBytecode — + raw bytecode hex dump (largest, rarely needed)
+- Only escalate to Full when you need to understand graph logic (node connections, pin values, execution flow).
+- Full scope on complex Blueprints can exceed 200KB and will be truncated. If truncated, use a narrower scope or inspect specific functions via the graph names from FunctionsShallow.
+
+RETURNS: JSON object with the extracted Blueprint data at the requested scope level.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Blueprint asset. Must start with /Game/ (e.g. /Game/Blueprints/BP_Character). Use search_assets to find paths.',
+      ),
+      scope: scopeEnum.default('Variables').describe(
+        'Extraction depth. Start with ClassLevel or Variables — only use Full when you need graph/node details.',
+      ),
+    },
+    annotations: {
+      title: 'Extract Blueprint',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   async ({ asset_path, scope }) => {
     try {
@@ -28,21 +66,40 @@ server.tool(
       }
       const text = JSON.stringify(parsed, null, 2);
       if (text.length > 200_000) {
-        return { content: [{ type: 'text' as const, text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB. Consider using a narrower scope.\n\n${text.substring(0, 200_000)}...\n[TRUNCATED]` }] };
+        return { content: [{ type: 'text' as const, text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB — consider using a narrower scope (ClassLevel, Variables, or FunctionsShallow).\n\n${text.substring(0, 200_000)}...\n[TRUNCATED]` }] };
       }
       return { content: [{ type: 'text' as const, text }] };
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }
-  }
+  },
 );
 
 // Tool 2: extract_statetree
-server.tool(
+server.registerTool(
   'extract_statetree',
-  'Extract a UE5 StateTree asset to JSON. Returns the full state hierarchy, tasks, conditions, and transitions.',
   {
-    asset_path: z.string().describe('UE asset path to a StateTree, e.g. /Game/AI/ST_BotBehavior'),
+    title: 'Extract StateTree',
+    description: `Extract a UE5 StateTree asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first to find the asset path if needed (filter by class "StateTree").
+- Returns the full state hierarchy: states, tasks, conditions, transitions, evaluators, and linked assets.
+- Response size depends on StateTree complexity — typically 10-100KB.
+
+RETURNS: JSON object with schema, state hierarchy, tasks, conditions, transitions, and linked assets.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to a StateTree asset (e.g. /Game/AI/ST_BotBehavior). Use search_assets with class_filter "StateTree" to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract StateTree',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   async ({ asset_path }) => {
     try {
@@ -55,17 +112,41 @@ server.tool(
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }
-  }
+  },
 );
 
 // Tool 3: extract_cascade
-server.tool(
+server.registerTool(
   'extract_cascade',
-  'Extract multiple Blueprint/StateTree assets with cascade reference following. Writes results to files on disk.',
   {
-    asset_paths: z.array(z.string()).describe('Array of UE asset paths to extract'),
-    scope: z.enum(['ClassLevel', 'Variables', 'Components', 'FunctionsShallow', 'Full', 'FullWithBytecode']).default('Full').describe('Extraction depth'),
-    max_depth: z.number().int().min(0).max(10).default(3).describe('How many levels deep to follow references'),
+    title: 'Extract Cascade',
+    description: `Extract multiple Blueprint/StateTree assets with automatic reference following. Follows parent classes, interfaces, component classes, and other Blueprint references up to max_depth levels deep.
+
+USAGE GUIDELINES:
+- Use when you need to understand an asset AND its dependencies (parent Blueprints, referenced Blueprints, etc.).
+- Results are written to files on disk (in the project's configured output directory), NOT returned inline — the response only contains a summary with file paths and count.
+- For a single asset without dependencies, prefer extract_blueprint or extract_statetree instead.
+- Cycle-safe: won't extract the same asset twice.
+
+RETURNS: Summary with extracted_count and output_directory path. Read the output files to inspect the data.`,
+    inputSchema: {
+      asset_paths: z.array(z.string()).describe(
+        'Array of UE content paths to extract (e.g. ["/Game/Blueprints/BP_Character", "/Game/Blueprints/BP_Weapon"])',
+      ),
+      scope: scopeEnum.default('Full').describe(
+        'Extraction depth applied to all assets. Full is the default since cascade is typically used for deep analysis.',
+      ),
+      max_depth: z.number().int().min(0).max(10).default(3).describe(
+        'How many levels deep to follow references (0 = only the listed assets, 3 = default)',
+      ),
+    },
+    annotations: {
+      title: 'Extract Cascade',
+      readOnlyHint: false, // writes files to disk
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   async ({ asset_paths, scope, max_depth }) => {
     try {
@@ -82,16 +163,37 @@ server.tool(
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }
-  }
+  },
 );
 
 // Tool 4: search_assets
-server.tool(
+server.registerTool(
   'search_assets',
-  'Search for UE5 assets by name. Returns matching asset paths, names, and classes.',
   {
-    query: z.string().describe('Search query to match against asset names'),
-    class_filter: z.string().default('Blueprint').describe('Filter by asset class (e.g. Blueprint, StateTree, or empty for all)'),
+    title: 'Search Assets',
+    description: `Search for UE5 assets by name. This is a lightweight lookup — use it FIRST to find correct asset paths before calling extract_blueprint or extract_statetree.
+
+USAGE GUIDELINES:
+- Always call this before extract_blueprint/extract_statetree if you don't already have the exact asset path.
+- Searches asset names (not full paths) — partial matches work (e.g. "Character" finds "BP_Character").
+- Filter by class to narrow results: "Blueprint" (default), "StateTree", "WidgetBlueprint", "DataAsset", or empty string for all.
+
+RETURNS: JSON array of objects with path, name, and class for each matching asset.`,
+    inputSchema: {
+      query: z.string().describe(
+        'Search term to match against asset names. Partial matches work (e.g. "Player" finds "BP_PlayerCharacter").',
+      ),
+      class_filter: z.string().default('Blueprint').describe(
+        'Filter by asset class. Common values: "Blueprint", "WidgetBlueprint", "StateTree", "DataAsset", or "" for all asset types.',
+      ),
+    },
+    annotations: {
+      title: 'Search Assets',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   async ({ query, class_filter }) => {
     try {
@@ -104,17 +206,35 @@ server.tool(
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }
-  }
+  },
 );
 
 // Tool 5: list_assets
-server.tool(
+server.registerTool(
   'list_assets',
-  'List UE5 assets in a directory. Returns asset paths, names, and classes.',
   {
-    package_path: z.string().describe('UE package path, e.g. /Game/Blueprints'),
-    recursive: z.boolean().default(true).describe('Search subdirectories'),
-    class_filter: z.string().default('').describe('Filter by asset class (empty for all)'),
+    title: 'List Assets',
+    description: `List UE5 assets under a package path. Use this to browse directory contents when you don't know asset names. If you know (part of) the asset name, prefer search_assets instead — it's faster and doesn't require knowing the directory.
+
+RETURNS: JSON array of objects with path, name, and class for each asset in the directory.`,
+    inputSchema: {
+      package_path: z.string().describe(
+        'UE package path to list (e.g. /Game/Blueprints, /Game/AI). Use /Game to list from the Content root.',
+      ),
+      recursive: z.boolean().default(true).describe(
+        'Whether to include assets in subdirectories.',
+      ),
+      class_filter: z.string().default('').describe(
+        'Filter by asset class (e.g. "Blueprint", "StateTree"). Empty string returns all asset types.',
+      ),
+    },
+    annotations: {
+      title: 'List Assets',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   async ({ package_path, recursive, class_filter }) => {
     try {
@@ -131,7 +251,7 @@ server.tool(
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }
-  }
+  },
 );
 
 // Start server
