@@ -66,7 +66,7 @@ if ($Local) {
     }
 
     Write-Info "Registering MCP server (npx)..."
-    claude mcp add -s user -t stdio $ServerName -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@latest
+    claude mcp add -s user -t stdio $ServerName -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@latest
 }
 
 Write-Info "Done! MCP server '$ServerName' registered globally."

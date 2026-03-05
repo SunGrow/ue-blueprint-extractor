@@ -166,7 +166,11 @@ Run the install script — it registers the npm package with Claude Code via `np
 Or register manually:
 
 ```bash
+# macOS / Linux
 claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@latest
+
+# Windows (npx requires cmd /c wrapper)
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@latest
 ```
 
 **Option B: Local build**
