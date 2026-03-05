@@ -117,38 +117,25 @@ MCP Server (Node.js/TypeScript)    (stdio transport, bridges Claude Code ↔ UE 
 
 The plugin includes an MCP (Model Context Protocol) server that lets Claude Code extract Blueprint/StateTree data on demand from a running UE5 editor.
 
-### Setup
-
-1. **Enable Web Remote Control** in the UE5 Editor: Edit > Plugins > search "Remote Control" > enable **Remote Control API** > restart the editor. This starts an HTTP server on port 30010.
-
-2. **Build the MCP server**:
-   ```bash
-   cd Plugins/BlueprintExtractor/MCP
-   npm install
-   npm run build
-   ```
-
-3. **Register with Claude Code** — add to your project's `.mcp.json`:
-   ```json
-   {
-     "mcpServers": {
-       "blueprint-extractor": {
-         "command": "node",
-         "args": ["Plugins/BlueprintExtractor/MCP/dist/index.js"],
-         "env": {
-           "UE_REMOTE_CONTROL_PORT": "30010"
-         }
-       }
-     }
-   }
-   ```
-
-4. **Restart Claude Code** to pick up the MCP config. The 5 tools will appear automatically.
-
 ### Prerequisites
 
 - Node.js 18+
-- UE5 with **Web Remote Control** plugin enabled (built-in, Edit > Plugins)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- **Web Remote Control** plugin enabled in UE5 (Edit > Plugins > search "Remote Control")
+
+### Setup
+
+Run the install script from the plugin root. It builds the MCP server and registers it globally with Claude Code (user scope — available across all projects):
+
+```bash
+# Windows (PowerShell)
+.\install-mcp.ps1
+
+# macOS / Linux
+./install-mcp.sh
+```
+
+Then restart Claude Code. The 5 tools will appear automatically.
 
 ### MCP Tools
 
