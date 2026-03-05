@@ -1,0 +1,30 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Blueprint Extractor",
+	"Description": "Extracts Blueprint data to structured JSON for C++ conversion",
+	"Category": "Editor",
+	"CreatedBy": "",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Plugins": [
+		{
+			"Name": "StateTree",
+			"Enabled": true
+		},
+		{
+			"Name": "StructUtils",
+			"Enabled": true
+		}
+	],
+	"Modules": [
+		{
+			"Name": "BlueprintExtractor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
