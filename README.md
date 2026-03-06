@@ -1,6 +1,6 @@
 # Blueprint Extractor
 
-UE5 editor plugin that extracts Blueprint and StateTree data to structured JSON for C++ conversion and analysis.
+UE5 editor plugin that extracts Blueprint, AnimBlueprint, StateTree, DataAsset, and DataTable data to structured JSON for C++ conversion and analysis.
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
@@ -14,13 +14,13 @@ ue-blueprint-extractor/
 │       ├── BlueprintExtractor.Build.cs
 │       ├── Public/                  # Headers (Library, Subsystem, Types, Settings, Schema)
 │       └── Private/                 # Implementation
-│           ├── Extractors/          # ClassLevel, Variable, Component, Graph, StateTree, Timeline, Bytecode
+│           ├── Extractors/          # ClassLevel, Variable, Component, Graph, StateTree, DataAsset, DataTable, Timeline, Bytecode
 │           └── NodeExtractors/      # Visitor pattern: CallFunction, Event, Variable, FlowControl, Macro, Timeline
 ├── MCP/                             # MCP server for Claude Code (published to npm as blueprint-extractor-mcp)
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts                 # MCP tool definitions (5 tools)
+│       ├── index.ts                 # MCP tool definitions (7 tools)
 │       ├── ue-client.ts             # UE Remote Control HTTP client
 │       └── types.ts                 # Shared TypeScript types
 ├── install-mcp.ps1                  # Register MCP server with Claude Code (Windows)
@@ -38,7 +38,7 @@ Copy the `BlueprintExtractor/` folder into any UE5 project's `Plugins/` director
 
 ### Content Browser
 
-Right-click any Blueprint or StateTree asset in the Content Browser and select **Extract to JSON**.
+Right-click any Blueprint, AnimBlueprint, StateTree, DataAsset, or DataTable asset in the Content Browser and select **Extract to JSON**.
 
 ### C++ API
 
@@ -50,6 +50,12 @@ UBlueprintExtractorLibrary::ExtractBlueprintToJson(Blueprint, OutputPath, EBluep
 
 // Single StateTree
 UBlueprintExtractorLibrary::ExtractStateTreeToJson(StateTree, OutputPath);
+
+// Single DataAsset
+UBlueprintExtractorLibrary::ExtractDataAssetToJson(DataAsset, OutputPath);
+
+// Single DataTable
+UBlueprintExtractorLibrary::ExtractDataTableToJson(DataTable, OutputPath);
 
 // Cascade extraction (follows references up to MaxDepth)
 TArray<UObject*> Assets = { Blueprint };
@@ -94,6 +100,16 @@ Configure in **Project Settings > Plugins > Blueprint Extractor**:
 - **Delegates** — multicast/single-cast with signature parameters
 - **Bytecode** — raw hex dump per function (optional)
 
+### DataAssets
+
+- **Schema class** — the UDataAsset / UPrimaryDataAsset subclass name
+- **User-defined properties** — all UPROPERTY fields (skips UDataAsset/UObject base), with exported values and reference paths for object properties
+
+### DataTables
+
+- **Row struct schema** — property names and C++ types from the row struct
+- **All rows** — keyed by row name, with exported property values per row
+
 ### StateTrees
 
 - **Schema** and metadata
@@ -133,6 +149,8 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
   +-- TimelineExtractor            (timeline tracks, keyframes)
   +-- BytecodeExtractor            (raw bytecode hex)
   +-- StateTreeExtractor           (editor data, state hierarchy)
+  +-- DataAssetExtractor           (UPROPERTY reflection, skip base class)
+  +-- DataTableExtractor           (row struct schema, all rows)
   +-- BlueprintJsonSchema          (pin type serialization, flag bitmasks)
 
 MCP Server (Node.js/TypeScript)    (stdio transport, bridges Claude Code <-> UE Remote Control)
@@ -185,14 +203,16 @@ Build the MCP server from source (useful for development):
 ./install-mcp.sh --local
 ```
 
-Then restart Claude Code. The 5 tools will appear automatically.
+Then restart Claude Code. The 7 tools will appear automatically.
 
 ### MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `extract_blueprint` | Extract a Blueprint to JSON (asset path + scope) |
+| `extract_blueprint` | Extract a Blueprint or AnimBlueprint to JSON (asset path + scope) |
 | `extract_statetree` | Extract a StateTree to JSON |
+| `extract_dataasset` | Extract a DataAsset to JSON (all UPROPERTY fields) |
+| `extract_datatable` | Extract a DataTable to JSON (schema + all rows) |
 | `extract_cascade` | Extract multiple assets with reference following |
 | `search_assets` | Search assets by name and class filter |
 | `list_assets` | List assets under a package path |
@@ -213,8 +233,8 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — All 5 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. A `blueprint://` resource for static scope documentation is also exposed.
-- **Small, distinct surface** — 5 tools with non-overlapping purposes. Scopes are consolidated into a single `scope` parameter rather than separate tools per scope.
+- **Right primitive** — All 7 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. A `blueprint://` resource for static scope documentation is also exposed.
+- **Small, distinct surface** — 7 tools with non-overlapping purposes. Scopes are consolidated into a single `scope` parameter rather than separate tools per scope.
 - **Description quality** — Each tool includes usage guidelines, scope size estimates, and workflow hints (e.g., "use `search_assets` first") to maximize selection accuracy.
 - **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval of read-only operations. Only `extract_cascade` has `readOnlyHint: false` (writes files to disk).
 - **Security** — stdio transport, env-based credentials (`UE_REMOTE_CONTROL_PORT`), local-only by default. No auth tokens or remote access.
@@ -238,5 +258,5 @@ npm publish --access public
 
 ## Requirements
 
-- Unreal Engine 5.x (tested on 5.6)
+- Unreal Engine 5.x (tested on 5.6 and 5.7)
 - Editor-only — not included in packaged builds
