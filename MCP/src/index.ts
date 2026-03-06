@@ -8,7 +8,7 @@ const client = new UEClient();
 
 const server = new McpServer({
   name: 'blueprint-extractor',
-  version: '1.2.0',
+  version: '1.3.0',
 });
 
 // Shared scope enum with detailed descriptions
