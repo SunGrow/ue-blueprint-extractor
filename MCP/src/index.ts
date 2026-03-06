@@ -48,6 +48,9 @@ server.resource(
         '',
         'Start with the narrowest scope that answers your question.',
         'Full scope on complex Blueprints can exceed 200KB and will be truncated.',
+        '',
+        'Note: Scopes only apply to Blueprint extraction (extract_blueprint and extract_cascade).',
+        'DataAsset, DataTable, and StateTree always extract fully — no scope parameter is needed.',
       ].join('\n'),
     }],
   }),
@@ -147,12 +150,96 @@ RETURNS: JSON object with schema, state hierarchy, tasks, conditions, transition
   },
 );
 
-// Tool 3: extract_cascade
+// Tool 3: extract_dataasset
+server.registerTool(
+  'extract_dataasset',
+  {
+    title: 'Extract DataAsset',
+    description: `Extract a UE5 DataAsset to structured JSON. Serializes all user-defined UPROPERTY fields using UE reflection.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "DataAsset" or a specific DataAsset subclass name to find the asset path.
+- Returns all user-defined properties with their types and current values.
+- Works with any UDataAsset or UPrimaryDataAsset subclass.
+
+RETURNS: JSON object with the DataAsset's class info and all property values.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the DataAsset (e.g. /Game/Data/DA_ItemDatabase). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract DataAsset',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractDataAsset', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 4: extract_datatable
+server.registerTool(
+  'extract_datatable',
+  {
+    title: 'Extract DataTable',
+    description: `Extract a UE5 DataTable asset to structured JSON. Includes the row struct schema and all row data.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "DataTable" to find the asset path.
+- Returns the row struct type, property schema, row count, and all row data with names and values.
+- Useful for understanding game data tables (items, abilities, stats, etc.).
+
+RETURNS: JSON object with row struct info, schema, and all rows.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the DataTable (e.g. /Game/Data/DT_WeaponStats). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract DataTable',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractDataTable', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      const text = JSON.stringify(parsed, null, 2);
+      if (text.length > 200_000) {
+        return { content: [{ type: 'text' as const, text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB — large DataTable.\n\n${text.substring(0, 200_000)}...\n[TRUNCATED]` }] };
+      }
+      return { content: [{ type: 'text' as const, text }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 5: extract_cascade
 server.registerTool(
   'extract_cascade',
   {
     title: 'Extract Cascade',
-    description: `Extract multiple Blueprint/StateTree assets with automatic reference following. Follows parent classes, interfaces, component classes, and other Blueprint references up to max_depth levels deep.
+    description: `Extract multiple assets (Blueprint, AnimBlueprint, StateTree, DataAsset, DataTable) with automatic reference following for Blueprints and StateTrees. Follows parent classes, interfaces, component classes, and other Blueprint references up to max_depth levels deep.
 
 USAGE GUIDELINES:
 - Use when you need to understand an asset AND its dependencies (parent Blueprints, referenced Blueprints, etc.).
@@ -198,17 +285,17 @@ RETURNS: Summary with extracted_count and output_directory path. Read the output
   },
 );
 
-// Tool 4: search_assets
+// Tool 6: search_assets
 server.registerTool(
   'search_assets',
   {
     title: 'Search Assets',
-    description: `Search for UE5 assets by name. This is a lightweight lookup — use it FIRST to find correct asset paths before calling extract_blueprint or extract_statetree.
+    description: `Search for UE5 assets by name. This is a lightweight lookup — use it FIRST to find correct asset paths before calling extract_blueprint, extract_statetree, extract_dataasset, or extract_datatable.
 
 USAGE GUIDELINES:
-- Always call this before extract_blueprint/extract_statetree if you don't already have the exact asset path.
+- Always call this before any extract_* tool if you don't already have the exact asset path.
 - Searches asset names (not full paths) — partial matches work (e.g. "Character" finds "BP_Character").
-- Filter by class to narrow results: "Blueprint" (default), "StateTree", "WidgetBlueprint", "DataAsset", or empty string for all.
+- Filter by class to narrow results: "Blueprint" (default), "AnimBlueprint", "StateTree", "DataTable", "WidgetBlueprint", "DataAsset", or empty string for all.
 
 RETURNS: JSON array of objects with path, name, and class for each matching asset.`,
     inputSchema: {
@@ -216,7 +303,7 @@ RETURNS: JSON array of objects with path, name, and class for each matching asse
         'Search term to match against asset names. Partial matches work (e.g. "Player" finds "BP_PlayerCharacter").',
       ),
       class_filter: z.string().default('Blueprint').describe(
-        'Filter by asset class. Common values: "Blueprint", "WidgetBlueprint", "StateTree", "DataAsset", or "" for all asset types.',
+        'Filter by asset class. Common values: "Blueprint", "AnimBlueprint", "WidgetBlueprint", "StateTree", "DataTable", "DataAsset", or "" for all asset types.',
       ),
     },
     annotations: {
@@ -241,7 +328,7 @@ RETURNS: JSON array of objects with path, name, and class for each matching asse
   },
 );
 
-// Tool 5: list_assets
+// Tool 7: list_assets
 server.registerTool(
   'list_assets',
   {

@@ -9,7 +9,11 @@
 #include "Extractors/TimelineExtractor.h"
 #include "Extractors/BytecodeExtractor.h"
 #include "Extractors/StateTreeExtractor.h"
+#include "Extractors/DataAssetExtractor.h"
+#include "Extractors/DataTableExtractor.h"
 #include "Engine/Blueprint.h"
+#include "Engine/DataAsset.h"
+#include "Engine/DataTable.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
 #include "StateTree.h"
@@ -341,6 +345,72 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractStateTreeToJsonObject
 }
 
 // ---------------------------------------------------------------------------
+// DataAsset extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractDataAssetToJson(UDataAsset* DataAsset, const FString& OutputPath)
+{
+	if (!DataAsset)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractDataAssetToJson: null DataAsset"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractDataAssetToJsonObject(DataAsset);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted DataAsset '%s' to '%s'"), *DataAsset->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractDataAssetToJsonObject(UDataAsset* DataAsset)
+{
+	return FDataAssetExtractor::Extract(DataAsset);
+}
+
+// ---------------------------------------------------------------------------
+// DataTable extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractDataTableToJson(UDataTable* DataTable, const FString& OutputPath)
+{
+	if (!DataTable)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractDataTableToJson: null DataTable"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractDataTableToJsonObject(DataTable);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted DataTable '%s' to '%s'"), *DataTable->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractDataTableToJsonObject(UDataTable* DataTable)
+{
+	return FDataTableExtractor::Extract(DataTable);
+}
+
+// ---------------------------------------------------------------------------
 // Cascade extraction — reference collection
 // ---------------------------------------------------------------------------
 
@@ -590,6 +660,14 @@ int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& Ini
 			{
 				Refs = CollectStateTreeReferences(ST);
 			}
+		}
+		else if (UDataAsset* DA = Cast<UDataAsset>(Current.Asset))
+		{
+			bSuccess = ExtractDataAssetToJson(DA, FullPath);
+		}
+		else if (UDataTable* DT = Cast<UDataTable>(Current.Asset))
+		{
+			bSuccess = ExtractDataTableToJson(DT, FullPath);
 		}
 
 		if (bSuccess)

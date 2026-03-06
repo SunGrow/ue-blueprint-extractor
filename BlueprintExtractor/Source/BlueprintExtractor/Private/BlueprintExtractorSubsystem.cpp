@@ -2,6 +2,8 @@
 #include "BlueprintExtractorLibrary.h"
 #include "BlueprintExtractorSettings.h"
 #include "Engine/Blueprint.h"
+#include "Engine/DataAsset.h"
+#include "Engine/DataTable.h"
 #include "StateTree.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -67,6 +69,46 @@ FString UBlueprintExtractorSubsystem::ExtractStateTree(const FString& AssetPath)
 	return OutString;
 }
 
+FString UBlueprintExtractorSubsystem::ExtractDataAsset(const FString& AssetPath)
+{
+	UDataAsset* DataAsset = LoadObject<UDataAsset>(nullptr, *AssetPath);
+	if (DataAsset == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	const TSharedPtr<FJsonObject> JsonObject = UBlueprintExtractorLibrary::ExtractDataAssetToJsonObject(DataAsset);
+	if (!JsonObject.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to extract DataAsset"));
+	}
+
+	FString OutString;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
+	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
+	return OutString;
+}
+
+FString UBlueprintExtractorSubsystem::ExtractDataTable(const FString& AssetPath)
+{
+	UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *AssetPath);
+	if (DataTable == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	const TSharedPtr<FJsonObject> JsonObject = UBlueprintExtractorLibrary::ExtractDataTableToJsonObject(DataTable);
+	if (!JsonObject.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to extract DataTable"));
+	}
+
+	FString OutString;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
+	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
+	return OutString;
+}
+
 FString UBlueprintExtractorSubsystem::ExtractCascade(const FString& AssetPathsJson,
                                                       const FString& Scope,
                                                       const int32 MaxDepth)
@@ -91,6 +133,14 @@ FString UBlueprintExtractorSubsystem::ExtractCascade(const FString& AssetPathsJs
 		if (Asset == nullptr)
 		{
 			Asset = LoadObject<UStateTree>(nullptr, *AssetPath);
+		}
+		if (Asset == nullptr)
+		{
+			Asset = LoadObject<UDataAsset>(nullptr, *AssetPath);
+		}
+		if (Asset == nullptr)
+		{
+			Asset = LoadObject<UDataTable>(nullptr, *AssetPath);
 		}
 		if (Asset == nullptr)
 		{

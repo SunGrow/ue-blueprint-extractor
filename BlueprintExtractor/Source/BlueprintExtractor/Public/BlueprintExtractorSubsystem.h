@@ -32,6 +32,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ExtractStateTree(const FString& AssetPath);
 
+	/** Extracts a DataAsset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractDataAsset(const FString& AssetPath);
+
+	/** Extracts a DataTable to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractDataTable(const FString& AssetPath);
+
 	/** Extracts multiple assets with cascade reference following. Returns extraction summary JSON. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ExtractCascade(const FString& AssetPathsJson,

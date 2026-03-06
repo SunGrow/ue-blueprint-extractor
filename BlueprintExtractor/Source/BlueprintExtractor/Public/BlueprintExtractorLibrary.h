@@ -7,6 +7,8 @@
 
 class UBlueprint;
 class UStateTree;
+class UDataAsset;
+class UDataTable;
 
 UCLASS()
 class BLUEPRINTEXTRACTOR_API UBlueprintExtractorLibrary : public UBlueprintFunctionLibrary
@@ -26,6 +28,16 @@ public:
 	static bool ExtractStateTreeToJson(UStateTree* StateTree, const FString& OutputPath);
 
 	static TSharedPtr<FJsonObject> ExtractStateTreeToJsonObject(UStateTree* StateTree);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractDataAssetToJson(UDataAsset* DataAsset, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractDataAssetToJsonObject(UDataAsset* DataAsset);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractDataTableToJson(UDataTable* DataTable, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractDataTableToJsonObject(UDataTable* DataTable);
 
 	/** Extract assets with cascade: follows references to other extractable assets (Blueprints, StateTrees). */
 	static int32 ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth);

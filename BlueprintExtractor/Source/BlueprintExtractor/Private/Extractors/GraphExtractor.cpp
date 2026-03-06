@@ -244,6 +244,17 @@ EExtractedGraphType FGraphExtractor::DetermineGraphType(const UEdGraph* Graph, c
 		}
 	}
 
+	// AnimGraph detection: check schema class name or graph name
+	if (Graph->GetSchema() && Graph->GetSchema()->GetClass()->GetName().Contains(TEXT("Anim")))
+	{
+		return EExtractedGraphType::AnimGraph;
+	}
+	static const FName AnimGraphName(TEXT("AnimGraph"));
+	if (Graph->GetFName() == AnimGraphName)
+	{
+		return EExtractedGraphType::AnimGraph;
+	}
+
 	return EExtractedGraphType::Unknown;
 }
 
@@ -292,6 +303,29 @@ TArray<TSharedPtr<FJsonValue>> FGraphExtractor::ExtractAllGraphs(const UBlueprin
 			{
 				Result.Add(MakeShared<FJsonValueObject>(GraphObj));
 			}
+		}
+	}
+
+	// Collect all graphs extracted so far to detect any remaining (e.g. AnimBlueprint anim graphs)
+	TSet<const UEdGraph*> ExtractedGraphs;
+	ExtractedGraphs.Append(Blueprint->FunctionGraphs);
+	ExtractedGraphs.Append(Blueprint->UbergraphPages);
+	ExtractedGraphs.Append(Blueprint->MacroGraphs);
+
+	// Iterate all subobjects of the Blueprint to find UEdGraph instances not yet extracted
+	TArray<UObject*> Subobjects;
+	GetObjectsWithOuter(Blueprint, Subobjects, /*bIncludeNestedObjects=*/true);
+	for (UObject* Subobject : Subobjects)
+	{
+		UEdGraph* Graph = Cast<UEdGraph>(Subobject);
+		if (Graph && !ExtractedGraphs.Contains(Graph))
+		{
+			TSharedPtr<FJsonObject> GraphObj = ExtractGraph(Graph, Blueprint);
+			if (GraphObj)
+			{
+				Result.Add(MakeShared<FJsonValueObject>(GraphObj));
+			}
+			ExtractedGraphs.Add(Graph);
 		}
 	}
 

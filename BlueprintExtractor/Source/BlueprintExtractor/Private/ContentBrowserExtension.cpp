@@ -5,6 +5,8 @@
 #include "ContentBrowserModule.h"
 #include "ContentBrowserDelegates.h"
 #include "Engine/Blueprint.h"
+#include "Engine/DataAsset.h"
+#include "Engine/DataTable.h"
 #include "StateTree.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Misc/FileHelper.h"
@@ -83,6 +85,20 @@ static void ExecuteExtraction(TArray<FAssetData> SelectedAssets)
 					SuccessCount++;
 				}
 			}
+			else if (UDataAsset* DataAsset = Cast<UDataAsset>(Asset))
+			{
+				if (UBlueprintExtractorLibrary::ExtractDataAssetToJson(DataAsset, FullPath))
+				{
+					SuccessCount++;
+				}
+			}
+			else if (UDataTable* DataTable = Cast<UDataTable>(Asset))
+			{
+				if (UBlueprintExtractorLibrary::ExtractDataTableToJson(DataTable, FullPath))
+				{
+					SuccessCount++;
+				}
+			}
 		}
 
 		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted %d/%d assets to %s"), SuccessCount, SelectedAssets.Num(), *OutputDir);
@@ -97,7 +113,7 @@ static TSharedRef<FExtender> OnExtendContentBrowserAssetSelectionMenu(const TArr
 	for (const FAssetData& Asset : SelectedAssets)
 	{
 		const FString ClassName = Asset.AssetClassPath.GetAssetName().ToString();
-		if (ClassName.Contains(TEXT("Blueprint")) || ClassName.Contains(TEXT("StateTree")))
+		if (ClassName.Contains(TEXT("Blueprint")) || ClassName == TEXT("StateTree") || ClassName == TEXT("DataTable") || ClassName.Contains(TEXT("DataAsset")))
 		{
 			bHasExtractable = true;
 			break;
