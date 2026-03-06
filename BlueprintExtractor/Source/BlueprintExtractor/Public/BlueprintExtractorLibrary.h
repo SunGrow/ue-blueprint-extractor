@@ -17,10 +17,16 @@ class BLUEPRINTEXTRACTOR_API UBlueprintExtractorLibrary : public UBlueprintFunct
 
 public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
-	static bool ExtractBlueprintToJson(UBlueprint* Blueprint, const FString& OutputPath, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {});
+	static bool ExtractBlueprintToJson(UBlueprint* Blueprint, const FString& OutputPath, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter);
+
+	static bool ExtractBlueprintToJson(UBlueprint* Blueprint, const FString& OutputPath, EBlueprintExtractionScope Scope)
+	{ return ExtractBlueprintToJson(Blueprint, OutputPath, Scope, TArray<FName>()); }
 
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
-	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {});
+	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter);
+
+	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope)
+	{ return ExtractBlueprintToJsonString(Blueprint, OutJsonString, Scope, TArray<FName>()); }
 
 	static TSharedPtr<FJsonObject> ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {});
 

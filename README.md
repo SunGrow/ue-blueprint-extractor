@@ -277,6 +277,14 @@ npm login
 npm publish --access public
 ```
 
+## Changelog
+
+### 1.4.1
+- **Fix**: UHT compilation error — `UFUNCTION` declarations with `TArray<FName>` default parameters used brace-initialization (`= {}`), which UHT cannot parse. Replaced with non-UFUNCTION overloads that forward with an empty array.
+
+### 1.4.0
+- Graph filtering (`graph_filter`) and compact output mode (`compact`) for Blueprints and cascade extraction.
+
 ## Requirements
 
 - Unreal Engine 5.x (tested on 5.6 and 5.7)
