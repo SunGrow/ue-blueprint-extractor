@@ -209,6 +209,16 @@ Claude Code  <-stdio->  MCP Server (Node.js)  <-HTTP->  UE5 Editor (Remote Contr
 
 The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing library methods with string-based parameters callable via `PUT /remote/object/call`.
 
+### Design Principles
+
+The MCP server follows current best practices for tool design:
+
+- **Right primitive** — All 5 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. A `blueprint://` resource for static scope documentation is also exposed.
+- **Small, distinct surface** — 5 tools with non-overlapping purposes. Scopes are consolidated into a single `scope` parameter rather than separate tools per scope.
+- **Description quality** — Each tool includes usage guidelines, scope size estimates, and workflow hints (e.g., "use `search_assets` first") to maximize selection accuracy.
+- **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval of read-only operations. Only `extract_cascade` has `readOnlyHint: false` (writes files to disk).
+- **Security** — stdio transport, env-based credentials (`UE_REMOTE_CONTROL_PORT`), local-only by default. No auth tokens or remote access.
+
 ### Environment Variables
 
 | Variable | Default | Description |

@@ -8,7 +8,7 @@ const client = new UEClient();
 
 const server = new McpServer({
   name: 'blueprint-extractor',
-  version: '1.1.0',
+  version: '1.2.0',
 });
 
 // Shared scope enum with detailed descriptions
@@ -20,6 +20,38 @@ const scopeEnum = z.enum([
   'Full',
   'FullWithBytecode',
 ]);
+
+// Resource: extraction scope reference (static docs — app-controlled read-only context)
+server.resource(
+  'extraction-scopes',
+  'blueprint://scopes',
+  {
+    description: 'Reference for Blueprint extraction scopes: what each level includes, typical sizes, and when to use.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extraction Scopes',
+        '',
+        'Each scope includes everything from the previous level:',
+        '',
+        '| Scope             | Adds                                              | Typical Size  | Use When                                      |',
+        '|-------------------|---------------------------------------------------|---------------|-----------------------------------------------|',
+        '| ClassLevel        | Parent class, interfaces, class flags, metadata   | 1-2 KB        | Checking inheritance or interface list         |',
+        '| Variables         | All variables with types, defaults, flags          | 2-10 KB       | Understanding data model (DEFAULT)             |',
+        '| Components        | SCS component tree with property overrides vs CDO  | 5-20 KB       | Analyzing component composition                |',
+        '| FunctionsShallow  | Function and event graph names only                | 5-25 KB       | Listing available functions before deep dive   |',
+        '| Full              | Complete graph nodes, pins, and connections         | 20-500+ KB    | Understanding graph logic and execution flow   |',
+        '| FullWithBytecode  | Raw bytecode hex dump per function                 | Largest        | Low-level analysis (rarely needed)             |',
+        '',
+        'Start with the narrowest scope that answers your question.',
+        'Full scope on complex Blueprints can exceed 200KB and will be truncated.',
+      ].join('\n'),
+    }],
+  }),
+);
 
 // Tool 1: extract_blueprint
 server.registerTool(
