@@ -17,12 +17,12 @@ class BLUEPRINTEXTRACTOR_API UBlueprintExtractorLibrary : public UBlueprintFunct
 
 public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
-	static bool ExtractBlueprintToJson(UBlueprint* Blueprint, const FString& OutputPath, EBlueprintExtractionScope Scope);
+	static bool ExtractBlueprintToJson(UBlueprint* Blueprint, const FString& OutputPath, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {});
 
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
-	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope);
+	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {});
 
-	static TSharedPtr<FJsonObject> ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope);
+	static TSharedPtr<FJsonObject> ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {});
 
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
 	static bool ExtractStateTreeToJson(UStateTree* StateTree, const FString& OutputPath);

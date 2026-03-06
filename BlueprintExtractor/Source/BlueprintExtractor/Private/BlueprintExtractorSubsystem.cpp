@@ -34,7 +34,7 @@ EBlueprintExtractionScope UBlueprintExtractorSubsystem::ParseScope(const FString
 	return EBlueprintExtractionScope::Full;
 }
 
-FString UBlueprintExtractorSubsystem::ExtractBlueprint(const FString& AssetPath, const FString& Scope)
+FString UBlueprintExtractorSubsystem::ExtractBlueprint(const FString& AssetPath, const FString& Scope, const FString& GraphFilter)
 {
 	const EBlueprintExtractionScope ParsedScope = ParseScope(Scope);
 
@@ -44,8 +44,20 @@ FString UBlueprintExtractorSubsystem::ExtractBlueprint(const FString& AssetPath,
 		return MakeErrorJson(FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
 	}
 
+	// Parse comma-separated graph filter into TArray<FName>
+	TArray<FName> ParsedFilter;
+	if (!GraphFilter.IsEmpty())
+	{
+		TArray<FString> Parts;
+		GraphFilter.ParseIntoArray(Parts, TEXT(","), true);
+		for (const FString& Part : Parts)
+		{
+			ParsedFilter.Add(FName(*Part.TrimStartAndEnd()));
+		}
+	}
+
 	FString OutString;
-	UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(Blueprint, OutString, ParsedScope);
+	UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(Blueprint, OutString, ParsedScope, ParsedFilter);
 	return OutString;
 }
 

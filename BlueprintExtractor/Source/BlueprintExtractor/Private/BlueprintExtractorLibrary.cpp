@@ -112,7 +112,7 @@ static void CollectRefsFromPinType(const FEdGraphPinType& PinType, TArray<FSoftO
 // Blueprint extraction
 // ---------------------------------------------------------------------------
 
-bool UBlueprintExtractorLibrary::ExtractBlueprintToJson(UBlueprint* Blueprint, const FString& OutputPath, EBlueprintExtractionScope Scope)
+bool UBlueprintExtractorLibrary::ExtractBlueprintToJson(UBlueprint* Blueprint, const FString& OutputPath, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter)
 {
 	if (!Blueprint)
 	{
@@ -120,7 +120,7 @@ bool UBlueprintExtractorLibrary::ExtractBlueprintToJson(UBlueprint* Blueprint, c
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> JsonRoot = ExtractBlueprintToJsonObject(Blueprint, Scope);
+	TSharedPtr<FJsonObject> JsonRoot = ExtractBlueprintToJsonObject(Blueprint, Scope, GraphFilter);
 	if (!JsonRoot)
 	{
 		return false;
@@ -136,14 +136,14 @@ bool UBlueprintExtractorLibrary::ExtractBlueprintToJson(UBlueprint* Blueprint, c
 	return false;
 }
 
-bool UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope)
+bool UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter)
 {
 	if (!Blueprint)
 	{
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> JsonRoot = ExtractBlueprintToJsonObject(Blueprint, Scope);
+	TSharedPtr<FJsonObject> JsonRoot = ExtractBlueprintToJsonObject(Blueprint, Scope, GraphFilter);
 	if (!JsonRoot)
 	{
 		return false;
@@ -167,7 +167,7 @@ bool UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(UBlueprint* Bluepr
 	return true;
 }
 
-TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope)
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter)
 {
 	if (!Blueprint)
 	{
@@ -276,7 +276,7 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 		TArray<TSharedPtr<FJsonValue>> ShallowFunctions;
 		for (const UEdGraph* Graph : Blueprint->FunctionGraphs)
 		{
-			if (Graph)
+			if (Graph && (GraphFilter.Num() == 0 || GraphFilter.Contains(Graph->GetFName())))
 			{
 				TSharedPtr<FJsonObject> FuncObj = MakeShared<FJsonObject>();
 				FuncObj->SetStringField(TEXT("graphName"), Graph->GetName());
@@ -286,7 +286,7 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 		}
 		for (const UEdGraph* Graph : Blueprint->UbergraphPages)
 		{
-			if (Graph)
+			if (Graph && (GraphFilter.Num() == 0 || GraphFilter.Contains(Graph->GetFName())))
 			{
 				TSharedPtr<FJsonObject> FuncObj = MakeShared<FJsonObject>();
 				FuncObj->SetStringField(TEXT("graphName"), Graph->GetName());
@@ -298,7 +298,7 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 	}
 	else
 	{
-		BPObj->SetArrayField(TEXT("functions"), FGraphExtractor::ExtractAllGraphs(Blueprint));
+		BPObj->SetArrayField(TEXT("functions"), FGraphExtractor::ExtractAllGraphs(Blueprint, GraphFilter));
 	}
 
 	// Bytecode (optional)

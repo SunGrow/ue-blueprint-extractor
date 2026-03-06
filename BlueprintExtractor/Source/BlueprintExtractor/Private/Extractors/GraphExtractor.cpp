@@ -258,7 +258,7 @@ EExtractedGraphType FGraphExtractor::DetermineGraphType(const UEdGraph* Graph, c
 	return EExtractedGraphType::Unknown;
 }
 
-TArray<TSharedPtr<FJsonValue>> FGraphExtractor::ExtractAllGraphs(const UBlueprint* Blueprint)
+TArray<TSharedPtr<FJsonValue>> FGraphExtractor::ExtractAllGraphs(const UBlueprint* Blueprint, const TArray<FName>& GraphFilter)
 {
 	TArray<TSharedPtr<FJsonValue>> Result;
 
@@ -267,10 +267,17 @@ TArray<TSharedPtr<FJsonValue>> FGraphExtractor::ExtractAllGraphs(const UBlueprin
 		return Result;
 	}
 
+	// When GraphFilter is non-empty, only extract graphs whose name is in the filter
+	auto ShouldInclude = [&GraphFilter](const UEdGraph* Graph) -> bool
+	{
+		if (GraphFilter.Num() == 0) { return true; }
+		return GraphFilter.Contains(Graph->GetFName());
+	};
+
 	// Function graphs
 	for (const UEdGraph* Graph : Blueprint->FunctionGraphs)
 	{
-		if (Graph)
+		if (Graph && ShouldInclude(Graph))
 		{
 			TSharedPtr<FJsonObject> GraphObj = ExtractGraph(Graph, Blueprint);
 			if (GraphObj)
@@ -283,7 +290,7 @@ TArray<TSharedPtr<FJsonValue>> FGraphExtractor::ExtractAllGraphs(const UBlueprin
 	// Event graphs (ubergraph pages)
 	for (const UEdGraph* Graph : Blueprint->UbergraphPages)
 	{
-		if (Graph)
+		if (Graph && ShouldInclude(Graph))
 		{
 			TSharedPtr<FJsonObject> GraphObj = ExtractGraph(Graph, Blueprint);
 			if (GraphObj)
@@ -296,7 +303,7 @@ TArray<TSharedPtr<FJsonValue>> FGraphExtractor::ExtractAllGraphs(const UBlueprin
 	// Macro graphs
 	for (const UEdGraph* Graph : Blueprint->MacroGraphs)
 	{
-		if (Graph)
+		if (Graph && ShouldInclude(Graph))
 		{
 			TSharedPtr<FJsonObject> GraphObj = ExtractGraph(Graph, Blueprint);
 			if (GraphObj)
@@ -318,7 +325,7 @@ TArray<TSharedPtr<FJsonValue>> FGraphExtractor::ExtractAllGraphs(const UBlueprin
 	for (UObject* Subobject : Subobjects)
 	{
 		UEdGraph* Graph = Cast<UEdGraph>(Subobject);
-		if (Graph && !ExtractedGraphs.Contains(Graph))
+		if (Graph && !ExtractedGraphs.Contains(Graph) && ShouldInclude(Graph))
 		{
 			TSharedPtr<FJsonObject> GraphObj = ExtractGraph(Graph, Blueprint);
 			if (GraphObj)

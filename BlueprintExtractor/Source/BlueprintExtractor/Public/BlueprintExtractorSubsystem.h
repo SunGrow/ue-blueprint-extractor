@@ -24,9 +24,10 @@ private:
 // Public Interface
 // ============================================================
 public:
-	/** Extracts a Blueprint asset to a JSON string. Returns an error JSON object on failure. */
+	/** Extracts a Blueprint asset to a JSON string. Returns an error JSON object on failure.
+	 *  GraphFilter is a comma-separated list of graph names to extract. Empty = all graphs. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
-	FString ExtractBlueprint(const FString& AssetPath, const FString& Scope = TEXT("Full"));
+	FString ExtractBlueprint(const FString& AssetPath, const FString& Scope = TEXT("Full"), const FString& GraphFilter = TEXT(""));
 
 	/** Extracts a StateTree asset to a JSON string. Returns an error JSON object on failure. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")

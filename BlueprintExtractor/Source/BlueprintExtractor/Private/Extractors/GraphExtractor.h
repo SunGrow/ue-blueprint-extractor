@@ -13,7 +13,7 @@ class UK2Node;
 struct FGraphExtractor
 {
 	static TSharedPtr<FJsonObject> ExtractGraph(const UEdGraph* Graph, const UBlueprint* Blueprint);
-	static TArray<TSharedPtr<FJsonValue>> ExtractAllGraphs(const UBlueprint* Blueprint);
+	static TArray<TSharedPtr<FJsonValue>> ExtractAllGraphs(const UBlueprint* Blueprint, const TArray<FName>& GraphFilter = {});
 
 private:
 	static TSharedPtr<FJsonObject> ExtractNode(const UK2Node* Node);
