@@ -1,6 +1,6 @@
 # Blueprint Extractor
 
-UE5 editor plugin that extracts Blueprint, AnimBlueprint, StateTree, DataAsset, and DataTable data to structured JSON for C++ conversion and analysis.
+UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, DataAsset, and DataTable data to structured JSON, and creates/modifies WidgetBlueprint widget trees programmatically — for C++ conversion and analysis.
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
@@ -14,13 +14,14 @@ ue-blueprint-extractor/
 │       ├── BlueprintExtractor.Build.cs
 │       ├── Public/                  # Headers (Library, Subsystem, Types, Settings, Schema)
 │       └── Private/                 # Implementation
-│           ├── Extractors/          # ClassLevel, Variable, Component, Graph, StateTree, DataAsset, DataTable, Timeline, Bytecode
+│           ├── Extractors/          # ClassLevel, Variable, Component, Graph, WidgetTree, StateTree, DataAsset, DataTable, Timeline, Bytecode
+│           ├── Builders/            # WidgetTreeBuilder (create, build, modify, compile WidgetBlueprints)
 │           └── NodeExtractors/      # Visitor pattern: CallFunction, Event, Variable, FlowControl, Macro, Timeline
 ├── MCP/                             # MCP server for Claude Code (published to npm as blueprint-extractor-mcp)
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts                 # MCP tool definitions (7 tools)
+│       ├── index.ts                 # MCP tool definitions (11 tools)
 │       ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
 │       ├── ue-client.ts             # UE Remote Control HTTP client
 │       └── types.ts                 # Shared TypeScript types
@@ -86,7 +87,7 @@ Configure in **Project Settings > Plugins > Blueprint Extractor**:
 |-------|----------|
 | ClassLevel | Parent class, interfaces, class flags, metadata |
 | Variables | + Variables with types, defaults, flags |
-| Components | + SCS component tree with property overrides vs CDO |
+| Components | + SCS component tree with property overrides vs CDO. For WidgetBlueprints, includes widget tree hierarchy with slot info, properties, and bindings |
 | FunctionsShallow | + Function/event graph names only |
 | Full | + Complete graph/node/pin extraction with connections |
 | FullWithBytecode | + Raw bytecode hex dump per function |
@@ -105,6 +106,7 @@ The MCP server supports a `compact` mode that strips low-value fields and minifi
 - Replaces `nodeGuid` UUIDs with sequential short IDs (`n0`, `n1`, ...)
 - Rewrites connection references to use short IDs
 - Replaces exec pin type objects with the string `"exec"`
+- For widget trees: strips redundant `displayLabel`, default `Visible` visibility, empty `properties`
 - Outputs minified JSON (no indentation)
 
 ## What Gets Extracted
@@ -114,6 +116,7 @@ The MCP server supports a `compact` mode that strips low-value fields and minifi
 - **Class level** — parent class, implemented interfaces, class flags, category, description
 - **Variables** — name, pin type, default value, property flags, replication, category
 - **Components** — SCS tree with recursive children, property overrides (CDO diff)
+- **Widget tree** (WidgetBlueprints only) — recursive widget hierarchy, slot config, property overrides, bindings
 - **Graphs** — function graphs, event graphs, macro graphs, construction script
 - **Nodes** — typed extraction via visitor pattern (function calls, events, variables, flow control, macros, timelines)
 - **Pins** — name, direction, full pin type (containers, sub-categories, maps), default values, connections
@@ -172,7 +175,9 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
   +-- StateTreeExtractor           (editor data, state hierarchy)
   +-- DataAssetExtractor           (UPROPERTY reflection, skip base class)
   +-- DataTableExtractor           (row struct schema, all rows)
+  +-- WidgetTreeExtractor          (widget hierarchy, slots, properties, bindings)
   +-- BlueprintJsonSchema          (pin type serialization, flag bitmasks)
+  +-- WidgetTreeBuilder            (create, build, modify, compile WidgetBlueprints)
 
 MCP Server (Node.js/TypeScript)    (stdio transport, bridges Claude Code <-> UE Remote Control)
   +-- UEClient                     (HTTP client for PUT /remote/object/call)
@@ -180,7 +185,7 @@ MCP Server (Node.js/TypeScript)    (stdio transport, bridges Claude Code <-> UE 
 
 ## MCP Server (Claude Code Integration)
 
-The plugin includes an MCP (Model Context Protocol) server that lets Claude Code extract Blueprint/StateTree data on demand from a running UE5 editor.
+The plugin includes an MCP (Model Context Protocol) server that lets Claude Code extract Blueprint/StateTree data and create/modify WidgetBlueprint widget trees on demand from a running UE5 editor.
 
 ### Prerequisites
 
@@ -224,19 +229,23 @@ Build the MCP server from source (useful for development):
 ./install-mcp.sh --local
 ```
 
-Then restart Claude Code. The 7 tools will appear automatically.
+Then restart Claude Code. The 11 tools will appear automatically.
 
 ### MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `extract_blueprint` | Extract a Blueprint or AnimBlueprint to JSON (asset path + scope + optional graph filter + compact mode) |
+| `extract_blueprint` | Extract a Blueprint, AnimBlueprint, or WidgetBlueprint to JSON (asset path + scope + optional graph filter + compact mode). WidgetBlueprints include widget tree hierarchy at Components scope. |
 | `extract_statetree` | Extract a StateTree to JSON |
 | `extract_dataasset` | Extract a DataAsset to JSON (all UPROPERTY fields) |
 | `extract_datatable` | Extract a DataTable to JSON (schema + all rows) |
 | `extract_cascade` | Extract multiple assets with reference following (supports graph filter + compact) |
 | `search_assets` | Search assets by name and class filter |
 | `list_assets` | List assets under a package path |
+| `create_widget_blueprint` | Create a new WidgetBlueprint asset with a specified parent class |
+| `build_widget_tree` | Build/replace the entire widget hierarchy of a WidgetBlueprint from a JSON tree |
+| `modify_widget` | Patch properties and/or slot config on an existing widget by name |
+| `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings |
 
 ### Architecture
 
@@ -254,10 +263,10 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — All 7 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. A `blueprint://` resource for static scope documentation is also exposed.
-- **Small, distinct surface** — 7 tools with non-overlapping purposes. Scopes are consolidated into a single `scope` parameter rather than separate tools per scope.
+- **Right primitive** — All 11 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. A `blueprint://` resource for static scope documentation is also exposed.
+- **Small, distinct surface** — 11 tools with non-overlapping purposes. Extraction tools are read-only; widget creation tools are write operations.
 - **Description quality** — Each tool includes usage guidelines, scope size estimates, and workflow hints (e.g., "use `search_assets` first") to maximize selection accuracy.
-- **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval of read-only operations. Only `extract_cascade` has `readOnlyHint: false` (writes files to disk).
+- **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; write tools (`create_widget_blueprint`, `build_widget_tree`, `modify_widget`) require confirmation.
 - **Security** — stdio transport, env-based credentials (`UE_REMOTE_CONTROL_PORT`), local-only by default. No auth tokens or remote access.
 
 ### Environment Variables
@@ -278,6 +287,16 @@ npm publish --access public
 ```
 
 ## Changelog
+
+### 1.6.0
+- **WidgetBlueprint support** — `extract_blueprint` now extracts the widget tree hierarchy for WidgetBlueprints at `Components` scope, including slot config, property overrides (CDO diff with typed JSON values), and property bindings.
+- **Widget creation tools** — 4 new MCP tools: `create_widget_blueprint`, `build_widget_tree`, `modify_widget`, `compile_widget_blueprint`. Enables programmatic widget tree creation from Claude Code.
+- **Compact mode for widget trees** — strips redundant `displayLabel`, default visibility, and empty properties.
+- **Typed property extraction** — widget property overrides now serialize as proper JSON types (booleans, numbers, objects for structs/colors) instead of flat strings.
+
+### 1.5.0
+- WidgetTree extraction for WidgetBlueprints (widget hierarchy, slot info, properties).
+- `list_assets` with folder browsing support.
 
 ### 1.4.1
 - **Fix**: UHT compilation error — `UFUNCTION` declarations with `TArray<FName>` default parameters used brace-initialization (`= {}`), which UHT cannot parse. Replaced with non-UFUNCTION overloads that forward with an empty array.

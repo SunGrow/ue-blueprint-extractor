@@ -9,7 +9,7 @@ const client = new UEClient();
 
 const server = new McpServer({
   name: 'blueprint-extractor',
-  version: '1.5.0',
+  version: '1.6.0',
 });
 
 // Shared scope enum with detailed descriptions
@@ -387,6 +387,195 @@ RETURNS: JSON array of objects with path, name, and class for each asset (and su
         bRecursive: recursive,
         ClassFilter: class_filter,
       });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Recursive schema for widget tree nodes (used by build_widget_tree)
+const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
+  class: z.string().describe('Widget class name (e.g. CanvasPanel, TextBlock, CommonButtonBase, VerticalBox)'),
+  name: z.string().describe('Widget instance name (used for BindWidget matching)'),
+  is_variable: z.boolean().default(false).describe('Mark as variable for BindWidget access from C++'),
+  slot: z.record(z.string(), z.unknown()).optional().describe('Slot properties (type depends on parent panel)'),
+  properties: z.record(z.string(), z.unknown()).optional().describe('Widget UPROPERTY values to set'),
+  children: z.array(WidgetNodeSchema).optional().describe('Child widgets (only valid for panel widgets)'),
+}));
+
+// Tool 8: create_widget_blueprint
+server.registerTool(
+  'create_widget_blueprint',
+  {
+    title: 'Create Widget Blueprint',
+    description: `Create a new UE5 WidgetBlueprint asset with a specified parent class.
+
+USAGE: Provide the content path where the asset should be created and optionally a parent class.
+Default parent is UserWidget. For CommonUI widgets use CommonActivatableWidget, CommonButtonBase, etc.
+
+RETURNS: JSON with success status, asset path, and parent class name.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new WidgetBlueprint (e.g. /Game/UI/WBP_MyWidget)',
+      ),
+      parent_class: z.string().default('UserWidget').describe(
+        'Parent class name (e.g. UserWidget, CommonActivatableWidget, CommonButtonBase)',
+      ),
+    },
+    annotations: {
+      title: 'Create Widget Blueprint',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, parent_class }) => {
+    try {
+      const result = await client.callSubsystem('CreateWidgetBlueprint', {
+        AssetPath: asset_path,
+        ParentClass: parent_class,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 9: build_widget_tree
+server.registerTool(
+  'build_widget_tree',
+  {
+    title: 'Build Widget Tree',
+    description: `Build or replace the entire widget hierarchy of an existing WidgetBlueprint from a JSON tree description.
+
+WARNING: This REPLACES the existing widget tree — all current widgets will be removed.
+
+USAGE: Provide the asset path and a root_widget object describing the full tree recursively.
+Each widget node has: class, name, is_variable, slot (optional), properties (optional), children (optional).
+
+RETURNS: JSON with success status, widget count, and any errors.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to an existing WidgetBlueprint',
+      ),
+      root_widget: WidgetNodeSchema.describe(
+        'Root widget of the tree hierarchy',
+      ),
+    },
+    annotations: {
+      title: 'Build Widget Tree',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, root_widget }) => {
+    try {
+      const result = await client.callSubsystem('BuildWidgetTree', {
+        AssetPath: asset_path,
+        WidgetTreeJson: JSON.stringify(root_widget),
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 10: modify_widget
+server.registerTool(
+  'modify_widget',
+  {
+    title: 'Modify Widget',
+    description: `Modify properties and/or slot configuration of an existing widget within a WidgetBlueprint.
+
+USAGE: Specify the asset path, widget name, and the properties/slot values to change.
+Only specified properties are modified — others remain unchanged.
+
+RETURNS: JSON with success status, widget name, class, and any errors.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint',
+      ),
+      widget_name: z.string().describe(
+        'Name of the widget to modify (as shown in the widget tree)',
+      ),
+      properties: z.record(z.string(), z.unknown()).optional().describe(
+        'Widget UPROPERTY values to set',
+      ),
+      slot: z.record(z.string(), z.unknown()).optional().describe(
+        'Slot properties to set',
+      ),
+    },
+    annotations: {
+      title: 'Modify Widget',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, widget_name, properties, slot }) => {
+    try {
+      const result = await client.callSubsystem('ModifyWidget', {
+        AssetPath: asset_path,
+        WidgetName: widget_name,
+        PropertiesJson: JSON.stringify(properties ?? {}),
+        SlotJson: JSON.stringify(slot ?? {}),
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 11: compile_widget_blueprint
+server.registerTool(
+  'compile_widget_blueprint',
+  {
+    title: 'Compile Widget Blueprint',
+    description: `Compile a WidgetBlueprint and return any errors or warnings.
+
+USAGE: Call after building or modifying a widget tree to verify compilation.
+
+RETURNS: JSON with success status, compilation status, error count, warning count, and error details.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint to compile',
+      ),
+    },
+    annotations: {
+      title: 'Compile Widget Blueprint',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('CompileWidgetBlueprint', { AssetPath: asset_path });
       const parsed = JSON.parse(result);
       if (parsed.error) {
         return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };

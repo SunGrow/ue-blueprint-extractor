@@ -58,4 +58,23 @@ public:
 	FString ListAssets(const FString& PackagePath,
 	                   const bool bRecursive = true,
 	                   const FString& ClassFilter = TEXT(""));
+
+	/** Creates a new WidgetBlueprint asset. Returns JSON with asset path and status. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateWidgetBlueprint(const FString& AssetPath, const FString& ParentClass);
+
+	/** Builds/replaces the entire widget hierarchy from JSON. Returns JSON with widget count and errors. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString BuildWidgetTree(const FString& AssetPath, const FString& WidgetTreeJson);
+
+	/** Patches properties on an existing widget. Returns JSON with success/error. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyWidget(const FString& AssetPath,
+	                     const FString& WidgetName,
+	                     const FString& PropertiesJson,
+	                     const FString& SlotJson);
+
+	/** Compiles a WidgetBlueprint. Returns JSON array of errors/warnings. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CompileWidgetBlueprint(const FString& AssetPath);
 };

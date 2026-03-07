@@ -12,6 +12,8 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonReader.h"
+#include "Builders/WidgetTreeBuilder.h"
+#include "WidgetBlueprint.h"
 
 static FString MakeErrorJson(const FString& Message)
 {
@@ -267,5 +269,119 @@ FString UBlueprintExtractorSubsystem::ListAssets(const FString& PackagePath,
 	FString OutString;
 	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
 	FJsonSerializer::Serialize(ResultArray, Writer);
+	return OutString;
+}
+
+FString UBlueprintExtractorSubsystem::CreateWidgetBlueprint(const FString& AssetPath, const FString& ParentClass)
+{
+	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::CreateWidgetBlueprint(AssetPath, ParentClass);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to create WidgetBlueprint"));
+	}
+
+	FString OutString;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
+	FJsonSerializer::Serialize(Result.ToSharedRef(), Writer);
+	return OutString;
+}
+
+FString UBlueprintExtractorSubsystem::BuildWidgetTree(const FString& AssetPath, const FString& WidgetTreeJson)
+{
+	UWidgetBlueprint* WidgetBP = LoadObject<UWidgetBlueprint>(nullptr, *AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedJson;
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(WidgetTreeJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedJson) || !ParsedJson.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for WidgetTreeJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::BuildWidgetTree(WidgetBP, ParsedJson);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to build widget tree"));
+	}
+
+	FString OutString;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
+	FJsonSerializer::Serialize(Result.ToSharedRef(), Writer);
+	return OutString;
+}
+
+FString UBlueprintExtractorSubsystem::ModifyWidget(const FString& AssetPath,
+                                                    const FString& WidgetName,
+                                                    const FString& PropertiesJson,
+                                                    const FString& SlotJson)
+{
+	UWidgetBlueprint* WidgetBP = LoadObject<UWidgetBlueprint>(nullptr, *AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedProperties;
+	if (!PropertiesJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PropertiesJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedProperties))
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PropertiesJson"));
+		}
+	}
+	if (!ParsedProperties.IsValid())
+	{
+		ParsedProperties = MakeShared<FJsonObject>();
+	}
+
+	TSharedPtr<FJsonObject> ParsedSlot;
+	if (!SlotJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(SlotJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedSlot))
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for SlotJson"));
+		}
+	}
+	if (!ParsedSlot.IsValid())
+	{
+		ParsedSlot = MakeShared<FJsonObject>();
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::ModifyWidget(WidgetBP, WidgetName, ParsedProperties, ParsedSlot);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to modify widget"));
+	}
+
+	FString OutString;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
+	FJsonSerializer::Serialize(Result.ToSharedRef(), Writer);
+	return OutString;
+}
+
+FString UBlueprintExtractorSubsystem::CompileWidgetBlueprint(const FString& AssetPath)
+{
+	UWidgetBlueprint* WidgetBP = LoadObject<UWidgetBlueprint>(nullptr, *AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::CompileWidgetBlueprint(WidgetBP);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to compile WidgetBlueprint"));
+	}
+
+	FString OutString;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
+	FJsonSerializer::Serialize(Result.ToSharedRef(), Writer);
 	return OutString;
 }
