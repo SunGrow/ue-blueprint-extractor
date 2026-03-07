@@ -11,6 +11,11 @@
 #include "Extractors/StateTreeExtractor.h"
 #include "Extractors/DataAssetExtractor.h"
 #include "Extractors/DataTableExtractor.h"
+#include "Extractors/WidgetTreeExtractor.h"
+#include "WidgetBlueprint.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Widget.h"
+#include "Components/PanelWidget.h"
 #include "Engine/Blueprint.h"
 #include "Engine/DataAsset.h"
 #include "Engine/DataTable.h"
@@ -207,6 +212,16 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 	if (Components)
 	{
 		BPObj->SetObjectField(TEXT("components"), Components);
+	}
+
+	// Widget tree (for WidgetBlueprints — uses WidgetTree instead of SCS)
+	if (const UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(Blueprint))
+	{
+		const TSharedPtr<FJsonObject> WidgetTree = FWidgetTreeExtractor::Extract(WidgetBP);
+		if (WidgetTree.IsValid())
+		{
+			BPObj->SetObjectField(TEXT("widgetTree"), WidgetTree);
+		}
 	}
 
 	if (Scope == EBlueprintExtractionScope::Components)
@@ -516,6 +531,41 @@ TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectBlueprintReferences(c
 		}
 	}
 
+	// 6. Widget tree — Blueprint-based UUserWidget subclasses
+	if (const UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(Blueprint))
+	{
+		if (WidgetBP->WidgetTree)
+		{
+			// Recursive lambda to walk widget tree
+			const TFunction<void(const UWidget*)> ScanWidget = [&](const UWidget* Widget)
+			{
+				if (!Widget)
+				{
+					return;
+				}
+
+				const UClass* WidgetClass = Widget->GetClass();
+				if (WidgetClass && WidgetClass->ClassGeneratedBy)
+				{
+					if (UBlueprint* RefBP = Cast<UBlueprint>(WidgetClass->ClassGeneratedBy))
+					{
+						Refs.AddUnique(FSoftObjectPath(RefBP));
+					}
+				}
+
+				if (const UPanelWidget* Panel = Cast<UPanelWidget>(Widget))
+				{
+					for (int32 i = 0; i < Panel->GetChildrenCount(); i++)
+					{
+						ScanWidget(Panel->GetChildAt(i));
+					}
+				}
+			};
+
+			ScanWidget(WidgetBP->WidgetTree->RootWidget);
+		}
+	}
+
 	return Refs;
 }
 
@@ -606,7 +656,7 @@ TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectStateTreeReferences(c
 // Cascade extraction — BFS loop
 // ---------------------------------------------------------------------------
 
-int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth)
+int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth, const TArray<FName>& GraphFilter)
 {
 	struct FPendingAsset
 	{
@@ -647,7 +697,7 @@ int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& Ini
 
 		if (UBlueprint* BP = Cast<UBlueprint>(Current.Asset))
 		{
-			bSuccess = ExtractBlueprintToJson(BP, FullPath, Scope);
+			bSuccess = ExtractBlueprintToJson(BP, FullPath, Scope, GraphFilter);
 			if (Current.Depth < MaxDepth)
 			{
 				Refs = CollectBlueprintReferences(BP);

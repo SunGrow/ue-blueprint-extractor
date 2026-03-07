@@ -45,8 +45,9 @@ public:
 
 	static TSharedPtr<FJsonObject> ExtractDataTableToJsonObject(UDataTable* DataTable);
 
-	/** Extract assets with cascade: follows references to other extractable assets (Blueprints, StateTrees). */
-	static int32 ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth);
+	/** Extract assets with cascade: follows references to other extractable assets (Blueprints, StateTrees).
+	 *  GraphFilter limits which graphs are extracted from Blueprints. Empty = all graphs. */
+	static int32 ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth, const TArray<FName>& GraphFilter = {});
 
 private:
 	static TArray<FSoftObjectPath> CollectBlueprintReferences(const UBlueprint* Blueprint);

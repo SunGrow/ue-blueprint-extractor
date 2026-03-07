@@ -123,7 +123,8 @@ FString UBlueprintExtractorSubsystem::ExtractDataTable(const FString& AssetPath)
 
 FString UBlueprintExtractorSubsystem::ExtractCascade(const FString& AssetPathsJson,
                                                       const FString& Scope,
-                                                      const int32 MaxDepth)
+                                                      const int32 MaxDepth,
+                                                      const FString& GraphFilter)
 {
 	TArray<TSharedPtr<FJsonValue>> JsonValues;
 	{
@@ -135,6 +136,18 @@ FString UBlueprintExtractorSubsystem::ExtractCascade(const FString& AssetPathsJs
 	}
 
 	const EBlueprintExtractionScope ParsedScope = ParseScope(Scope);
+
+	// Parse comma-separated graph filter into TArray<FName>
+	TArray<FName> ParsedFilter;
+	if (!GraphFilter.IsEmpty())
+	{
+		TArray<FString> Parts;
+		GraphFilter.ParseIntoArray(Parts, TEXT(","), true);
+		for (const FString& Part : Parts)
+		{
+			ParsedFilter.Add(FName(*Part.TrimStartAndEnd()));
+		}
+	}
 
 	TArray<UObject*> LoadedAssets;
 	for (const TSharedPtr<FJsonValue>& Value : JsonValues)
@@ -166,12 +179,13 @@ FString UBlueprintExtractorSubsystem::ExtractCascade(const FString& AssetPathsJs
 
 	const UBlueprintExtractorSettings* Settings = UBlueprintExtractorSettings::Get();
 	const FString OutputDir = Settings->OutputDirectory.Path;
+	const FString AbsOutputDir = FPaths::ConvertRelativePathToFull(OutputDir);
 
-	const int32 ExtractedCount = UBlueprintExtractorLibrary::ExtractWithCascade(LoadedAssets, OutputDir, ParsedScope, MaxDepth);
+	const int32 ExtractedCount = UBlueprintExtractorLibrary::ExtractWithCascade(LoadedAssets, OutputDir, ParsedScope, MaxDepth, ParsedFilter);
 
 	const TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
 	ResultObj->SetNumberField(TEXT("extracted_count"), ExtractedCount);
-	ResultObj->SetStringField(TEXT("output_directory"), OutputDir);
+	ResultObj->SetStringField(TEXT("output_directory"), AbsOutputDir);
 
 	FString OutString;
 	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
@@ -213,10 +227,27 @@ FString UBlueprintExtractorSubsystem::ListAssets(const FString& PackagePath,
                                                   const bool bRecursive,
                                                   const FString& ClassFilter)
 {
+	TArray<TSharedPtr<FJsonValue>> ResultArray;
+
+	// When non-recursive, include immediate subdirectories so users can browse the folder tree
+	if (!bRecursive)
+	{
+		TArray<FString> SubPaths;
+		IAssetRegistry::Get()->GetSubPaths(PackagePath, SubPaths, false);
+		for (const FString& SubPath : SubPaths)
+		{
+			const FString FolderName = FPaths::GetCleanFilename(SubPath);
+			const TSharedPtr<FJsonObject> FolderObj = MakeShared<FJsonObject>();
+			FolderObj->SetStringField(TEXT("path"), SubPath);
+			FolderObj->SetStringField(TEXT("name"), FolderName);
+			FolderObj->SetStringField(TEXT("class"), TEXT("Folder"));
+			ResultArray.Add(MakeShared<FJsonValueObject>(FolderObj));
+		}
+	}
+
 	TArray<FAssetData> AssetDatas;
 	IAssetRegistry::Get()->GetAssetsByPath(FName(*PackagePath), AssetDatas, bRecursive);
 
-	TArray<TSharedPtr<FJsonValue>> ResultArray;
 	for (const FAssetData& AssetData : AssetDatas)
 	{
 		const FString AssetClass = AssetData.AssetClassPath.GetAssetName().ToString();

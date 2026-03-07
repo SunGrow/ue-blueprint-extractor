@@ -32,7 +32,9 @@ public class BlueprintExtractor : ModuleRules
 			"InputCore",
 			"StateTreeModule",
 			"StructUtils",
-			"GameplayTags"
+			"GameplayTags",
+			"UMG",
+			"UMGEditor"
 		});
 
 		if (Target.bBuildEditor)

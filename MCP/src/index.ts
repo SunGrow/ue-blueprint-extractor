@@ -42,7 +42,7 @@ server.resource(
         '|-------------------|---------------------------------------------------|---------------|-----------------------------------------------|',
         '| ClassLevel        | Parent class, interfaces, class flags, metadata   | 1-2 KB        | Checking inheritance or interface list         |',
         '| Variables         | All variables with types, defaults, flags          | 2-10 KB       | Understanding data model (DEFAULT)             |',
-        '| Components        | SCS component tree with property overrides vs CDO  | 5-20 KB       | Analyzing component composition                |',
+        '| Components        | SCS component tree with property overrides vs CDO. For WidgetBlueprints: widget tree hierarchy with layout and bindings  | 5-20 KB       | Analyzing component composition                |',
         '| FunctionsShallow  | Function and event graph names only                | 5-25 KB       | Listing available functions before deep dive   |',
         '| Full              | Complete graph nodes, pins, and connections         | 20-500+ KB    | Understanding graph logic and execution flow   |',
         '| FullWithBytecode  | Raw bytecode hex dump per function                 | Largest        | Low-level analysis (rarely needed)             |',
@@ -69,7 +69,7 @@ USAGE GUIDELINES:
 - Start with the narrowest scope that answers your question — each level includes everything from the previous:
   * ClassLevel — parent class, interfaces, class flags, metadata (~1-2KB)
   * Variables — + all variables with types, defaults, flags (~2-10KB)
-  * Components — + SCS component tree with property overrides (~5-20KB)
+  * Components — + SCS component tree with property overrides (~5-20KB). For WidgetBlueprints, also includes the widget tree hierarchy with bindings.
   * FunctionsShallow — + function/event graph names only (~5-25KB)
   * Full — + complete graph nodes, pins, and connections (~20-500KB+)
   * FullWithBytecode — + raw bytecode hex dump (largest, rarely needed)
@@ -358,7 +358,9 @@ server.registerTool(
     title: 'List Assets',
     description: `List UE5 assets under a package path. Use this to browse directory contents when you don't know asset names. If you know (part of) the asset name, prefer search_assets instead — it's faster and doesn't require knowing the directory.
 
-RETURNS: JSON array of objects with path, name, and class for each asset in the directory.`,
+When recursive=false, subdirectories are included in the results with class "Folder" — use this to browse the content tree structure.
+
+RETURNS: JSON array of objects with path, name, and class for each asset (and subfolder when non-recursive) in the directory.`,
     inputSchema: {
       package_path: z.string().describe(
         'UE package path to list (e.g. /Game/Blueprints, /Game/AI). Use /Game to list from the Content root.',

@@ -19,11 +19,18 @@ export function compactBlueprint(data: unknown): unknown {
   const bp = root.blueprint as AnyObject | undefined;
   if (!bp) return data;
 
+  // Branch 1: Compact graphs (if present)
   const functions = bp.functions as AnyObject[] | undefined;
-  if (!Array.isArray(functions)) return data;
+  if (Array.isArray(functions)) {
+    for (const graph of functions) {
+      compactGraph(graph);
+    }
+  }
 
-  for (const graph of functions) {
-    compactGraph(graph);
+  // Branch 2: Compact widget tree (if present)
+  const wt = bp.widgetTree as AnyObject | undefined;
+  if (wt && typeof wt === 'object' && wt.rootWidget) {
+    compactWidgetNode(wt.rootWidget as AnyObject);
   }
 
   return data;
@@ -68,6 +75,33 @@ function compactGraph(graph: AnyObject): void {
       for (const pin of pins) {
         compactPin(pin, guidToShortId);
       }
+    }
+  }
+}
+
+function compactWidgetNode(node: AnyObject): void {
+  if (!node) return;
+
+  // Remove displayLabel when it equals name or is empty (redundant)
+  if (node.displayLabel === node.name || node.displayLabel === '') {
+    delete node.displayLabel;
+  }
+
+  // Remove default visibility
+  if (node.visibility === 'Visible') {
+    delete node.visibility;
+  }
+
+  // Remove empty properties objects
+  if (node.properties && typeof node.properties === 'object' && Object.keys(node.properties as object).length === 0) {
+    delete node.properties;
+  }
+
+  // Recurse into children
+  const children = node.children as AnyObject[] | undefined;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      compactWidgetNode(child);
     }
   }
 }
