@@ -1,5 +1,6 @@
 #include "Extractors/StateTreeExtractor.h"
 #include "BlueprintExtractorModule.h"
+#include "BlueprintExtractorVersion.h"
 #include "BlueprintJsonSchema.h"
 #include "StateTree.h"
 #include "StateTreeEditorData.h"
@@ -15,7 +16,7 @@ TSharedPtr<FJsonObject> FStateTreeExtractor::Extract(const UStateTree* StateTree
 	}
 
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetStringField(TEXT("schemaVersion"), TEXT("1.0.0"));
+	Root->SetStringField(TEXT("schemaVersion"), BlueprintExtractor::SchemaVersion);
 
 	TSharedPtr<FJsonObject> STObj = MakeShared<FJsonObject>();
 	STObj->SetStringField(TEXT("assetPath"), StateTree->GetPathName());

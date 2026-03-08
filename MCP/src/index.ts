@@ -9,7 +9,7 @@ const client = new UEClient();
 
 const server = new McpServer({
   name: 'blueprint-extractor',
-  version: '1.6.0',
+  version: '1.8.0',
 });
 
 // Shared scope enum with detailed descriptions
@@ -21,6 +21,15 @@ const scopeEnum = z.enum([
   'Full',
   'FullWithBytecode',
 ]);
+
+const cascadeManifestEntrySchema = z.object({
+  assetPath: z.string(),
+  assetType: z.string(),
+  outputFile: z.string().optional(),
+  depth: z.number().int().min(0),
+  status: z.string(),
+  error: z.string().optional(),
+});
 
 // Resource: extraction scope reference (static docs — app-controlled read-only context)
 server.resource(
@@ -250,20 +259,420 @@ RETURNS: JSON object with row struct info, schema, and all rows.`,
   },
 );
 
-// Tool 5: extract_cascade
+// Tool 5: extract_behavior_tree
+server.registerTool(
+  'extract_behavior_tree',
+  {
+    title: 'Extract BehaviorTree',
+    description: `Extract a UE5 BehaviorTree asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "BehaviorTree" if you need to discover the asset path.
+- Returns the full node hierarchy including root decorators, child decorators, decorator logic, services, task/composite nodes, and the linked blackboard asset.
+- Useful for understanding AI decision flow without opening the editor graph.
+
+RETURNS: JSON object with the BehaviorTree hierarchy, node properties, and blackboard reference.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the BehaviorTree asset (e.g. /Game/AI/BT_MainAI). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract BehaviorTree',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractBehaviorTree', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 6: extract_blackboard
+server.registerTool(
+  'extract_blackboard',
+  {
+    title: 'Extract Blackboard',
+    description: `Extract a UE5 Blackboard asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "Blackboard" or "BlackboardData" to find the asset path.
+- Returns the effective key list, including inherited parent keys and local overrides.
+- Key entries include type information and key-type-specific properties such as base class or enum binding.
+
+RETURNS: JSON object with parent blackboard info and effective key definitions.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Blackboard asset (e.g. /Game/AI/BB_MainAI). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract Blackboard',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractBlackboard', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 7: extract_user_defined_struct
+server.registerTool(
+  'extract_user_defined_struct',
+  {
+    title: 'Extract UserDefinedStruct',
+    description: `Extract a UE5 UserDefinedStruct asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "UserDefinedStruct" to find the asset path.
+- Returns field metadata, pin types, struct status, GUID, and typed default values from the struct default instance.
+- Useful when DataTables or Blueprint variables depend on project-defined struct schemas.
+
+RETURNS: JSON object with struct metadata and field definitions.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the UserDefinedStruct asset (e.g. /Game/Data/S_ItemData). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract UserDefinedStruct',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractUserDefinedStruct', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 8: extract_user_defined_enum
+server.registerTool(
+  'extract_user_defined_enum',
+  {
+    title: 'Extract UserDefinedEnum',
+    description: `Extract a UE5 UserDefinedEnum asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "UserDefinedEnum" to find the asset path.
+- Returns the enum entries, display names, and numeric values, excluding the auto-generated MAX sentinel.
+- Useful when gameplay data, DataAssets, or Blueprint logic refer to project enums.
+
+RETURNS: JSON object with enum metadata and entry list.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the UserDefinedEnum asset (e.g. /Game/Data/E_ItemRarity). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract UserDefinedEnum',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractUserDefinedEnum', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 9: extract_curve
+server.registerTool(
+  'extract_curve',
+  {
+    title: 'Extract Curve',
+    description: `Extract a UE5 curve asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "Curve" to find curve assets such as CurveFloat, CurveVector, or CurveLinearColor.
+- Returns per-channel keys, tangents, interpolation modes, and default/extrapolation settings.
+- Useful for gameplay tuning curves, UI animation curves, and authored scalar/vector ramps.
+
+RETURNS: JSON object with curve type and channel key data.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the curve asset (e.g. /Game/Data/C_DamageOverTime). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract Curve',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractCurve', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 10: extract_curvetable
+server.registerTool(
+  'extract_curvetable',
+  {
+    title: 'Extract CurveTable',
+    description: `Extract a UE5 CurveTable asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "CurveTable" to find the asset path.
+- Returns row names plus the per-row curve data for rich or simple curve tables.
+- Useful for difficulty scaling, balance curves, and time/value tables authored in spreadsheet form.
+
+RETURNS: JSON object with curve table mode and all rows.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the CurveTable asset (e.g. /Game/Data/CT_DifficultyScaling). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract CurveTable',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractCurveTable', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 11: extract_material_instance
+server.registerTool(
+  'extract_material_instance',
+  {
+    title: 'Extract MaterialInstance',
+    description: `Extract a UE5 MaterialInstance asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "MaterialInstance" to find the asset path.
+- Returns the parent material chain, base material, scalar/vector/texture parameters, runtime virtual texture parameters, font parameters, and static switch states.
+- Useful for understanding authored look-dev overrides without opening the material editor.
+
+RETURNS: JSON object with effective MaterialInstance parameter values.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the MaterialInstance asset (e.g. /Game/Materials/MI_Character_Skin). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract MaterialInstance',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractMaterialInstance', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 12: extract_anim_sequence
+server.registerTool(
+  'extract_anim_sequence',
+  {
+    title: 'Extract AnimSequence',
+    description: `Extract a UE5 AnimSequence asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "AnimSequence" to find the asset path.
+- Returns runtime-stable animation data: length, sample count, sampling rate, additive settings, notifies, authored sync markers, and runtime curve tracks.
+- Useful for inspecting authored animation events and metadata without touching editor-only data models.
+
+RETURNS: JSON object with AnimSequence metadata, notifies, sync markers, and curves.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the AnimSequence asset (e.g. /Game/Animations/AS_Walk). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract AnimSequence',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractAnimSequence', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 13: extract_anim_montage
+server.registerTool(
+  'extract_anim_montage',
+  {
+    title: 'Extract AnimMontage',
+    description: `Extract a UE5 AnimMontage asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "AnimMontage" to find the asset path.
+- Returns slot tracks, animation segments, montage sections, branching-point notifies, and standard notifies.
+- Useful for understanding combat, traversal, and layered animation sequencing.
+
+RETURNS: JSON object with montage structure, slots, sections, and notify data.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the AnimMontage asset (e.g. /Game/Animations/AM_Attack). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract AnimMontage',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractAnimMontage', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 14: extract_blend_space
+server.registerTool(
+  'extract_blend_space',
+  {
+    title: 'Extract BlendSpace',
+    description: `Extract a UE5 BlendSpace asset to structured JSON.
+
+USAGE GUIDELINES:
+- Use search_assets first with class_filter "BlendSpace" to find the asset path.
+- Returns axis definitions, sample count, sample coordinates, and referenced animations for 1D or 2D blend spaces.
+- Useful for locomotion, aim offset, and directional blending analysis.
+
+RETURNS: JSON object with BlendSpace axes and sample definitions.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the BlendSpace asset (e.g. /Game/Animations/BS_Locomotion). Use search_assets to find paths.',
+      ),
+    },
+    annotations: {
+      title: 'Extract BlendSpace',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const result = await client.callSubsystem('ExtractBlendSpace', { AssetPath: asset_path });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+// Tool 15: extract_cascade
 server.registerTool(
   'extract_cascade',
   {
     title: 'Extract Cascade',
-    description: `Extract multiple assets (Blueprint, AnimBlueprint, StateTree, DataAsset, DataTable) with automatic reference following for Blueprints and StateTrees. Follows parent classes, interfaces, component classes, and other Blueprint references up to max_depth levels deep.
+    description: `Extract multiple assets (Blueprint, AnimBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, MaterialInstance, AnimSequence, AnimMontage, BlendSpace) with automatic reference following for supported dependency chains. Follows parent classes, interfaces, component classes, Blueprint references, blackboard links, material instance parents, and animation references up to max_depth levels deep.
 
 USAGE GUIDELINES:
 - Use when you need to understand an asset AND its dependencies (parent Blueprints, referenced Blueprints, etc.).
-- Results are written to files on disk (in the project's configured output directory), NOT returned inline — the response only contains a summary with file paths and count.
-- For a single asset without dependencies, prefer extract_blueprint or extract_statetree instead.
+- Results are written to files on disk (in the project's configured output directory), NOT returned inline — the response contains a manifest summary with output filenames.
+- For a single asset without dependencies, prefer the specific extract_* tool for that asset type.
 - Cycle-safe: won't extract the same asset twice.
 
-RETURNS: Summary with extracted_count and output_directory path. Read the output files to inspect the data.`,
+RETURNS: Summary with extracted_count, output_directory path, and a per-asset manifest. Read the output files to inspect the data.`,
     inputSchema: {
       asset_paths: z.array(z.string()).describe(
         'Array of UE content paths to extract (e.g. ["/Game/Blueprints/BP_Character", "/Game/Blueprints/BP_Weapon"])',
@@ -277,9 +686,13 @@ RETURNS: Summary with extracted_count and output_directory path. Read the output
       graph_filter: z.array(z.string()).optional().describe(
         'Filter to specific graphs by name. Use FunctionsShallow scope first to discover graph names, then pass the names you want here. Empty/omitted = extract all graphs. Example: ["EventGraph", "CalculateDamage"]',
       ),
-      compact: z.boolean().default(false).describe(
-        'When true, strips low-value fields and minifies JSON to reduce size by ~50-70%. Removes: pinId, posX/posY, graphGuid, autogeneratedDefaultValue, nodeComment (when empty), empty connections, empty default_value, empty sub_category. Replaces full exec pin type objects with the string "exec".',
-      ),
+    },
+    outputSchema: {
+      extracted_count: z.number().int().min(0),
+      skipped_count: z.number().int().min(0),
+      total_count: z.number().int().min(0),
+      output_directory: z.string(),
+      manifest: z.array(cascadeManifestEntrySchema),
     },
     annotations: {
       title: 'Extract Cascade',
@@ -289,7 +702,7 @@ RETURNS: Summary with extracted_count and output_directory path. Read the output
       openWorldHint: false,
     },
   },
-  async ({ asset_paths, scope, max_depth, graph_filter, compact }) => {
+  async ({ asset_paths, scope, max_depth, graph_filter }) => {
     try {
       const result = await client.callSubsystem('ExtractCascade', {
         AssetPathsJson: JSON.stringify(asset_paths),
@@ -301,7 +714,32 @@ RETURNS: Summary with extracted_count and output_directory path. Read the output
       if (parsed.error) {
         return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
       }
-      return { content: [{ type: 'text' as const, text: `Extracted ${parsed.extracted_count} assets to ${parsed.output_directory}` }] };
+      const manifest = Array.isArray(parsed.manifest)
+        ? parsed.manifest
+        : Array.isArray(parsed.assets)
+          ? parsed.assets
+          : [];
+
+      const totalCount = typeof parsed.total_count === 'number' ? parsed.total_count : manifest.length;
+      const extractedCount = typeof parsed.extracted_count === 'number'
+        ? parsed.extracted_count
+        : manifest.filter((asset: any) => asset?.status === 'extracted').length;
+      const skippedCount = typeof parsed.skipped_count === 'number'
+        ? parsed.skipped_count
+        : manifest.filter((asset: any) => asset?.status === 'skipped').length;
+
+      const structuredContent = {
+        extracted_count: extractedCount,
+        skipped_count: skippedCount,
+        total_count: totalCount,
+        output_directory: typeof parsed.output_directory === 'string' ? parsed.output_directory : '',
+        manifest,
+      };
+
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(structuredContent, null, 2) }],
+        structuredContent,
+      };
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }
@@ -313,12 +751,12 @@ server.registerTool(
   'search_assets',
   {
     title: 'Search Assets',
-    description: `Search for UE5 assets by name. This is a lightweight lookup — use it FIRST to find correct asset paths before calling extract_blueprint, extract_statetree, extract_dataasset, or extract_datatable.
+    description: `Search for UE5 assets by name. This is a lightweight lookup — use it FIRST to find correct asset paths before calling any extract_* tool.
 
 USAGE GUIDELINES:
 - Always call this before any extract_* tool if you don't already have the exact asset path.
 - Searches asset names (not full paths) — partial matches work (e.g. "Character" finds "BP_Character").
-- Filter by class to narrow results: "Blueprint" (default), "AnimBlueprint", "StateTree", "DataTable", "WidgetBlueprint", "DataAsset", or empty string for all.
+- Filter by class to narrow results: "Blueprint" (default), "AnimBlueprint", "WidgetBlueprint", "StateTree", "BehaviorTree", "Blackboard", "DataAsset", "DataTable", "UserDefinedStruct", "UserDefinedEnum", "Curve", "CurveTable", "MaterialInstance", "AnimSequence", "AnimMontage", "BlendSpace", or empty string for all.
 
 RETURNS: JSON array of objects with path, name, and class for each matching asset.`,
     inputSchema: {
@@ -326,7 +764,10 @@ RETURNS: JSON array of objects with path, name, and class for each matching asse
         'Search term to match against asset names. Partial matches work (e.g. "Player" finds "BP_PlayerCharacter").',
       ),
       class_filter: z.string().default('Blueprint').describe(
-        'Filter by asset class. Common values: "Blueprint", "AnimBlueprint", "WidgetBlueprint", "StateTree", "DataTable", "DataAsset", or "" for all asset types.',
+        'Filter by asset class. Common values: "Blueprint", "AnimBlueprint", "WidgetBlueprint", "StateTree", "BehaviorTree", "Blackboard", "DataAsset", "DataTable", "UserDefinedStruct", "UserDefinedEnum", "Curve", "CurveTable", "MaterialInstance", "AnimSequence", "AnimMontage", "BlendSpace", or "" for all asset types.',
+      ),
+      max_results: z.number().int().min(1).max(200).default(50).describe(
+        'Maximum number of results to return. Lower values keep the response small and the query fast.',
       ),
     },
     annotations: {
@@ -337,14 +778,14 @@ RETURNS: JSON array of objects with path, name, and class for each matching asse
       openWorldHint: false,
     },
   },
-  async ({ query, class_filter }) => {
+  async ({ query, class_filter, max_results }) => {
     try {
-      const result = await client.callSubsystem('SearchAssets', { Query: query, ClassFilter: class_filter });
+      const result = await client.callSubsystem('SearchAssets', { Query: query, ClassFilter: class_filter, MaxResults: max_results });
       const parsed = JSON.parse(result);
       if (parsed.error) {
         return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
       }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed.results ?? [], null, 2) }] };
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
     }

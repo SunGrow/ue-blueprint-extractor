@@ -41,6 +41,46 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ExtractDataTable(const FString& AssetPath);
 
+	/** Extracts a BehaviorTree to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractBehaviorTree(const FString& AssetPath);
+
+	/** Extracts a Blackboard asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractBlackboard(const FString& AssetPath);
+
+	/** Extracts a UserDefinedStruct asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractUserDefinedStruct(const FString& AssetPath);
+
+	/** Extracts a UserDefinedEnum asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractUserDefinedEnum(const FString& AssetPath);
+
+	/** Extracts a curve asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractCurve(const FString& AssetPath);
+
+	/** Extracts a CurveTable asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractCurveTable(const FString& AssetPath);
+
+	/** Extracts a MaterialInstance asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractMaterialInstance(const FString& AssetPath);
+
+	/** Extracts an AnimSequence asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractAnimSequence(const FString& AssetPath);
+
+	/** Extracts an AnimMontage asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractAnimMontage(const FString& AssetPath);
+
+	/** Extracts a BlendSpace asset to a JSON string. Returns an error JSON object on failure. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractBlendSpace(const FString& AssetPath);
+
 	/** Extracts multiple assets with cascade reference following. Returns extraction summary JSON.
 	 *  GraphFilter is a comma-separated list of graph names to extract. Empty = all graphs. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
@@ -51,7 +91,7 @@ public:
 
 	/** Searches assets by name query and optional class filter. Returns a JSON array. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
-	FString SearchAssets(const FString& Query, const FString& ClassFilter = TEXT("Blueprint"));
+	FString SearchAssets(const FString& Query, const FString& ClassFilter = TEXT("Blueprint"), const int32 MaxResults = 50);
 
 	/** Lists assets under a package path. Returns a JSON array. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")

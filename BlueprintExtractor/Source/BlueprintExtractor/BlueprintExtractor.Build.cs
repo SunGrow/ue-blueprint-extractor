@@ -30,6 +30,7 @@ public class BlueprintExtractor : ModuleRules
 			"Json",
 			"JsonUtilities",
 			"InputCore",
+			"AIModule",
 			"StateTreeModule",
 			"StructUtils",
 			"GameplayTags",

@@ -13,6 +13,9 @@ class BLUEPRINTEXTRACTOR_API UBlueprintExtractorSettings : public UDeveloperSett
 public:
 	UBlueprintExtractorSettings();
 
+	FString GetResolvedOutputDirectoryPath() const;
+	static FString ResolveOutputDirectoryPath(const FString& ConfiguredPath);
+
 	UPROPERTY(Config, EditAnywhere, Category="Output", meta=(RelativeToGameContentDir))
 	FDirectoryPath OutputDirectory;
 

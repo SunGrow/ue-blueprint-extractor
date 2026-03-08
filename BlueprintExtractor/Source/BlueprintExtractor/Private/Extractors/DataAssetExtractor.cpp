@@ -1,6 +1,8 @@
 #include "Extractors/DataAssetExtractor.h"
 #include "BlueprintExtractorModule.h"
+#include "BlueprintExtractorVersion.h"
 #include "Engine/DataAsset.h"
+#include "PropertySerializer.h"
 
 TSharedPtr<FJsonObject> FDataAssetExtractor::Extract(const UDataAsset* DataAsset)
 {
@@ -10,7 +12,7 @@ TSharedPtr<FJsonObject> FDataAssetExtractor::Extract(const UDataAsset* DataAsset
 	}
 
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetStringField(TEXT("schemaVersion"), TEXT("1.0.0"));
+	Root->SetStringField(TEXT("schemaVersion"), BlueprintExtractor::SchemaVersion);
 
 	TSharedPtr<FJsonObject> DAObj = MakeShared<FJsonObject>();
 	DAObj->SetStringField(TEXT("assetPath"), DataAsset->GetPathName());
@@ -22,50 +24,14 @@ TSharedPtr<FJsonObject> FDataAssetExtractor::Extract(const UDataAsset* DataAsset
 	static const UClass* PrimaryDataAssetBase  = FindObject<UClass>(nullptr, TEXT("/Script/Engine.PrimaryDataAsset"));
 	static const UClass* ObjectBase            = UObject::StaticClass();
 
-	TArray<TSharedPtr<FJsonValue>> Properties;
-
-	for (TFieldIterator<FProperty> PropIt(DataAsset->GetClass()); PropIt; ++PropIt)
+	TArray<const UClass*> SkipClasses = { DataAssetBase, ObjectBase };
+	if (PrimaryDataAssetBase)
 	{
-		FProperty* Property = *PropIt;
-
-		// Skip properties owned by UDataAsset, UPrimaryDataAsset, or UObject
-		const UClass* OwnerClass = Property->GetOwnerClass();
-		if (OwnerClass == DataAssetBase || OwnerClass == ObjectBase ||
-			(PrimaryDataAssetBase && OwnerClass == PrimaryDataAssetBase))
-		{
-			continue;
-		}
-
-		// Skip deprecated and transient properties
-		if (Property->HasAnyPropertyFlags(CPF_Deprecated | CPF_Transient))
-		{
-			continue;
-		}
-
-		TSharedPtr<FJsonObject> PropObj = MakeShared<FJsonObject>();
-		PropObj->SetStringField(TEXT("name"), Property->GetName());
-		PropObj->SetStringField(TEXT("cppType"), Property->GetCPPType());
-
-		// Export value
-		FString ValueStr;
-		const uint8* ContainerPtr = reinterpret_cast<const uint8*>(DataAsset);
-		Property->ExportText_InContainer(0, ValueStr, ContainerPtr, nullptr, nullptr, PPF_None);
-		PropObj->SetStringField(TEXT("value"), ValueStr);
-
-		// For object references, also include the path
-		if (const FObjectPropertyBase* ObjProp = CastField<FObjectPropertyBase>(Property))
-		{
-			UObject* ReferencedObj = ObjProp->GetObjectPropertyValue_InContainer(ContainerPtr);
-			if (ReferencedObj)
-			{
-				PropObj->SetStringField(TEXT("referencePath"), ReferencedObj->GetPathName());
-			}
-		}
-
-		Properties.Add(MakeShared<FJsonValueObject>(PropObj));
+		SkipClasses.Add(PrimaryDataAssetBase);
 	}
 
-	DAObj->SetArrayField(TEXT("properties"), Properties);
+	DAObj->SetArrayField(TEXT("properties"),
+		FPropertySerializer::SerializeUserProperties(DataAsset, DataAsset->GetClass(), SkipClasses));
 
 	Root->SetObjectField(TEXT("dataAsset"), DAObj);
 	return Root;

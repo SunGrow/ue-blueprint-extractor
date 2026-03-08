@@ -1,6 +1,7 @@
 #include "Extractors/ComponentExtractor.h"
 #include "BlueprintJsonSchema.h"
 #include "BlueprintExtractorModule.h"
+#include "PropertySerializer.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -104,9 +105,12 @@ TSharedPtr<FJsonObject> FComponentExtractor::ExtractPropertyOverrides(const UAct
 
 		if (!Property->Identical_InContainer(ComponentTemplate, CDO))
 		{
-			FString ValueStr;
-			Property->ExportText_InContainer(0, ValueStr, ComponentTemplate, CDO, nullptr, PPF_None);
-			Overrides->SetStringField(Property->GetName(), ValueStr);
+			const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(ComponentTemplate);
+			const TSharedPtr<FJsonValue> JsonValue = FPropertySerializer::SerializePropertyValue(Property, ValuePtr);
+			if (JsonValue)
+			{
+				Overrides->SetField(Property->GetName(), JsonValue);
+			}
 		}
 	}
 

@@ -1,6 +1,8 @@
 #include "Extractors/DataTableExtractor.h"
 #include "BlueprintExtractorModule.h"
+#include "BlueprintExtractorVersion.h"
 #include "Engine/DataTable.h"
+#include "PropertySerializer.h"
 
 TSharedPtr<FJsonObject> FDataTableExtractor::Extract(const UDataTable* DataTable)
 {
@@ -10,7 +12,7 @@ TSharedPtr<FJsonObject> FDataTableExtractor::Extract(const UDataTable* DataTable
 	}
 
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetStringField(TEXT("schemaVersion"), TEXT("1.0.0"));
+	Root->SetStringField(TEXT("schemaVersion"), BlueprintExtractor::SchemaVersion);
 
 	TSharedPtr<FJsonObject> DTObj = MakeShared<FJsonObject>();
 	DTObj->SetStringField(TEXT("assetPath"), DataTable->GetPathName());
@@ -65,9 +67,12 @@ TSharedPtr<FJsonObject> FDataTableExtractor::Extract(const UDataTable* DataTable
 				TSharedPtr<FJsonObject> PropObj = MakeShared<FJsonObject>();
 				PropObj->SetStringField(TEXT("name"), Property->GetName());
 
-				FString ValueStr;
-				Property->ExportText_InContainer(0, ValueStr, RowPair.Value, nullptr, nullptr, PPF_None);
-				PropObj->SetStringField(TEXT("value"), ValueStr);
+				const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(RowPair.Value);
+				const TSharedPtr<FJsonValue> TypedValue = FPropertySerializer::SerializePropertyValue(Property, ValuePtr);
+				if (TypedValue)
+				{
+					PropObj->SetField(TEXT("value"), TypedValue);
+				}
 
 				RowProperties.Add(MakeShared<FJsonValueObject>(PropObj));
 			}

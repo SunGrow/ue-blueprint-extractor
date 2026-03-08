@@ -21,15 +21,7 @@ static void ExecuteExtraction(TArray<FAssetData> SelectedAssets)
 		? EBlueprintExtractionScope::FullWithBytecode
 		: Settings->DefaultScope;
 
-	FString OutputDir = Settings->OutputDirectory.Path;
-	if (OutputDir.IsEmpty())
-	{
-		OutputDir = FPaths::ProjectSavedDir() / TEXT("BlueprintExtractor");
-	}
-	else if (FPaths::IsRelative(OutputDir))
-	{
-		OutputDir = FPaths::ProjectContentDir() / OutputDir;
-	}
+	const FString OutputDir = Settings->GetResolvedOutputDirectoryPath();
 
 	IFileManager::Get().MakeDirectory(*OutputDir, true);
 
@@ -49,8 +41,10 @@ static void ExecuteExtraction(TArray<FAssetData> SelectedAssets)
 		FScopedSlowTask SlowTask(0, LOCTEXT("ExtractingCascade", "Extracting with cascade (following references)..."));
 		SlowTask.MakeDialog();
 
-		int32 SuccessCount = UBlueprintExtractorLibrary::ExtractWithCascade(Assets, OutputDir, Scope, Settings->MaxCascadeDepth);
-		UE_LOG(LogBlueprintExtractor, Log, TEXT("Cascade extraction complete: %d total assets extracted to %s"), SuccessCount, *OutputDir);
+		const TSharedPtr<FJsonObject> Result = UBlueprintExtractorLibrary::ExtractWithCascade(Assets, OutputDir, Scope, Settings->MaxCascadeDepth);
+		const double SuccessCount = Result.IsValid() ? Result->GetNumberField(TEXT("extracted_count")) : 0.0;
+		const double TotalCount = Result.IsValid() ? Result->GetNumberField(TEXT("total_count")) : 0.0;
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Cascade extraction complete: %.0f/%.0f assets extracted to %s"), SuccessCount, TotalCount, *OutputDir);
 	}
 	else
 	{

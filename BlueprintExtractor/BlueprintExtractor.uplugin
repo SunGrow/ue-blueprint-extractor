@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
-	"Version": 1,
-	"VersionName": "1.0",
+	"Version": 2,
+	"VersionName": "1.2",
 	"FriendlyName": "Blueprint Extractor",
-	"Description": "Extracts Blueprint data to structured JSON for C++ conversion",
+	"Description": "Extracts Blueprint, AI, data, material, curve, and animation assets to structured JSON",
 	"Category": "Editor",
 	"CreatedBy": "",
 	"EnabledByDefault": true,

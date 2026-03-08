@@ -9,6 +9,16 @@ class UBlueprint;
 class UStateTree;
 class UDataAsset;
 class UDataTable;
+class UBehaviorTree;
+class UBlackboardData;
+class UUserDefinedStruct;
+class UUserDefinedEnum;
+class UCurveBase;
+class UCurveTable;
+class UMaterialInstance;
+class UAnimSequence;
+class UAnimMontage;
+class UBlendSpace;
 
 UCLASS()
 class BLUEPRINTEXTRACTOR_API UBlueprintExtractorLibrary : public UBlueprintFunctionLibrary
@@ -45,11 +55,65 @@ public:
 
 	static TSharedPtr<FJsonObject> ExtractDataTableToJsonObject(UDataTable* DataTable);
 
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractBehaviorTreeToJson(UBehaviorTree* BehaviorTree, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractBehaviorTreeToJsonObject(UBehaviorTree* BehaviorTree);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractBlackboardToJson(UBlackboardData* BlackboardData, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractBlackboardToJsonObject(UBlackboardData* BlackboardData);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractUserDefinedStructToJson(UUserDefinedStruct* UserDefinedStruct, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractUserDefinedStructToJsonObject(UUserDefinedStruct* UserDefinedStruct);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractUserDefinedEnumToJson(UUserDefinedEnum* UserDefinedEnum, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractUserDefinedEnumToJsonObject(UUserDefinedEnum* UserDefinedEnum);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractCurveToJson(UCurveBase* Curve, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractCurveToJsonObject(UCurveBase* Curve);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractCurveTableToJson(UCurveTable* CurveTable, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractCurveTableToJsonObject(UCurveTable* CurveTable);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractMaterialInstanceToJson(UMaterialInstance* MaterialInstance, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractMaterialInstanceToJsonObject(UMaterialInstance* MaterialInstance);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractAnimSequenceToJson(UAnimSequence* AnimSequence, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractAnimSequenceToJsonObject(UAnimSequence* AnimSequence);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractAnimMontageToJson(UAnimMontage* AnimMontage, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractAnimMontageToJsonObject(UAnimMontage* AnimMontage);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractBlendSpaceToJson(UBlendSpace* BlendSpace, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractBlendSpaceToJsonObject(UBlendSpace* BlendSpace);
+
 	/** Extract assets with cascade: follows references to other extractable assets (Blueprints, StateTrees).
 	 *  GraphFilter limits which graphs are extracted from Blueprints. Empty = all graphs. */
-	static int32 ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth, const TArray<FName>& GraphFilter = {});
+	static TSharedPtr<FJsonObject> ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth, const TArray<FName>& GraphFilter = {});
 
 private:
 	static TArray<FSoftObjectPath> CollectBlueprintReferences(const UBlueprint* Blueprint);
 	static TArray<FSoftObjectPath> CollectStateTreeReferences(const UStateTree* StateTree);
+	static TArray<FSoftObjectPath> CollectBehaviorTreeReferences(const UBehaviorTree* BehaviorTree);
+	static TArray<FSoftObjectPath> CollectMaterialInstanceReferences(const UMaterialInstance* MaterialInstance);
+	static TArray<FSoftObjectPath> CollectAnimMontageReferences(const UAnimMontage* AnimMontage);
+	static TArray<FSoftObjectPath> CollectBlendSpaceReferences(const UBlendSpace* BlendSpace);
 };

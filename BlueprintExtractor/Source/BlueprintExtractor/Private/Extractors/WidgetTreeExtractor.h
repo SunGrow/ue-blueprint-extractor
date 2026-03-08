@@ -2,12 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "Dom/JsonObject.h"
-#include "Dom/JsonValue.h"
 
 class UWidgetBlueprint;
 class UWidget;
 class UPanelSlot;
-class FProperty;
 
 enum class ESlateVisibility : uint8;
 
@@ -35,9 +33,4 @@ private:
 
 	/** Converts ESlateVisibility enum value to a human-readable string. */
 	static FString VisibilityToString(const ESlateVisibility Visibility);
-
-	/** Converts a single reflected property value to a JSON value.
-	 *  Uses FJsonObjectConverter::UStructToJsonObject for struct properties,
-	 *  direct JSON types for primitives, and path strings for object/class references. */
-	static TSharedPtr<FJsonValue> ExtractPropertyValue(const FProperty* Property, const void* ValuePtr);
 };

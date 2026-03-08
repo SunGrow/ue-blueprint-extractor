@@ -1,6 +1,6 @@
 {
   "name": "blueprint-extractor-mcp",
-  "version": "1.6.0",
+  "version": "1.8.0",
   "description": "MCP server for UE5 BlueprintExtractor plugin",
   "type": "module",
   "main": "dist/index.js",

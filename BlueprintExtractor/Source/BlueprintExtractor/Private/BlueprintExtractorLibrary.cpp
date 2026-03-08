@@ -1,6 +1,7 @@
 #include "BlueprintExtractorLibrary.h"
 #include "BlueprintExtractorModule.h"
 #include "BlueprintExtractorSettings.h"
+#include "BlueprintExtractorVersion.h"
 #include "BlueprintJsonSchema.h"
 #include "Extractors/ClassLevelExtractor.h"
 #include "Extractors/VariableExtractor.h"
@@ -11,19 +12,41 @@
 #include "Extractors/StateTreeExtractor.h"
 #include "Extractors/DataAssetExtractor.h"
 #include "Extractors/DataTableExtractor.h"
+#include "Extractors/BehaviorTreeExtractor.h"
+#include "Extractors/BlackboardExtractor.h"
+#include "Extractors/UserDefinedStructExtractor.h"
+#include "Extractors/UserDefinedEnumExtractor.h"
+#include "Extractors/CurveExtractor.h"
+#include "Extractors/CurveTableExtractor.h"
+#include "Extractors/MaterialInstanceExtractor.h"
+#include "Extractors/AnimAssetExtractor.h"
 #include "Extractors/WidgetTreeExtractor.h"
 #include "WidgetBlueprint.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
 #include "Components/PanelWidget.h"
+#include "BehaviorTree/BehaviorTree.h"
+#include "BehaviorTree/BTCompositeNode.h"
+#include "BehaviorTree/BTDecorator.h"
+#include "BehaviorTree/BTService.h"
+#include "BehaviorTree/BTTaskNode.h"
+#include "BehaviorTree/BlackboardData.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequence.h"
+#include "Animation/BlendSpace.h"
+#include "Curves/CurveBase.h"
 #include "Engine/Blueprint.h"
+#include "Engine/CurveTable.h"
 #include "Engine/DataAsset.h"
 #include "Engine/DataTable.h"
+#include "Engine/UserDefinedEnum.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
+#include "Materials/MaterialInstance.h"
 #include "StateTree.h"
 #include "StateTreeEditorData.h"
 #include "StateTreeState.h"
+#include "StructUtils/UserDefinedStruct.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
@@ -67,6 +90,37 @@ static bool WriteJsonToFile(const TSharedPtr<FJsonObject>& JsonRoot, const FStri
 	}
 
 	return FFileHelper::SaveStringToFile(OutputString, *FullPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+}
+
+static FString GetAssetPackagePath(const UObject* Asset)
+{
+	if (!Asset)
+	{
+		return FString();
+	}
+
+	if (const UPackage* Package = Asset->GetOutermost())
+	{
+		return Package->GetName();
+	}
+
+	return Asset->GetPathName();
+}
+
+static FString MakeCascadeOutputFileName(const UObject* Asset)
+{
+	FString SafeName = GetAssetPackagePath(Asset);
+	SafeName.RemoveFromStart(TEXT("/Game/"));
+	SafeName.RemoveFromStart(TEXT("/"));
+	SafeName.ReplaceInline(TEXT("/"), TEXT("--"));
+	SafeName.ReplaceInline(TEXT("."), TEXT("--"));
+
+	if (SafeName.IsEmpty())
+	{
+		SafeName = Asset ? Asset->GetName() : TEXT("UnknownAsset");
+	}
+
+	return SafeName + TEXT(".json");
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +234,7 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 	}
 
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetStringField(TEXT("schemaVersion"), TEXT("1.0.0"));
+	Root->SetStringField(TEXT("schemaVersion"), BlueprintExtractor::SchemaVersion);
 
 	TSharedPtr<FJsonObject> BPObj = MakeShared<FJsonObject>();
 
@@ -426,6 +480,328 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractDataTableToJsonObject
 }
 
 // ---------------------------------------------------------------------------
+// BehaviorTree extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractBehaviorTreeToJson(UBehaviorTree* BehaviorTree, const FString& OutputPath)
+{
+	if (!BehaviorTree)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractBehaviorTreeToJson: null BehaviorTree"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractBehaviorTreeToJsonObject(BehaviorTree);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted BehaviorTree '%s' to '%s'"), *BehaviorTree->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBehaviorTreeToJsonObject(UBehaviorTree* BehaviorTree)
+{
+	return FBehaviorTreeExtractor::Extract(BehaviorTree);
+}
+
+// ---------------------------------------------------------------------------
+// Blackboard extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractBlackboardToJson(UBlackboardData* BlackboardData, const FString& OutputPath)
+{
+	if (!BlackboardData)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractBlackboardToJson: null BlackboardData"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractBlackboardToJsonObject(BlackboardData);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted Blackboard '%s' to '%s'"), *BlackboardData->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlackboardToJsonObject(UBlackboardData* BlackboardData)
+{
+	return FBlackboardExtractor::Extract(BlackboardData);
+}
+
+// ---------------------------------------------------------------------------
+// UserDefinedStruct extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractUserDefinedStructToJson(UUserDefinedStruct* UserDefinedStruct, const FString& OutputPath)
+{
+	if (!UserDefinedStruct)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractUserDefinedStructToJson: null UserDefinedStruct"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractUserDefinedStructToJsonObject(UserDefinedStruct);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted UserDefinedStruct '%s' to '%s'"), *UserDefinedStruct->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractUserDefinedStructToJsonObject(UUserDefinedStruct* UserDefinedStruct)
+{
+	return FUserDefinedStructExtractor::Extract(UserDefinedStruct);
+}
+
+// ---------------------------------------------------------------------------
+// UserDefinedEnum extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractUserDefinedEnumToJson(UUserDefinedEnum* UserDefinedEnum, const FString& OutputPath)
+{
+	if (!UserDefinedEnum)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractUserDefinedEnumToJson: null UserDefinedEnum"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractUserDefinedEnumToJsonObject(UserDefinedEnum);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted UserDefinedEnum '%s' to '%s'"), *UserDefinedEnum->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractUserDefinedEnumToJsonObject(UUserDefinedEnum* UserDefinedEnum)
+{
+	return FUserDefinedEnumExtractor::Extract(UserDefinedEnum);
+}
+
+// ---------------------------------------------------------------------------
+// Curve extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractCurveToJson(UCurveBase* Curve, const FString& OutputPath)
+{
+	if (!Curve)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractCurveToJson: null Curve"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractCurveToJsonObject(Curve);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted Curve '%s' to '%s'"), *Curve->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractCurveToJsonObject(UCurveBase* Curve)
+{
+	return FCurveExtractor::Extract(Curve);
+}
+
+// ---------------------------------------------------------------------------
+// CurveTable extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractCurveTableToJson(UCurveTable* CurveTable, const FString& OutputPath)
+{
+	if (!CurveTable)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractCurveTableToJson: null CurveTable"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractCurveTableToJsonObject(CurveTable);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted CurveTable '%s' to '%s'"), *CurveTable->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractCurveTableToJsonObject(UCurveTable* CurveTable)
+{
+	return FCurveTableExtractor::Extract(CurveTable);
+}
+
+// ---------------------------------------------------------------------------
+// MaterialInstance extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractMaterialInstanceToJson(UMaterialInstance* MaterialInstance, const FString& OutputPath)
+{
+	if (!MaterialInstance)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractMaterialInstanceToJson: null MaterialInstance"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractMaterialInstanceToJsonObject(MaterialInstance);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted MaterialInstance '%s' to '%s'"), *MaterialInstance->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractMaterialInstanceToJsonObject(UMaterialInstance* MaterialInstance)
+{
+	return FMaterialInstanceExtractor::Extract(MaterialInstance);
+}
+
+// ---------------------------------------------------------------------------
+// Animation asset extraction
+// ---------------------------------------------------------------------------
+
+bool UBlueprintExtractorLibrary::ExtractAnimSequenceToJson(UAnimSequence* AnimSequence, const FString& OutputPath)
+{
+	if (!AnimSequence)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractAnimSequenceToJson: null AnimSequence"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractAnimSequenceToJsonObject(AnimSequence);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted AnimSequence '%s' to '%s'"), *AnimSequence->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractAnimSequenceToJsonObject(UAnimSequence* AnimSequence)
+{
+	return FAnimAssetExtractor::ExtractAnimSequence(AnimSequence);
+}
+
+bool UBlueprintExtractorLibrary::ExtractAnimMontageToJson(UAnimMontage* AnimMontage, const FString& OutputPath)
+{
+	if (!AnimMontage)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractAnimMontageToJson: null AnimMontage"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractAnimMontageToJsonObject(AnimMontage);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted AnimMontage '%s' to '%s'"), *AnimMontage->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractAnimMontageToJsonObject(UAnimMontage* AnimMontage)
+{
+	return FAnimAssetExtractor::ExtractAnimMontage(AnimMontage);
+}
+
+bool UBlueprintExtractorLibrary::ExtractBlendSpaceToJson(UBlendSpace* BlendSpace, const FString& OutputPath)
+{
+	if (!BlendSpace)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractBlendSpaceToJson: null BlendSpace"));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> JsonRoot = ExtractBlendSpaceToJsonObject(BlendSpace);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted BlendSpace '%s' to '%s'"), *BlendSpace->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlendSpaceToJsonObject(UBlendSpace* BlendSpace)
+{
+	return FAnimAssetExtractor::ExtractBlendSpace(BlendSpace);
+}
+
+// ---------------------------------------------------------------------------
 // Cascade extraction — reference collection
 // ---------------------------------------------------------------------------
 
@@ -652,11 +1028,131 @@ TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectStateTreeReferences(c
 	return Refs;
 }
 
+TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectBehaviorTreeReferences(const UBehaviorTree* BehaviorTree)
+{
+	TArray<FSoftObjectPath> Refs;
+	if (!BehaviorTree)
+	{
+		return Refs;
+	}
+
+	if (BehaviorTree->BlackboardAsset)
+	{
+		Refs.AddUnique(FSoftObjectPath(BehaviorTree->BlackboardAsset));
+	}
+
+	const TFunction<void(const UBTNode*)> CollectNodeRef = [&](const UBTNode* Node)
+	{
+		if (!Node)
+		{
+			return;
+		}
+
+		if (Node->GetClass()->ClassGeneratedBy)
+		{
+			if (const UBlueprint* NodeBlueprint = Cast<UBlueprint>(Node->GetClass()->ClassGeneratedBy))
+			{
+				Refs.AddUnique(FSoftObjectPath(NodeBlueprint));
+			}
+		}
+
+		if (const UBTCompositeNode* CompositeNode = Cast<UBTCompositeNode>(Node))
+		{
+			for (const TObjectPtr<UBTService>& Service : CompositeNode->Services)
+			{
+				CollectNodeRef(Service.Get());
+			}
+
+			for (const FBTCompositeChild& Child : CompositeNode->Children)
+			{
+				for (const TObjectPtr<UBTDecorator>& Decorator : Child.Decorators)
+				{
+					CollectNodeRef(Decorator.Get());
+				}
+
+				if (Child.ChildComposite)
+				{
+					CollectNodeRef(Child.ChildComposite);
+				}
+				if (Child.ChildTask)
+				{
+					CollectNodeRef(Child.ChildTask.Get());
+				}
+			}
+		}
+	};
+
+	for (const TObjectPtr<UBTDecorator>& RootDecorator : BehaviorTree->RootDecorators)
+	{
+		CollectNodeRef(RootDecorator.Get());
+	}
+	CollectNodeRef(BehaviorTree->RootNode);
+
+	return Refs;
+}
+
+TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectMaterialInstanceReferences(const UMaterialInstance* MaterialInstance)
+{
+	TArray<FSoftObjectPath> Refs;
+	if (!MaterialInstance || !MaterialInstance->Parent)
+	{
+		return Refs;
+	}
+
+	if (const UMaterialInstance* ParentMaterialInstance = Cast<UMaterialInstance>(MaterialInstance->Parent))
+	{
+		Refs.AddUnique(FSoftObjectPath(ParentMaterialInstance));
+	}
+
+	return Refs;
+}
+
+TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectAnimMontageReferences(const UAnimMontage* AnimMontage)
+{
+	TArray<FSoftObjectPath> Refs;
+	if (!AnimMontage)
+	{
+		return Refs;
+	}
+
+	for (const FSlotAnimationTrack& SlotTrack : AnimMontage->SlotAnimTracks)
+	{
+		for (const FAnimSegment& Segment : SlotTrack.AnimTrack.AnimSegments)
+		{
+			if (const UAnimSequenceBase* AnimReference = Segment.GetAnimReference().Get())
+			{
+				Refs.AddUnique(FSoftObjectPath(AnimReference));
+			}
+		}
+	}
+
+	return Refs;
+}
+
+TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectBlendSpaceReferences(const UBlendSpace* BlendSpace)
+{
+	TArray<FSoftObjectPath> Refs;
+	if (!BlendSpace)
+	{
+		return Refs;
+	}
+
+	for (const FBlendSample& Sample : BlendSpace->GetBlendSamples())
+	{
+		if (Sample.Animation)
+		{
+			Refs.AddUnique(FSoftObjectPath(Sample.Animation));
+		}
+	}
+
+	return Refs;
+}
+
 // ---------------------------------------------------------------------------
 // Cascade extraction — BFS loop
 // ---------------------------------------------------------------------------
 
-int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth, const TArray<FName>& GraphFilter)
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& InitialAssets, const FString& OutputDir, EBlueprintExtractionScope Scope, int32 MaxDepth, const TArray<FName>& GraphFilter)
 {
 	struct FPendingAsset
 	{
@@ -684,19 +1180,24 @@ int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& Ini
 
 	int32 SuccessCount = 0;
 	int32 ProcessIndex = 0;
+	TArray<TSharedPtr<FJsonValue>> Manifest;
 
 	while (ProcessIndex < Queue.Num())
 	{
 		FPendingAsset Current = Queue[ProcessIndex++];
 
-		const FString FileName = Current.Asset->GetName() + TEXT(".json");
+		const FString FileName = MakeCascadeOutputFileName(Current.Asset);
 		const FString FullPath = OutputDir / FileName;
+		const FString AssetPath = GetAssetPackagePath(Current.Asset);
 
 		bool bSuccess = false;
+		FString AssetType = TEXT("Unknown");
+		FString ErrorMessage;
 		TArray<FSoftObjectPath> Refs;
 
 		if (UBlueprint* BP = Cast<UBlueprint>(Current.Asset))
 		{
+			AssetType = TEXT("Blueprint");
 			bSuccess = ExtractBlueprintToJson(BP, FullPath, Scope, GraphFilter);
 			if (Current.Depth < MaxDepth)
 			{
@@ -705,19 +1206,96 @@ int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& Ini
 		}
 		else if (UStateTree* ST = Cast<UStateTree>(Current.Asset))
 		{
+			AssetType = TEXT("StateTree");
 			bSuccess = ExtractStateTreeToJson(ST, FullPath);
 			if (Current.Depth < MaxDepth)
 			{
 				Refs = CollectStateTreeReferences(ST);
 			}
 		}
+		else if (UBehaviorTree* BT = Cast<UBehaviorTree>(Current.Asset))
+		{
+			AssetType = TEXT("BehaviorTree");
+			bSuccess = ExtractBehaviorTreeToJson(BT, FullPath);
+			if (Current.Depth < MaxDepth)
+			{
+				Refs = CollectBehaviorTreeReferences(BT);
+			}
+		}
+		else if (UBlackboardData* BlackboardData = Cast<UBlackboardData>(Current.Asset))
+		{
+			AssetType = TEXT("Blackboard");
+			bSuccess = ExtractBlackboardToJson(BlackboardData, FullPath);
+			if (Current.Depth < MaxDepth && BlackboardData->Parent)
+			{
+				Refs.AddUnique(FSoftObjectPath(BlackboardData->Parent));
+			}
+		}
 		else if (UDataAsset* DA = Cast<UDataAsset>(Current.Asset))
 		{
+			AssetType = TEXT("DataAsset");
 			bSuccess = ExtractDataAssetToJson(DA, FullPath);
 		}
 		else if (UDataTable* DT = Cast<UDataTable>(Current.Asset))
 		{
+			AssetType = TEXT("DataTable");
 			bSuccess = ExtractDataTableToJson(DT, FullPath);
+		}
+		else if (UUserDefinedStruct* UserDefinedStruct = Cast<UUserDefinedStruct>(Current.Asset))
+		{
+			AssetType = TEXT("UserDefinedStruct");
+			bSuccess = ExtractUserDefinedStructToJson(UserDefinedStruct, FullPath);
+		}
+		else if (UUserDefinedEnum* UserDefinedEnum = Cast<UUserDefinedEnum>(Current.Asset))
+		{
+			AssetType = TEXT("UserDefinedEnum");
+			bSuccess = ExtractUserDefinedEnumToJson(UserDefinedEnum, FullPath);
+		}
+		else if (UCurveBase* Curve = Cast<UCurveBase>(Current.Asset))
+		{
+			AssetType = TEXT("Curve");
+			bSuccess = ExtractCurveToJson(Curve, FullPath);
+		}
+		else if (UCurveTable* CurveTable = Cast<UCurveTable>(Current.Asset))
+		{
+			AssetType = TEXT("CurveTable");
+			bSuccess = ExtractCurveTableToJson(CurveTable, FullPath);
+		}
+		else if (UMaterialInstance* MaterialInstance = Cast<UMaterialInstance>(Current.Asset))
+		{
+			AssetType = TEXT("MaterialInstance");
+			bSuccess = ExtractMaterialInstanceToJson(MaterialInstance, FullPath);
+			if (Current.Depth < MaxDepth)
+			{
+				Refs = CollectMaterialInstanceReferences(MaterialInstance);
+			}
+		}
+		else if (UAnimSequence* AnimSequence = Cast<UAnimSequence>(Current.Asset))
+		{
+			AssetType = TEXT("AnimSequence");
+			bSuccess = ExtractAnimSequenceToJson(AnimSequence, FullPath);
+		}
+		else if (UAnimMontage* AnimMontage = Cast<UAnimMontage>(Current.Asset))
+		{
+			AssetType = TEXT("AnimMontage");
+			bSuccess = ExtractAnimMontageToJson(AnimMontage, FullPath);
+			if (Current.Depth < MaxDepth)
+			{
+				Refs = CollectAnimMontageReferences(AnimMontage);
+			}
+		}
+		else if (UBlendSpace* BlendSpace = Cast<UBlendSpace>(Current.Asset))
+		{
+			AssetType = TEXT("BlendSpace");
+			bSuccess = ExtractBlendSpaceToJson(BlendSpace, FullPath);
+			if (Current.Depth < MaxDepth)
+			{
+				Refs = CollectBlendSpaceReferences(BlendSpace);
+			}
+		}
+		else
+		{
+			ErrorMessage = TEXT("Unsupported asset type");
 		}
 
 		if (bSuccess)
@@ -728,6 +1306,22 @@ int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& Ini
 				UE_LOG(LogBlueprintExtractor, Log, TEXT("  Cascade [depth %d]: %s"), Current.Depth, *Current.Asset->GetName());
 			}
 		}
+		else if (ErrorMessage.IsEmpty())
+		{
+			ErrorMessage = TEXT("Extraction returned false");
+		}
+
+		TSharedPtr<FJsonObject> ManifestItem = MakeShared<FJsonObject>();
+		ManifestItem->SetStringField(TEXT("assetPath"), AssetPath);
+		ManifestItem->SetStringField(TEXT("assetType"), AssetType);
+		ManifestItem->SetStringField(TEXT("outputFile"), FileName);
+		ManifestItem->SetNumberField(TEXT("depth"), Current.Depth);
+		ManifestItem->SetStringField(TEXT("status"), bSuccess ? TEXT("extracted") : TEXT("failed"));
+		if (!ErrorMessage.IsEmpty())
+		{
+			ManifestItem->SetStringField(TEXT("error"), ErrorMessage);
+		}
+		Manifest.Add(MakeShared<FJsonValueObject>(ManifestItem));
 
 		// Enqueue discovered references
 		for (const FSoftObjectPath& Ref : Refs)
@@ -740,12 +1334,27 @@ int32 UBlueprintExtractorLibrary::ExtractWithCascade(const TArray<UObject*>& Ini
 			Visited.Add(RefPath);
 
 			UObject* RefAsset = Ref.TryLoad();
-			if (RefAsset && (Cast<UBlueprint>(RefAsset) || Cast<UStateTree>(RefAsset)))
+			if (RefAsset && (Cast<UBlueprint>(RefAsset)
+				|| Cast<UStateTree>(RefAsset)
+				|| Cast<UBehaviorTree>(RefAsset)
+				|| Cast<UBlackboardData>(RefAsset)
+				|| Cast<UUserDefinedStruct>(RefAsset)
+				|| Cast<UUserDefinedEnum>(RefAsset)
+				|| Cast<UCurveBase>(RefAsset)
+				|| Cast<UCurveTable>(RefAsset)
+				|| Cast<UMaterialInstance>(RefAsset)
+				|| Cast<UAnimSequence>(RefAsset)
+				|| Cast<UAnimMontage>(RefAsset)
+				|| Cast<UBlendSpace>(RefAsset)))
 			{
 				Queue.Add({RefAsset, Current.Depth + 1});
 			}
 		}
 	}
 
-	return SuccessCount;
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("extracted_count"), SuccessCount);
+	Result->SetNumberField(TEXT("total_count"), Manifest.Num());
+	Result->SetArrayField(TEXT("assets"), Manifest);
+	return Result;
 }

@@ -12,10 +12,14 @@
 #include "JsonObjectConverter.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "BlueprintCompilationManager.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "WidgetBlueprintFactory.h"
+#include "Logging/TokenizedMessage.h"
 
+#include "CoreGlobals.h"
 #include "UObject/UnrealType.h"
 
 // ---------------------------------------------------------------------------
@@ -56,6 +60,54 @@ static TSharedRef<FJsonValueArray> ErrorsToJsonArray(const TArray<FString>& Erro
 		Array.Add(MakeShared<FJsonValueString>(Err));
 	}
 	return MakeShared<FJsonValueArray>(Array);
+}
+
+static FString GetBlueprintStatusString(const EBlueprintStatus Status)
+{
+	switch (Status)
+	{
+	case BS_Unknown:
+		return TEXT("Unknown");
+	case BS_Dirty:
+		return TEXT("Dirty");
+	case BS_Error:
+		return TEXT("Error");
+	case BS_UpToDate:
+		return TEXT("UpToDate");
+	case BS_BeingCreated:
+		return TEXT("BeingCreated");
+	case BS_UpToDateWithWarnings:
+		return TEXT("UpToDateWithWarnings");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+static TSharedPtr<FJsonValueObject> MakeMessageValue(const FString& Severity, const FString& Message)
+{
+	const TSharedPtr<FJsonObject> MessageObject = MakeShared<FJsonObject>();
+	MessageObject->SetStringField(TEXT("severity"), Severity);
+	MessageObject->SetStringField(TEXT("message"), Message);
+	return MakeShared<FJsonValueObject>(MessageObject);
+}
+
+static TSharedPtr<FJsonObject> MakeCompileResult(const bool bSuccess,
+                                                 const FString& StatusString,
+                                                 const TArray<TSharedPtr<FJsonValue>>& Errors,
+                                                 const TArray<TSharedPtr<FJsonValue>>& Warnings,
+                                                 const TArray<TSharedPtr<FJsonValue>>& Messages,
+                                                 const int32 ErrorCount,
+                                                 const int32 WarningCount)
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), bSuccess);
+	Result->SetStringField(TEXT("status"), StatusString);
+	Result->SetArrayField(TEXT("errors"), Errors);
+	Result->SetArrayField(TEXT("warnings"), Warnings);
+	Result->SetArrayField(TEXT("messages"), Messages);
+	Result->SetNumberField(TEXT("errorCount"), ErrorCount);
+	Result->SetNumberField(TEXT("warningCount"), WarningCount);
+	return Result;
 }
 
 } // namespace WidgetTreeBuilderInternal
@@ -309,63 +361,88 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 		return MakeErrorResult(TEXT("WidgetBlueprint is null"));
 	}
 
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
-	WidgetBP->MarkPackageDirty();
+	if (GCompilingBlueprint || WidgetBP->bBeingCompiled || !FBlueprintCompilationManager::IsGeneratedClassLayoutReady())
+	{
+		const FString BusyMessage = TEXT("Blueprint compilation is already in progress. Retry after the current compile finishes.");
+		const TArray<TSharedPtr<FJsonValue>> EmptyArray;
+		TArray<TSharedPtr<FJsonValue>> WarningArray;
+		TArray<TSharedPtr<FJsonValue>> MessageArray;
+		WarningArray.Add(MakeShared<FJsonValueString>(BusyMessage));
+		MessageArray.Add(MakeMessageValue(TEXT("warning"), BusyMessage));
+		return MakeCompileResult(false, TEXT("Busy"), EmptyArray, WarningArray, MessageArray, 0, 1);
+	}
 
-	FKismetEditorUtilities::CompileBlueprint(WidgetBP);
+	const bool bHasGeneratedClass = (WidgetBP->GeneratedClass != nullptr);
+	const bool bCanUseCachedStatus = bHasGeneratedClass
+		&& !WidgetBP->GetOutermost()->IsDirty()
+		&& ((WidgetBP->Status == BS_UpToDate) || (WidgetBP->Status == BS_UpToDateWithWarnings));
+	if (bCanUseCachedStatus)
+	{
+		const TArray<TSharedPtr<FJsonValue>> EmptyArray;
+		TArray<TSharedPtr<FJsonValue>> WarningArray;
+		TArray<TSharedPtr<FJsonValue>> MessageArray;
+		int32 WarningCount = 0;
+
+		if (WidgetBP->Status == BS_UpToDateWithWarnings)
+		{
+			const FString CachedWarningMessage = TEXT("Blueprint is already up to date with warnings. Recompilation was skipped because the asset is clean.");
+			WarningArray.Add(MakeShared<FJsonValueString>(CachedWarningMessage));
+			MessageArray.Add(MakeMessageValue(TEXT("warning"), CachedWarningMessage));
+			WarningCount = 1;
+		}
+		else
+		{
+			MessageArray.Add(MakeMessageValue(TEXT("info"), TEXT("Blueprint is already up to date. Recompilation was skipped because the asset is clean.")));
+		}
+
+		return MakeCompileResult(true, GetBlueprintStatusString(WidgetBP->Status), EmptyArray, WarningArray, MessageArray, 0, WarningCount);
+	}
+
+	FCompilerResultsLog CompileResults;
+	CompileResults.bSilentMode = true;
+	CompileResults.bAnnotateMentionedNodes = false;
+	FKismetEditorUtilities::CompileBlueprint(WidgetBP, EBlueprintCompileOptions::SkipGarbageCollection, &CompileResults);
 
 	// Determine success from blueprint status
 	const EBlueprintStatus Status = WidgetBP->Status;
+	const FString StatusString = GetBlueprintStatusString(Status);
 
-	FString StatusString;
-	switch (Status)
-	{
-	case BS_Unknown:
-		StatusString = TEXT("Unknown");
-		break;
-	case BS_Dirty:
-		StatusString = TEXT("Dirty");
-		break;
-	case BS_Error:
-		StatusString = TEXT("Error");
-		break;
-	case BS_UpToDate:
-		StatusString = TEXT("UpToDate");
-		break;
-	case BS_BeingCreated:
-		StatusString = TEXT("BeingCreated");
-		break;
-	case BS_UpToDateWithWarnings:
-		StatusString = TEXT("UpToDateWithWarnings");
-		break;
-	default:
-		StatusString = TEXT("Unknown");
-		break;
-	}
-
-	const bool bSuccess = (Status != BS_Error);
-
-	// Collect compile messages
 	TArray<TSharedPtr<FJsonValue>> ErrorArray;
-	int32 ErrorCount = 0;
-	const int32 WarningCount = 0;
+	TArray<TSharedPtr<FJsonValue>> WarningArray;
+	TArray<TSharedPtr<FJsonValue>> MessageArray;
+	int32 ErrorCount = CompileResults.NumErrors;
+	int32 WarningCount = CompileResults.NumWarnings;
 
+	for (const TSharedRef<FTokenizedMessage>& Message : CompileResults.Messages)
 	{
-		const bool bHasGeneratedClass = (WidgetBP->GeneratedClass != nullptr);
-		if (!bHasGeneratedClass && !bSuccess)
+		const FString MessageText = Message->ToText().ToString();
+		switch (Message->GetSeverity())
 		{
-			ErrorArray.Add(MakeShared<FJsonValueString>(TEXT("GeneratedClass is null after compilation")));
-			ErrorCount++;
+		case EMessageSeverity::Error:
+			ErrorArray.Add(MakeShared<FJsonValueString>(MessageText));
+			MessageArray.Add(MakeMessageValue(TEXT("error"), MessageText));
+			break;
+		case EMessageSeverity::Warning:
+		case EMessageSeverity::PerformanceWarning:
+			WarningArray.Add(MakeShared<FJsonValueString>(MessageText));
+			MessageArray.Add(MakeMessageValue(TEXT("warning"), MessageText));
+			break;
+		default:
+			MessageArray.Add(MakeMessageValue(TEXT("info"), MessageText));
+			break;
 		}
 	}
 
-	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-	Result->SetBoolField(TEXT("success"), bSuccess);
-	Result->SetStringField(TEXT("status"), StatusString);
-	Result->SetArrayField(TEXT("errors"), ErrorArray);
-	Result->SetNumberField(TEXT("errorCount"), ErrorCount);
-	Result->SetNumberField(TEXT("warningCount"), WarningCount);
-	return Result;
+	if ((WidgetBP->GeneratedClass == nullptr) && ErrorCount == 0)
+	{
+		const FString GeneratedClassMessage = TEXT("GeneratedClass is null after compilation");
+		ErrorArray.Add(MakeShared<FJsonValueString>(GeneratedClassMessage));
+		MessageArray.Add(MakeMessageValue(TEXT("error"), GeneratedClassMessage));
+		ErrorCount++;
+	}
+
+	const bool bSuccess = (Status != BS_Error) && (ErrorCount == 0);
+	return MakeCompileResult(bSuccess, StatusString, ErrorArray, WarningArray, MessageArray, ErrorCount, WarningCount);
 }
 
 // ---------------------------------------------------------------------------
