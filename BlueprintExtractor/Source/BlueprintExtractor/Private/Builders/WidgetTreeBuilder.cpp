@@ -154,17 +154,11 @@ static void SyncWidgetVariableGuids(UWidgetBlueprint* WidgetBP)
 	const TMap<FName, FGuid> ExistingGuids = WidgetBP->WidgetVariableNameToGuidMap;
 	TMap<FName, FGuid> RebuiltGuids;
 
-	TArray<UWidget*> ActiveWidgets;
-	if (WidgetBP->WidgetTree)
-	{
-		WidgetBP->WidgetTree->GetAllWidgets(ActiveWidgets);
-	}
-
-	for (UWidget* Widget : ActiveWidgets)
+	WidgetBP->ForEachSourceWidget([&ExistingGuids, &RebuiltGuids](UWidget* Widget)
 	{
 		if (!Widget)
 		{
-			continue;
+			return;
 		}
 
 		const FName WidgetName = Widget->GetFName();
@@ -173,7 +167,7 @@ static void SyncWidgetVariableGuids(UWidgetBlueprint* WidgetBP)
 			? *ExistingGuid
 			: FGuid::NewDeterministicGuid(Widget->GetPathName());
 		RebuiltGuids.Add(WidgetName, GuidToUse);
-	}
+	});
 
 	// Preserve animation GUIDs across tree rebuilds because animations are not replaced here.
 	for (UWidgetAnimation* Animation : WidgetBP->Animations)
