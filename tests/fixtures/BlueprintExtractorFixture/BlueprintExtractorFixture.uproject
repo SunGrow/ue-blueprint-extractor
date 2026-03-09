@@ -20,10 +20,6 @@
       "Enabled": true
     },
     {
-      "Name": "StructUtils",
-      "Enabled": true
-    },
-    {
       "Name": "GameplayStateTree",
       "Enabled": true
     }

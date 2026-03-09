@@ -1402,6 +1402,8 @@ server.registerTool(
 
 USAGE: Specify the asset path, widget name, and the properties/slot values to change.
 Only specified properties are modified — others remain unchanged.
+- Set properties.name, properties.newName, or properties.new_name to rename the widget itself.
+- Box slot Size.sizeRule accepts either Automatic or the shorthand Auto.
 
 RETURNS: JSON with success status, widget name, class, validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
     inputSchema: {

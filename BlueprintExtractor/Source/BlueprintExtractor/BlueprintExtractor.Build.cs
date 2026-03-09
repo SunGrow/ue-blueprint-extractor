@@ -37,7 +37,6 @@ public class BlueprintExtractor : ModuleRules
 			"MaterialEditor",
 			"PropertyBindingUtils",
 			"StateTreeModule",
-			"StructUtils",
 			"GameplayTags",
 			"UMG",
 			"UMGEditor"

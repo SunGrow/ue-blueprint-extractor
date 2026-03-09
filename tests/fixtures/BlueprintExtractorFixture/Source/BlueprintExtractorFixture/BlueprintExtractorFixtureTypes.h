@@ -8,6 +8,7 @@
 #include "BlueprintExtractorFixtureTypes.generated.h"
 
 class UButton;
+class UImage;
 class UNamedSlot;
 class UTextBlock;
 class UWidget;
@@ -54,4 +55,14 @@ protected:
 
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UNamedSlot> ContentSlot = nullptr;
+};
+
+UCLASS(BlueprintType)
+class BLUEPRINTEXTRACTORFIXTURE_API UBlueprintExtractorFixtureRenameBindWidgetParent : public UUserWidget
+{
+	GENERATED_BODY()
+
+protected:
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UImage> ShortcutIcon = nullptr;
 };

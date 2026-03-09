@@ -10,6 +10,9 @@
 #include "Engine/Texture.h"
 #include "Editor.h"
 #include "WidgetBlueprint.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Widget.h"
+#include "Components/VerticalBoxSlot.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
@@ -30,6 +33,7 @@ static constexpr TCHAR StateTreeSchemaPath[] = TEXT("/Script/GameplayStateTreeMo
 static constexpr TCHAR FixtureDataAssetClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureDataAsset");
 static constexpr TCHAR FixtureRowStructPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRow");
 static constexpr TCHAR FixtureBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureBindWidgetParent");
+static constexpr TCHAR FixtureRenameBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRenameBindWidgetParent");
 static constexpr TCHAR TextureImportSource[] = TEXT("ImportSources/T_Test.png");
 static constexpr TCHAR TextureImportSourceAlt[] = TEXT("ImportSources/T_Test_Alt.png");
 static constexpr TCHAR MeshImportSource[] = TEXT("ImportSources/SM_Test.obj");
@@ -999,6 +1003,133 @@ static bool RunBindWidgetParentCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunWidgetRenameCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_RenameBindWidget"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			FixtureRenameBindWidgetParentClassPath),
+		TEXT("CreateWidgetBlueprint for widget rename"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"CanvasPanel","name":"RootCanvas","children":[{"class":"Image","name":"Shortcuticon","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree for widget rename"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidget(
+			WidgetObjectPath,
+			TEXT("Shortcuticon"),
+			TEXT(R"json({"name":"ShortcutIcon"})json"),
+			TEXT("{}"),
+			false),
+		TEXT("ModifyWidget rename"));
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Renamed widget blueprint exists"), WidgetBP);
+	if (!WidgetBP)
+	{
+		return false;
+	}
+
+	UWidget* RenamedWidget = WidgetBP->WidgetTree->FindWidget(TEXT("ShortcutIcon"));
+	Test.TestNotNull(TEXT("Renamed widget exists"), RenamedWidget);
+	if (RenamedWidget)
+	{
+		Test.TestEqual(TEXT("Renamed widget preserves requested casing"), RenamedWidget->GetName(), FString(TEXT("ShortcutIcon")));
+	}
+
+	const bool bHasGeneratedVariable = WidgetBP->GeneratedVariables.ContainsByPredicate([](const FBPVariableDescription& Variable)
+	{
+		return Variable.VarName == FName(TEXT("ShortcutIcon"));
+	});
+	Test.TestFalse(TEXT("Native BindWidget rename does not create generated variable"), bHasGeneratedVariable);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after widget rename"));
+
+	return true;
+}
+
+static bool RunWidgetSlotAliasCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_SlotAlias"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for slot alias"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","children":[{"class":"Border","name":"TitleBarArea","is_variable":true,"slot":{"Size":{"value":1,"sizeRule":"Fill"}}}]})json"),
+			false),
+		TEXT("BuildWidgetTree for slot alias"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidget(
+			WidgetObjectPath,
+			TEXT("TitleBarArea"),
+			TEXT("{}"),
+			TEXT(R"json({"Size":{"value":0,"sizeRule":"Auto"}})json"),
+			false),
+		TEXT("ModifyWidget slot alias"));
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Slot alias widget blueprint exists"), WidgetBP);
+	if (!WidgetBP)
+	{
+		return false;
+	}
+
+	UWidget* TitleBarArea = WidgetBP->WidgetTree->FindWidget(TEXT("TitleBarArea"));
+	Test.TestNotNull(TEXT("TitleBarArea exists"), TitleBarArea);
+
+	UVerticalBoxSlot* VerticalSlot = TitleBarArea ? Cast<UVerticalBoxSlot>(TitleBarArea->Slot) : nullptr;
+	Test.TestNotNull(TEXT("TitleBarArea uses a VerticalBox slot"), VerticalSlot);
+	if (VerticalSlot)
+	{
+		const FSlateChildSize SlotSize = VerticalSlot->GetSize();
+		Test.TestEqual(TEXT("Auto alias maps to Automatic"), static_cast<int32>(SlotSize.SizeRule), static_cast<int32>(ESlateSizeRule::Automatic));
+		Test.TestEqual(TEXT("Slot value override is applied"), SlotSize.Value, 0.0f);
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after slot alias"));
+
+	return true;
+}
+
 } // namespace BlueprintExtractorAutomation
 
 BEGIN_DEFINE_SPEC(
@@ -1044,6 +1175,16 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("BindWidgetParentRoundTrip"), [this]()
 		{
 			TestTrue(TEXT("BindWidget parent coverage completes"), RunBindWidgetParentCoverage(*this));
+		});
+
+		It(TEXT("WidgetRename"), [this]()
+		{
+			TestTrue(TEXT("Widget rename coverage completes"), RunWidgetRenameCoverage(*this));
+		});
+
+		It(TEXT("WidgetSlotAliases"), [this]()
+		{
+			TestTrue(TEXT("Widget slot alias coverage completes"), RunWidgetSlotAliasCoverage(*this));
 		});
 	});
 }

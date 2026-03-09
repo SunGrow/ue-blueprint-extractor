@@ -7,7 +7,7 @@ UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, State
 ## Quick Start
 
 1. Copy `BlueprintExtractor/` into your UE project's `Plugins/` directory.
-2. Enable plugin dependencies in the project: `StateTree`, `StructUtils`, and `PropertyBindingUtils`.
+2. Enable plugin dependencies in the project: `StateTree` and `PropertyBindingUtils`.
 3. If you want MCP access from Claude Code or Codex, also enable UE's `Web Remote Control` plugin.
 4. Rebuild the project.
 5. Register the MCP server with your client:
@@ -26,7 +26,6 @@ UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, State
 ./install-codex-mcp.sh
 ```
 
-`StructUtils` is still required on the tested UE 5.6 and 5.7 builds, even though Epic marks it deprecated starting in UE 5.5.
 BehaviorTree and Blackboard support also relies on UE's built-in `AIModule`; no extra plugin enable step is required.
 
 ## Repository Structure
@@ -361,6 +360,10 @@ Then open a new session or restart your client. The tools will appear automatica
 | `modify_widget` | Patch properties and/or slot config on an existing widget by name |
 | `modify_widget_blueprint` | High-level widget alias for replace-tree, patch-widget, and validate/compile workflows |
 | `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings plus counts |
+
+`modify_widget` notes:
+- Use `properties.name`, `properties.newName`, or `properties.new_name` to rename the widget itself.
+- For box slots, `slot.Size.sizeRule` accepts `Automatic` or the shorthand `Auto`.
 | `create_data_asset` | Create a concrete DataAsset asset and optionally initialize editable properties |
 | `modify_data_asset` | Apply a reflected property patch to an existing DataAsset |
 | `create_data_table` | Create a DataTable with a concrete row struct and optional initial rows |

@@ -11,6 +11,7 @@
 #include "Components/PanelWidget.h"
 #include "Components/PanelSlot.h"
 #include "Blueprint/UserWidget.h"
+#include "MovieScene.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -21,7 +22,10 @@
 #include "BlueprintCompilationManager.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/CompilerResultsLog.h"
+#include "Kismet2/Kismet2NameValidators.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "WidgetBlueprintEditor.h"
 #include "WidgetBlueprintEditorUtils.h"
 #include "WidgetBlueprintFactory.h"
 #include "Logging/TokenizedMessage.h"
@@ -286,6 +290,367 @@ static void SyncGeneratedWidgetVariables(UWidgetBlueprint* WidgetBP)
 #endif
 }
 
+static TSharedPtr<FJsonObject> CloneJsonObject(const TSharedPtr<FJsonObject>& Source)
+{
+	if (!Source.IsValid())
+	{
+		return nullptr;
+	}
+
+	const TSharedPtr<FJsonObject> Clone = MakeShared<FJsonObject>();
+	Clone->Values = Source->Values;
+	return Clone;
+}
+
+static void MoveJsonFieldIfPresent(const TSharedPtr<FJsonObject>& JsonObject,
+                                   const TCHAR* SourceField,
+                                   const TCHAR* TargetField)
+{
+	if (!JsonObject.IsValid() || JsonObject->HasField(TargetField))
+	{
+		return;
+	}
+
+	const TSharedPtr<FJsonValue> ExistingValue = JsonObject->TryGetField(SourceField);
+	if (!ExistingValue.IsValid())
+	{
+		return;
+	}
+
+	JsonObject->SetField(TargetField, ExistingValue);
+	JsonObject->RemoveField(SourceField);
+}
+
+static void NormalizeSlateChildSizeJson(const TSharedPtr<FJsonObject>& SizeJson)
+{
+	if (!SizeJson.IsValid())
+	{
+		return;
+	}
+
+	MoveJsonFieldIfPresent(SizeJson, TEXT("value"), TEXT("Value"));
+	MoveJsonFieldIfPresent(SizeJson, TEXT("sizeRule"), TEXT("SizeRule"));
+
+	FString SizeRule;
+	if (!SizeJson->TryGetStringField(TEXT("SizeRule"), SizeRule))
+	{
+		return;
+	}
+
+	if (SizeRule.Equals(TEXT("Auto"), ESearchCase::IgnoreCase)
+		|| SizeRule.Equals(TEXT("Automatic"), ESearchCase::IgnoreCase))
+	{
+		SizeJson->SetStringField(TEXT("SizeRule"), TEXT("Automatic"));
+	}
+	else if (SizeRule.Equals(TEXT("Fill"), ESearchCase::IgnoreCase))
+	{
+		SizeJson->SetStringField(TEXT("SizeRule"), TEXT("Fill"));
+	}
+}
+
+static TSharedPtr<FJsonObject> NormalizeSlotJson(const TSharedPtr<FJsonObject>& SlotJson)
+{
+	const TSharedPtr<FJsonObject> NormalizedSlot = CloneJsonObject(SlotJson);
+	if (!NormalizedSlot.IsValid())
+	{
+		return nullptr;
+	}
+
+	NormalizedSlot->RemoveField(TEXT("slotClass"));
+	MoveJsonFieldIfPresent(NormalizedSlot, TEXT("size"), TEXT("Size"));
+
+	const TSharedPtr<FJsonObject>* SizeJson = nullptr;
+	if (NormalizedSlot->TryGetObjectField(TEXT("Size"), SizeJson) && SizeJson && SizeJson->IsValid())
+	{
+		NormalizeSlateChildSizeJson(*SizeJson);
+	}
+
+	return NormalizedSlot;
+}
+
+static TSharedPtr<FJsonObject> NormalizeWidgetPropertiesJson(const TSharedPtr<FJsonObject>& PropertiesJson,
+                                                             FString* OutRenameRequest)
+{
+	const TSharedPtr<FJsonObject> NormalizedProperties = CloneJsonObject(PropertiesJson);
+	if (!NormalizedProperties.IsValid())
+	{
+		return nullptr;
+	}
+
+	if (OutRenameRequest)
+	{
+		static const TCHAR* RenameFields[] = {
+			TEXT("new_name"),
+			TEXT("newName"),
+			TEXT("name"),
+		};
+
+		for (const TCHAR* RenameField : RenameFields)
+		{
+			if (NormalizedProperties->TryGetStringField(RenameField, *OutRenameRequest))
+			{
+				NormalizedProperties->RemoveField(RenameField);
+				break;
+			}
+		}
+	}
+
+	return NormalizedProperties;
+}
+
+static FName SanitizeWidgetObjectName(const FString& RequestedName, const FName CurrentName)
+{
+	const FString SanitizedName = SlugStringForValidName(RequestedName);
+	if (SanitizedName.IsEmpty())
+	{
+		return CurrentName;
+	}
+
+	const FName SanitizedFName(*SanitizedName);
+	check(SanitizedFName.IsValidXName(INVALID_OBJECTNAME_CHARACTERS));
+	return SanitizedFName;
+}
+
+static FString SanitizeWidgetObjectNameString(const FString& RequestedName, const FName CurrentName)
+{
+	const FString SanitizedName = SlugStringForValidName(RequestedName);
+	return SanitizedName.IsEmpty() ? CurrentName.ToString() : SanitizedName;
+}
+
+static bool ValidateWidgetRename(UWidgetBlueprint* WidgetBP,
+                                 UWidget* Widget,
+                                 const FString& RequestedName,
+                                 TArray<FString>& OutErrors,
+                                 FName* OutSanitizedName = nullptr)
+{
+	if (!WidgetBP || !Widget)
+	{
+		OutErrors.Add(TEXT("Rename validation requires a valid WidgetBlueprint and widget"));
+		return false;
+	}
+
+	if (RequestedName.IsEmpty())
+	{
+		OutErrors.Add(TEXT("Widget rename requires a non-empty name"));
+		return false;
+	}
+
+	const FName OldName = Widget->GetFName();
+	const FName NewName = SanitizeWidgetObjectName(RequestedName, OldName);
+	if (OutSanitizedName)
+	{
+		*OutSanitizedName = NewName;
+	}
+
+	FObjectPropertyBase* ExistingProperty = nullptr;
+	bool bCompatibleBindWidget = false;
+	if (WidgetBP->ParentClass)
+	{
+		ExistingProperty = CastField<FObjectPropertyBase>(WidgetBP->ParentClass->FindPropertyByName(NewName));
+		bCompatibleBindWidget = ExistingProperty
+			&& FWidgetBlueprintEditorUtils::IsBindWidgetProperty(ExistingProperty)
+			&& Widget->IsA(ExistingProperty->PropertyClass);
+	}
+
+	if (ExistingProperty
+		&& FWidgetBlueprintEditorUtils::IsBindWidgetProperty(ExistingProperty)
+		&& !Widget->IsA(ExistingProperty->PropertyClass))
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("Widget rename target '%s' is bound to native type '%s', but widget '%s' is '%s'"),
+			*NewName.ToString(),
+			*ExistingProperty->PropertyClass->GetName(),
+			*OldName.ToString(),
+			*Widget->GetClass()->GetName()));
+		return false;
+	}
+
+	FKismetNameValidator Validator(WidgetBP, OldName);
+	const EValidatorResult ValidationResult = Validator.IsValid(NewName);
+	const bool bSameWidgetName = (NewName == OldName);
+	const bool bExistingSameWidget = bSameWidgetName
+		&& (ValidationResult == EValidatorResult::AlreadyInUse || ValidationResult == EValidatorResult::ExistingName);
+	if (ValidationResult != EValidatorResult::Ok && !bExistingSameWidget && !bCompatibleBindWidget)
+	{
+		OutErrors.Add(INameValidatorInterface::GetErrorText(NewName.ToString(), ValidationResult).ToString());
+		return false;
+	}
+
+	if (UWidget* ExistingWidget = WidgetBP->WidgetTree ? WidgetBP->WidgetTree->FindWidget(NewName) : nullptr)
+	{
+		if (ExistingWidget != Widget)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Widget name '%s' is already used in the widget tree"), *NewName.ToString()));
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool RenameWidgetTemplate(UWidgetBlueprint* WidgetBP,
+                                 UWidget* Widget,
+                                 const FString& RequestedName,
+                                 TArray<FString>& OutErrors)
+{
+	FName NewName = NAME_None;
+	if (!ValidateWidgetRename(WidgetBP, Widget, RequestedName, OutErrors, &NewName))
+	{
+		return false;
+	}
+
+	const FName OldName = Widget->GetFName();
+	if (NewName == OldName)
+	{
+		const FString EffectiveNewNameString = SanitizeWidgetObjectNameString(RequestedName, OldName);
+		if (Widget->GetName() == EffectiveNewNameString)
+		{
+			return true;
+		}
+	}
+
+	const FString OldNameString = OldName.ToString();
+	const FString NewNameString = SanitizeWidgetObjectNameString(RequestedName, OldName);
+
+	if (NewName != OldName)
+	{
+		WidgetBP->OnVariableRenamed(OldName, NewName);
+	}
+	Widget->SetDisplayLabel(RequestedName);
+	if (!Widget->Rename(*NewNameString, nullptr, REN_DontCreateRedirectors))
+	{
+		OutErrors.Add(FString::Printf(TEXT("Failed to rename widget '%s' to '%s'"), *OldNameString, *NewNameString));
+		return false;
+	}
+
+	if (NewName != OldName)
+	{
+		FWidgetBlueprintEditorUtils::ReplaceDesiredFocus(WidgetBP, OldName, NewName);
+	}
+
+	for (FDelegateEditorBinding& Binding : WidgetBP->Bindings)
+	{
+		if (Binding.ObjectName == OldNameString)
+		{
+			Binding.ObjectName = NewNameString;
+		}
+	}
+
+	for (UWidgetAnimation* WidgetAnimation : WidgetBP->Animations)
+	{
+		if (!WidgetAnimation)
+		{
+			continue;
+		}
+
+		for (FWidgetAnimationBinding& AnimationBinding : WidgetAnimation->AnimationBindings)
+		{
+			if (AnimationBinding.WidgetName != OldName)
+			{
+				continue;
+			}
+
+			AnimationBinding.WidgetName = NewName;
+			if (WidgetAnimation->MovieScene)
+			{
+				WidgetAnimation->MovieScene->Modify();
+			}
+		}
+	}
+
+	if (WidgetBP->WidgetTree)
+	{
+		WidgetBP->WidgetTree->ForEachWidget([OldName, NewName](UWidget* CurrentWidget)
+		{
+			if (CurrentWidget && CurrentWidget->Navigation)
+			{
+				CurrentWidget->Navigation->SetFlags(RF_Transactional);
+				CurrentWidget->Navigation->Modify();
+				CurrentWidget->Navigation->TryToRenameBinding(OldName, NewName);
+			}
+		});
+	}
+
+	if (NewName != OldName)
+	{
+		FBlueprintEditorUtils::ValidateBlueprintChildVariables(WidgetBP, NewName);
+		FBlueprintEditorUtils::ReplaceVariableReferences(WidgetBP, OldName, NewName);
+		SyncWidgetVariableGuids(WidgetBP);
+	}
+	SyncGeneratedWidgetVariables(WidgetBP);
+	return true;
+}
+
+static TArray<FWidgetBlueprintEditor*> FindOpenWidgetBlueprintEditors(UWidgetBlueprint* WidgetBP)
+{
+	TArray<FWidgetBlueprintEditor*> Editors;
+	if (!WidgetBP || !GEditor)
+	{
+		return Editors;
+	}
+
+	if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+	{
+		for (IAssetEditorInstance* EditorInstance : AssetEditorSubsystem->FindEditorsForAsset(WidgetBP))
+		{
+			if (EditorInstance && EditorInstance->GetEditorName() == FName(TEXT("WidgetBlueprintEditor")))
+			{
+				Editors.Add(static_cast<FWidgetBlueprintEditor*>(EditorInstance));
+			}
+		}
+	}
+
+	return Editors;
+}
+
+static void DestroyOpenWidgetBlueprintPreviews(const TArray<FWidgetBlueprintEditor*>& Editors)
+{
+	for (FWidgetBlueprintEditor* Editor : Editors)
+	{
+		if (!Editor)
+		{
+			continue;
+		}
+
+		if (UUserWidget* PreviewWidget = Editor->GetPreview())
+		{
+			FWidgetBlueprintEditorUtils::DestroyUserWidget(PreviewWidget);
+			Editor->InvalidatePreview();
+		}
+	}
+}
+
+static void RefreshOpenWidgetBlueprintPreviews(const TArray<FWidgetBlueprintEditor*>& Editors)
+{
+	for (FWidgetBlueprintEditor* Editor : Editors)
+	{
+		if (!Editor)
+		{
+			continue;
+		}
+
+		Editor->RefreshPreview();
+	}
+}
+
+class FWidgetBlueprintPreviewGuard
+{
+public:
+	explicit FWidgetBlueprintPreviewGuard(UWidgetBlueprint* WidgetBP)
+		: Editors(FindOpenWidgetBlueprintEditors(WidgetBP))
+	{
+		DestroyOpenWidgetBlueprintPreviews(Editors);
+	}
+
+	~FWidgetBlueprintPreviewGuard()
+	{
+		RefreshOpenWidgetBlueprintPreviews(Editors);
+	}
+
+private:
+	TArray<FWidgetBlueprintEditor*> Editors;
+};
+
 } // namespace WidgetTreeBuilderInternal
 
 // ---------------------------------------------------------------------------
@@ -463,6 +828,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 		return BuildMutationResult(Context, true, {});
 	}
 
+	FWidgetBlueprintPreviewGuard PreviewGuard(WidgetBP);
 	Context.BeginTransaction(FText::FromString(TEXT("Build Widget Tree")));
 	WidgetBP->Modify();
 	WidgetTree->Modify();
@@ -561,14 +927,23 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 		return Context.BuildResult(false);
 	}
 
+	FString RequestedRename;
+	const TSharedPtr<FJsonObject> EffectivePropertiesJson = NormalizeWidgetPropertiesJson(PropertiesJson, &RequestedRename);
+	const TSharedPtr<FJsonObject> EffectiveSlotJson = NormalizeSlotJson(SlotJson);
+
 	TArray<FString> ValidationErrors;
-	if (PropertiesJson.IsValid() && PropertiesJson->Values.Num() > 0)
+	if (!RequestedRename.IsEmpty())
 	{
-		FPropertySerializer::ApplyPropertiesFromJson(Widget, PropertiesJson, ValidationErrors, true, true);
+		ValidateWidgetRename(WidgetBP, Widget, RequestedRename, ValidationErrors);
+	}
+
+	if (EffectivePropertiesJson.IsValid() && EffectivePropertiesJson->Values.Num() > 0)
+	{
+		FPropertySerializer::ApplyPropertiesFromJson(Widget, EffectivePropertiesJson, ValidationErrors, true, true);
 	}
 
 	UPanelSlot* Slot = Widget->Slot;
-	if (SlotJson.IsValid() && SlotJson->Values.Num() > 0)
+	if (EffectiveSlotJson.IsValid() && EffectiveSlotJson->Values.Num() > 0)
 	{
 		if (!Slot)
 		{
@@ -576,7 +951,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 		}
 		else
 		{
-			FPropertySerializer::ApplyPropertiesFromJson(Slot, SlotJson, ValidationErrors, true, true);
+			FPropertySerializer::ApplyPropertiesFromJson(Slot, EffectiveSlotJson, ValidationErrors, true, true);
 		}
 	}
 
@@ -594,6 +969,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 		return BuildMutationResult(Context, true, {});
 	}
 
+	FWidgetBlueprintPreviewGuard PreviewGuard(WidgetBP);
 	Context.BeginTransaction(FText::FromString(TEXT("Modify Widget")));
 	WidgetBP->Modify();
 	Widget->Modify();
@@ -606,16 +982,21 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 
 	// Apply property changes
 	{
-		const bool bHasProperties = PropertiesJson.IsValid() && 0 < PropertiesJson->Values.Num();
+		const bool bHasProperties = EffectivePropertiesJson.IsValid() && 0 < EffectivePropertiesJson->Values.Num();
 		if (bHasProperties)
 		{
-			SetPropertiesFromJson(Widget, PropertiesJson, OutErrors);
+			SetPropertiesFromJson(Widget, EffectivePropertiesJson, OutErrors);
 		}
+	}
+
+	if (!RequestedRename.IsEmpty())
+	{
+		RenameWidgetTemplate(WidgetBP, Widget, RequestedRename, OutErrors);
 	}
 
 	// Apply slot changes
 	{
-		const bool bHasSlotData = SlotJson.IsValid() && 0 < SlotJson->Values.Num();
+		const bool bHasSlotData = EffectiveSlotJson.IsValid() && 0 < EffectiveSlotJson->Values.Num();
 		if (bHasSlotData)
 		{
 			if (!Slot)
@@ -625,7 +1006,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 			}
 			else
 			{
-				SetSlotPropertiesFromJson(Slot, SlotJson, OutErrors);
+				SetSlotPropertiesFromJson(Slot, EffectiveSlotJson, OutErrors);
 			}
 		}
 	}
@@ -636,7 +1017,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 
 	const bool bSuccess = OutErrors.Num() == 0;
 	const TSharedPtr<FJsonObject> Result = BuildMutationResult(Context, bSuccess, OutErrors);
-	Result->SetStringField(TEXT("widgetName"), WidgetName);
+	Result->SetStringField(TEXT("widgetName"), Widget->GetName());
 	Result->SetStringField(TEXT("widgetClass"), Widget->GetClass()->GetName());
 	return Result;
 }
@@ -707,6 +1088,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 	FCompilerResultsLog CompileResults;
 	CompileResults.bSilentMode = true;
 	CompileResults.bAnnotateMentionedNodes = false;
+	FWidgetBlueprintPreviewGuard PreviewGuard(WidgetBP);
 	FKismetEditorUtilities::CompileBlueprint(WidgetBP, EBlueprintCompileOptions::SkipGarbageCollection, &CompileResults);
 
 	// Determine success from blueprint status
@@ -850,7 +1232,7 @@ UWidget* FWidgetTreeBuilder::CreateWidgetFromJson(UWidgetTree* WidgetTree,
 	{
 		if (WidgetJson->HasField(TEXT("slot")) && Widget->Slot)
 		{
-			const TSharedPtr<FJsonObject> SlotJsonObj = WidgetJson->GetObjectField(TEXT("slot"));
+			const TSharedPtr<FJsonObject> SlotJsonObj = WidgetTreeBuilderInternal::NormalizeSlotJson(WidgetJson->GetObjectField(TEXT("slot")));
 			if (SlotJsonObj.IsValid())
 			{
 				SetSlotPropertiesFromJson(Widget->Slot, SlotJsonObj, OutErrors);
