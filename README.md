@@ -4,6 +4,31 @@ UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, State
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
+## Quick Start
+
+1. Copy `BlueprintExtractor/` into your UE project's `Plugins/` directory.
+2. Enable plugin dependencies in the project: `StateTree`, `StructUtils`, and `PropertyBindingUtils`.
+3. If you want MCP access from Claude Code or Codex, also enable UE's `Web Remote Control` plugin.
+4. Rebuild the project.
+5. Register the MCP server with your client:
+
+```bash
+# Claude Code: Windows (PowerShell)
+.\install-mcp.ps1
+
+# Claude Code: macOS / Linux
+./install-mcp.sh
+
+# Codex: Windows (PowerShell)
+.\install-codex-mcp.ps1
+
+# Codex: macOS / Linux
+./install-codex-mcp.sh
+```
+
+`StructUtils` is still required on the tested UE 5.6 and 5.7 builds, even though Epic marks it deprecated starting in UE 5.5.
+BehaviorTree and Blackboard support also relies on UE's built-in `AIModule`; no extra plugin enable step is required.
+
 ## Repository Structure
 
 ```
@@ -14,35 +39,37 @@ ue-blueprint-extractor/
 │       ├── BlueprintExtractor.Build.cs
 │       ├── Public/                  # Headers (Library, Subsystem, Types, Settings, Schema)
 │       └── Private/                 # Implementation
+│           ├── Authoring/           # Explicit-save write surfaces for feasible editor-side asset families
+│           ├── Builders/            # WidgetTreeBuilder and related editor-side builders
 │           ├── Extractors/          # Blueprint, WidgetTree, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct/Enum, Curve, Material, Anim, Timeline, Bytecode
-│           ├── Builders/            # WidgetTreeBuilder (create, build, modify, compile WidgetBlueprints)
+│           ├── Tests/               # UE editor automation specs
 │           └── NodeExtractors/      # Visitor pattern: CallFunction, Event, Variable, FlowControl, Macro, Timeline
-├── MCP/                             # MCP server for Claude Code (published to npm as blueprint-extractor-mcp)
+├── MCP/                             # MCP server for Claude Code and Codex (published to npm as blueprint-extractor-mcp)
 │   ├── package.json
 │   ├── tsconfig.json
-│   └── src/
-│       ├── index.ts                 # MCP tool definitions (51 tools + 2 resources)
-│       ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
-│       ├── ue-client.ts             # UE Remote Control HTTP client
-│       └── types.ts                 # Shared TypeScript types
+│   ├── src/
+│   │   ├── index.ts                 # MCP tool definitions (51 tools + 2 resources)
+│   │   ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
+│   │   ├── ue-client.ts             # UE Remote Control HTTP client
+│   │   └── types.ts                 # Shared TypeScript types
+│   └── tests/                       # Vitest contract, stdio, and live-gated MCP tests
+├── docs/
+│   └── testing.md                   # Test strategy and runner usage
+├── scripts/                         # Cross-platform test runners
+├── tests/
+│   └── fixtures/                    # Lightweight UE fixture project for automation coverage
 ├── install-mcp.ps1                  # Register MCP server with Claude Code (Windows)
 ├── install-mcp.sh                   # Register MCP server with Claude Code (macOS/Linux)
+├── install-codex-mcp.ps1            # Register MCP server with Codex (Windows)
+├── install-codex-mcp.sh             # Register MCP server with Codex (macOS/Linux)
 └── README.md
 ```
-
-## Installation
-
-Copy the `BlueprintExtractor/` folder into any UE5 project's `Plugins/` directory and rebuild.
-
-**Plugin dependencies** (must be enabled in your project): `StateTree`, `StructUtils`.
-
-The module also depends on UE's built-in `AIModule` for BehaviorTree and Blackboard extraction; no extra plugin enable step is required.
 
 ## Usage
 
 ### Content Browser
 
-Right-click any Blueprint, AnimBlueprint, StateTree, DataAsset, or DataTable asset in the Content Browser and select **Extract to JSON**.
+Right-click any Blueprint-class asset (including AnimBlueprints and WidgetBlueprints), StateTree, DataAsset, or DataTable asset in the Content Browser and select **Extract to JSON**.
 
 ### C++ API
 
@@ -251,6 +278,8 @@ The plugin includes an MCP (Model Context Protocol) server that lets Claude Code
 - **Web Remote Control** plugin enabled in UE5 (Edit > Plugins > search "Remote Control")
 
 ### Setup
+
+If you only need the normal install flow, use the quick-start scripts above. The options below are the full manual and local-build equivalents.
 
 **Option A: npx (recommended)**
 
@@ -472,12 +501,10 @@ npm publish --access public
 
 ## Changelog
 
-### Unreleased
+### 1.9.0
 - **18 new authoring tools** — added `create_user_defined_struct`, `modify_user_defined_struct`, `create_user_defined_enum`, `modify_user_defined_enum`, `create_blackboard`, `modify_blackboard`, `create_behavior_tree`, `modify_behavior_tree`, `create_state_tree`, `modify_state_tree`, `create_anim_sequence`, `modify_anim_sequence`, `create_anim_montage`, `modify_anim_montage`, `create_blend_space`, `modify_blend_space`, `create_blueprint`, and `modify_blueprint_members`.
 - **Stable writer selectors** — BehaviorTree writes now target `nodePath`, StateTree writes support `stateId`/`statePath`, `editorNodeId`, and `transitionId`, animation writes expose stable notify identifiers plus `sampleIndex`, and Blueprint/member/schema surfaces use explicit selector fields.
 - **Feasible-family write coverage** — explicit-save authoring now spans schema assets, AI assets, StateTrees, animation metadata assets, and Blueprint member authoring while still deferring arbitrary graph synthesis, controller editing, and live world mutation.
-
-### 1.9.0
 - **Shared write core** — added normalized mutation results, explicit `save_assets` persistence, validation-only write flows, and reusable reflected property patching for editor-side authoring.
 - **Widget hardening** — widget tree replacement now preflights before destructive changes, widget/property writes use the shared mutation layer, and `modify_widget_blueprint` remains the higher-level alias for tree replacement, patching, and compile workflows.
 - **New authoring families** — added `create_data_table`, `modify_data_table`, `create_curve`, `modify_curve`, `create_curve_table`, and `modify_curve_table`, alongside the already added `create_data_asset`, `modify_data_asset`, `create_material_instance`, and `modify_material_instance`.
