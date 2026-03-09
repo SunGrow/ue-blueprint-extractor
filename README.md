@@ -1,6 +1,6 @@
 # Blueprint Extractor
 
-UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, MaterialInstance, AnimSequence, AnimMontage, and BlendSpace data to structured JSON, and supports explicit-save authoring for all currently feasible editor-side families: WidgetBlueprints, MaterialInstances, DataAssets, DataTables, Curves, CurveTables, UserDefinedStructs, UserDefinedEnums, Blackboards, BehaviorTrees, StateTrees, AnimSequences, AnimMontages, BlendSpaces, and Blueprint members.
+UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, MaterialInstance, AnimSequence, AnimMontage, and BlendSpace data to structured JSON. It also supports explicit-save authoring for the current feasible editor-side families and async import or reimport jobs for textures and meshes through the MCP bridge.
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
@@ -48,7 +48,7 @@ ue-blueprint-extractor/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── src/
-│   │   ├── index.ts                 # MCP tool definitions (51 tools + 2 resources)
+│   │   ├── index.ts                 # MCP tool definitions (57 tools + 3 resources)
 │   │   ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
 │   │   ├── ue-client.ts             # UE Remote Control HTTP client
 │   │   └── types.ts                 # Shared TypeScript types
@@ -389,6 +389,12 @@ Then open a new session or restart your client. The tools will appear automatica
 | `modify_blend_space` | Replace or patch BlendSpace samples and axes |
 | `create_blueprint` | Create a Blueprint with optional variables, component templates, function stubs, and class defaults |
 | `modify_blueprint_members` | Replace or patch Blueprint variables, components, function stubs, class defaults, and compile |
+| `import_assets` | Enqueue a generic async asset import job for local files or HTTP/HTTPS URLs |
+| `reimport_assets` | Enqueue an async reimport job against existing imported assets |
+| `get_import_job` | Poll the current state of one async import or reimport job |
+| `list_import_jobs` | List active or completed async import jobs tracked in the current editor session |
+| `import_textures` | Enqueue a texture-focused async import job with typed texture option passthrough |
+| `import_meshes` | Enqueue a mesh-focused async import job with typed static or skeletal mesh option passthrough |
 | `save_assets` | Explicitly save dirty asset packages after successful write operations |
 
 ### Architecture
@@ -407,11 +413,11 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — All 51 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. `blueprint://scopes` and `blueprint://write-capabilities` provide static capability references.
-- **Small, distinct surface** — 51 tools with non-overlapping purposes. Extraction tools are read-only; authoring tools are explicit write operations with separate save semantics.
+- **Right primitive** — All 57 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. `blueprint://scopes`, `blueprint://write-capabilities`, and `blueprint://import-capabilities` provide static capability references.
+- **Small, distinct surface** — 57 tools with non-overlapping purposes. Extraction tools are read-only; authoring and import tools are explicit write operations with separate save semantics.
 - **Description quality** — Each tool includes usage guidelines, scope size estimates, and workflow hints (e.g., "use `search_assets` first") to maximize selection accuracy.
 - **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; all write tools and `save_assets` require confirmation.
-- **Explicit save** — Write operations mutate assets and mark packages dirty, but they do not save automatically. Call `save_assets` when you want to persist the dirty packages to disk.
+- **Explicit save** — Write and import operations mutate assets and mark packages dirty, but they do not save automatically. Call `save_assets` when you want to persist the dirty packages to disk.
 - **Bounded authoring** — The write surface covers reflected properties, declarative trees, schema assets, animation metadata, and Blueprint members; arbitrary graph/controller/world synthesis is still intentionally deferred.
 - **Security** — stdio transport, env-based credentials (`UE_REMOTE_CONTROL_PORT`), local-only by default. No auth tokens or remote access.
 
@@ -446,7 +452,7 @@ cd MCP
 BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 ```
 
-`test:live` expects a UE editor to already be running with Remote Control enabled. It will create scratch assets under `/Game/__GeneratedTests__/Live` and can also smoke-test committed fixture assets when you provide any of these optional asset-path environment variables:
+`test:live` expects a UE editor to already be running with Remote Control enabled. It creates scratch assets under `/Game/__GeneratedTests__/McpLive_*`, imports a texture over a local HTTP fixture server to verify header forwarding, imports a local mesh fixture, saves both assets explicitly, and can also smoke-test committed fixture assets when you provide any of these optional asset-path environment variables:
 
 - `BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT`
 - `BLUEPRINT_EXTRACTOR_TEST_WIDGET_BLUEPRINT`
@@ -500,6 +506,12 @@ npm publish --access public
 ```
 
 ## Changelog
+
+### 1.10.0
+- **Async import tools** — added `import_assets`, `reimport_assets`, `get_import_job`, `list_import_jobs`, `import_textures`, and `import_meshes`.
+- **Editor-host import jobs** — imports and reimports now run as session-scoped async jobs inside the editor, with polling, per-item diagnostics, explicit-save semantics, local file support, and HTTP/HTTPS staging for remote sources.
+- **Texture and mesh helpers** — texture imports expose typed overrides such as `srgb`, compression, LOD group, virtual texture streaming, and green-channel flip; mesh imports expose typed static or skeletal mesh options including skeleton selection, material or texture import, mesh combining, and collision generation.
+- **Import capability docs and live coverage** — added `blueprint://import-capabilities`, expanded MCP contract and stdio tests for import polling, and added live-gated texture and mesh smoke coverage with local HTTP header-forwarding verification.
 
 ### 1.9.0
 - **18 new authoring tools** — added `create_user_defined_struct`, `modify_user_defined_struct`, `create_user_defined_enum`, `modify_user_defined_enum`, `create_blackboard`, `modify_blackboard`, `create_behavior_tree`, `modify_behavior_tree`, `create_state_tree`, `modify_state_tree`, `create_anim_sequence`, `modify_anim_sequence`, `create_anim_montage`, `modify_anim_montage`, `create_blend_space`, `modify_blend_space`, `create_blueprint`, and `modify_blueprint_members`.

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
@@ -23,6 +24,24 @@ export interface MockRemoteControlServer {
   host: string;
   port: number;
   requests: RemoteCallRequest[];
+}
+
+export interface FixtureFileRoute {
+  filePath: string;
+  contentType?: string;
+  requiredHeaders?: Record<string, string>;
+}
+
+export interface FixtureFileRequest {
+  url: string;
+  headers: Record<string, string>;
+}
+
+export interface FixtureFileServer {
+  close: () => Promise<void>;
+  host: string;
+  port: number;
+  requests: FixtureFileRequest[];
 }
 
 export async function connectInMemoryServer(server: McpServer) {
@@ -116,6 +135,77 @@ export async function startMockRemoteControlServer(
   };
 }
 
+export async function startFixtureFileServer(
+  routes: Record<string, FixtureFileRoute>,
+): Promise<FixtureFileServer> {
+  const sockets = new Set<Socket>();
+  const requests: FixtureFileRequest[] = [];
+  const host = '127.0.0.1';
+
+  const server = createServer(async (req, res) => {
+    const url = req.url ?? '/';
+    const route = routes[url];
+    const headers = normalizeHeaders(req.headers);
+    requests.push({ url, headers });
+
+    if (!route) {
+      writeJson(res, 404, { error: 'Not found' });
+      return;
+    }
+
+    for (const [key, expectedValue] of Object.entries(route.requiredHeaders ?? {})) {
+      if (headers[key.toLowerCase()] !== expectedValue) {
+        writeJson(res, 401, { error: 'Unauthorized' });
+        return;
+      }
+    }
+
+    try {
+      const file = await readFile(route.filePath);
+      res.writeHead(200, {
+        'Content-Type': route.contentType ?? 'application/octet-stream',
+      });
+      res.end(file);
+    } catch {
+      writeJson(res, 500, { error: 'Failed to read fixture file' });
+    }
+  });
+
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => {
+      sockets.delete(socket);
+    });
+  });
+
+  server.listen(0, host);
+  await once(server, 'listening');
+
+  const address = server.address() as AddressInfo;
+
+  return {
+    host,
+    port: address.port,
+    requests,
+    async close() {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
+    },
+  };
+}
+
 async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
 
@@ -133,4 +223,16 @@ function writeJson(res: ServerResponse, status: number, body: unknown, headers: 
     ...headers,
   });
   res.end(JSON.stringify(body));
+}
+
+function normalizeHeaders(headers: IncomingMessage['headers']): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === 'string') {
+      normalized[key.toLowerCase()] = value;
+    } else if (Array.isArray(value)) {
+      normalized[key.toLowerCase()] = value.join(', ');
+    }
+  }
+  return normalized;
 }

@@ -4,6 +4,12 @@ MCP server for the Unreal Engine `BlueprintExtractor` plugin.
 
 This package exposes the `blueprint-extractor` server over stdio and talks to a running Unreal Editor through the Remote Control HTTP API.
 
+Current surface area includes:
+
+- read-only extraction tools for Blueprints, AI assets, data assets, curves, materials, and animation metadata
+- explicit-save authoring tools for the supported editor-side asset families
+- async import and reimport tools with polling for generic assets plus typed texture and mesh helpers
+
 ## Requirements
 
 - Node.js 18+
@@ -47,6 +53,8 @@ For the gated live smoke test:
 ```bash
 BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 ```
+
+The live suite imports a texture over a local HTTP fixture server, verifies request-header forwarding, imports a local mesh fixture, polls both jobs to completion, and saves the returned asset paths.
 
 Repository and full documentation:
 

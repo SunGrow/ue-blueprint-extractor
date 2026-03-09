@@ -12,6 +12,7 @@
 #include "Authoring/CurveTableAuthoring.h"
 #include "Authoring/DataAssetAuthoring.h"
 #include "Authoring/DataTableAuthoring.h"
+#include "Import/ImportJobManager.h"
 #include "Authoring/MaterialInstanceAuthoring.h"
 #include "Authoring/StateTreeAuthoring.h"
 #include "Authoring/UserDefinedEnumAuthoring.h"
@@ -58,6 +59,13 @@ static FString SerializeJsonObject(const TSharedPtr<FJsonObject>& JsonObject)
 	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
 	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	return OutString;
+}
+
+static FBlueprintExtractorImportJobManager& GetImportJobManager(FBlueprintExtractorImportJobManager*& Manager)
+{
+	static FBlueprintExtractorImportJobManager* SharedManager = new FBlueprintExtractorImportJobManager();
+	Manager = SharedManager;
+	return *SharedManager;
 }
 
 template <typename AssetType>
@@ -187,6 +195,11 @@ EBlueprintExtractionScope UBlueprintExtractorSubsystem::ParseScope(const FString
 	if (ScopeString == TEXT("FunctionsShallow")) { return EBlueprintExtractionScope::FunctionsShallow; }
 	if (ScopeString == TEXT("FullWithBytecode")) { return EBlueprintExtractionScope::FullWithBytecode; }
 	return EBlueprintExtractionScope::Full;
+}
+
+UBlueprintExtractorSubsystem::~UBlueprintExtractorSubsystem()
+{
+	ImportJobManager = nullptr;
 }
 
 FString UBlueprintExtractorSubsystem::ExtractBlueprint(const FString& AssetPath, const FString& Scope, const FString& GraphFilter)
@@ -1634,4 +1647,52 @@ FString UBlueprintExtractorSubsystem::ModifyBlueprintMembers(
 	}
 
 	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ImportAssets(const FString& PayloadJson, const bool bValidateOnly)
+{
+	return SerializeJsonObject(
+		GetImportJobManager(ImportJobManager).EnqueueImportJob(
+			TEXT("import_assets"),
+			PayloadJson,
+			bValidateOnly));
+}
+
+FString UBlueprintExtractorSubsystem::ReimportAssets(const FString& PayloadJson, const bool bValidateOnly)
+{
+	return SerializeJsonObject(
+		GetImportJobManager(ImportJobManager).EnqueueReimportJob(
+			TEXT("reimport_assets"),
+			PayloadJson,
+			bValidateOnly));
+}
+
+FString UBlueprintExtractorSubsystem::ImportTextures(const FString& PayloadJson, const bool bValidateOnly)
+{
+	return SerializeJsonObject(
+		GetImportJobManager(ImportJobManager).EnqueueTextureImportJob(
+			TEXT("import_textures"),
+			PayloadJson,
+			bValidateOnly));
+}
+
+FString UBlueprintExtractorSubsystem::ImportMeshes(const FString& PayloadJson, const bool bValidateOnly)
+{
+	return SerializeJsonObject(
+		GetImportJobManager(ImportJobManager).EnqueueMeshImportJob(
+			TEXT("import_meshes"),
+			PayloadJson,
+			bValidateOnly));
+}
+
+FString UBlueprintExtractorSubsystem::GetImportJob(const FString& JobId)
+{
+	return SerializeJsonObject(
+		GetImportJobManager(ImportJobManager).GetImportJob(JobId));
+}
+
+FString UBlueprintExtractorSubsystem::ListImportJobs(const bool bIncludeCompleted)
+{
+	return SerializeJsonObject(
+		GetImportJobManager(ImportJobManager).ListImportJobs(bIncludeCompleted));
 }

@@ -36,6 +36,48 @@ describe('stdio integration', () => {
           };
         }
 
+        if (request.functionName === 'ListImportJobs') {
+          return {
+            body: {
+              ReturnValue: JSON.stringify({
+                success: true,
+                operation: 'list_import_jobs',
+                jobCount: 1,
+                jobs: [
+                  {
+                    success: true,
+                    operation: 'import_assets',
+                    status: 'running',
+                    terminal: false,
+                    validateOnly: false,
+                    createdAt: '2026-03-09T10:00:00Z',
+                    startedAt: '2026-03-09T10:00:01Z',
+                    jobId: 'job-123',
+                    itemCount: 1,
+                    acceptedItemCount: 1,
+                    failedItemCount: 0,
+                    items: [
+                      {
+                        index: 0,
+                        status: 'importing',
+                        filePath: 'C:/Temp/Test.png',
+                        destinationPath: '/Game/Imported',
+                        importedObjects: [],
+                        dirtyPackages: [],
+                        diagnostics: [],
+                      },
+                    ],
+                    importedObjects: [],
+                    dirtyPackages: [],
+                    diagnostics: [],
+                  },
+                ],
+                includeCompleted: true,
+              }),
+            },
+          };
+        }
+
         return {
           status: 404,
           body: { error: `Unexpected method ${request.functionName}` },
@@ -66,6 +108,7 @@ describe('stdio integration', () => {
 
     const tools = await client.listTools();
     const scopes = await client.readResource({ uri: 'blueprint://scopes' });
+    const importCapabilities = await client.readResource({ uri: 'blueprint://import-capabilities' });
     const result = await client.callTool({
       name: 'search_assets',
       arguments: {
@@ -74,9 +117,17 @@ describe('stdio integration', () => {
         max_results: 5,
       },
     });
+    const importJobs = await client.callTool({
+      name: 'list_import_jobs',
+      arguments: {
+        include_completed: true,
+      },
+    });
 
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'import_assets')).toBe(true);
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
+    expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
     expect(JSON.parse(getTextContent(result))).toEqual([
       {
         path: '/Game/Test/BP_Player',
@@ -84,7 +135,23 @@ describe('stdio integration', () => {
         class: 'Blueprint',
       },
     ]);
-    expect(remoteServer.requests).toHaveLength(1);
+    expect(JSON.parse(getTextContent(importJobs))).toMatchObject({
+      includeCompleted: true,
+      jobs: [
+        {
+          jobId: 'job-123',
+          status: 'running',
+        },
+      ],
+    });
+    expect(remoteServer.requests).toHaveLength(2);
     expect(remoteServer.requests[0]?.objectPath).toBe('/Script/Test.OverrideSubsystem');
+    expect(remoteServer.requests[1]).toMatchObject({
+      objectPath: '/Script/Test.OverrideSubsystem',
+      functionName: 'ListImportJobs',
+      parameters: {
+        bIncludeCompleted: true,
+      },
+    });
   });
 });

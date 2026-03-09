@@ -28,6 +28,8 @@ public class BlueprintExtractor : ModuleRules
 			"ContentBrowserData",
 			"AssetTools",
 			"AssetRegistry",
+			"HTTP",
+			"InterchangeEngine",
 			"Json",
 			"JsonUtilities",
 			"InputCore",

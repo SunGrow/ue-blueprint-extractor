@@ -1,6 +1,6 @@
 {
   "name": "blueprint-extractor-mcp",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "MCP server for the Unreal Engine BlueprintExtractor plugin over Remote Control",
   "type": "module",
   "main": "dist/index.js",

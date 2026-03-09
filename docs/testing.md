@@ -26,6 +26,7 @@ The default MCP run executes:
 - `tests/server-contract.test.ts`: in-memory contract checks against the exported `createBlueprintExtractorServer(...)`.
 - `tests/ue-client.test.ts`: HTTP-layer `UEClient` coverage with a local mock Remote Control server.
 - `tests/stdio.integration.test.ts`: real stdio server smoke test against the built `dist/index.js`.
+- `tests/live.e2e.test.ts`: gated end-to-end import and extraction smoke against a real editor. It imports a texture through a local HTTP fixture server, verifies header forwarding, imports a local mesh fixture, polls job status, and explicitly saves the imported assets.
 
 Live MCP smoke requires a running editor with the plugin loaded. Set:
 

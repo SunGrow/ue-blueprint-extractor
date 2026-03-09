@@ -11,7 +11,7 @@ export type UEClientLike = Pick<UEClient, 'callSubsystem'>;
 export function createBlueprintExtractorServer(client: UEClientLike = new UEClient()) {
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '1.9.0',
+    version: '1.10.0',
   });
 
 // Shared scope enum with detailed descriptions
@@ -124,6 +124,55 @@ server.resource(
         '- No arbitrary Blueprint, Material, Niagara, or BehaviorTree graph synthesis.',
         '- No ControlRig, IK controller, or live world editing surfaces.',
         '- Animation authoring is limited to metadata, sections, slots, samples, notifies, sync markers, and curve metadata; raw authored track synthesis is out of scope.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'import-capabilities',
+  'blueprint://import-capabilities',
+  {
+    description: 'Reference for async asset import payloads, job polling, status fields, and specialized texture or mesh option keys.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Import Capabilities',
+        '',
+        'General rules:',
+        '- Import tools enqueue async jobs in the running UE editor and return a job status object immediately.',
+        '- Poll get_import_job with the returned jobId until terminal=true, or use list_import_jobs to inspect multiple jobs.',
+        '- Import responses do NOT auto-save packages. Call save_assets after a successful terminal job if you want packages persisted.',
+        '- Import payloads are passed through as subsystem JSON with an items array. The MCP layer preserves snake_case field names.',
+        '',
+        'Shared item fields:',
+        '- file_path or url: exactly one source per item.',
+        '- filename: optional suggested filename for URL sources.',
+        '- headers: optional string map for URL downloads.',
+        '- destination_path: target package path such as /Game/Imported.',
+        '- destination_name: optional asset name override.',
+        '- asset_path: optional explicit object path.',
+        '- replace_existing, replace_existing_settings: optional overwrite flags.',
+        '',
+        'Texture item options:',
+        '- compression_settings, lod_group, s_rgb/srgb, virtual_texture_streaming, flip_green_channel.',
+        '',
+        'Mesh item options:',
+        '- mesh_type: "static" or "skeletal".',
+        '- import_materials, import_textures, import_animations, combine_meshes, generate_collision.',
+        '- skeleton_path is required for skeletal mesh imports.',
+        '',
+        'Job status payload fields:',
+        '- success, operation, status, terminal, validateOnly, createdAt, startedAt, completedAt, jobId.',
+        '- itemCount, acceptedItemCount, failedItemCount, importedObjects, dirtyPackages, diagnostics.',
+        '- items[] entries include index, status, source path/url, destination info, importedObjects, dirtyPackages, and diagnostics.',
+        '',
+        'Known status values:',
+        '- Job: queued, running, succeeded, partial_success, failed.',
+        '- Item: queued, downloading, staged, importing, succeeded, failed.',
       ].join('\n'),
     }],
   }),
@@ -1017,6 +1066,102 @@ const CurveTableRowSchema = z.object({
 });
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
+const StringMapSchema = z.record(z.string(), z.string());
+
+const ImportItemCommonSchema = z.object({
+  file_path: z.string().optional(),
+  url: z.string().optional(),
+  filename: z.string().optional(),
+  headers: StringMapSchema.optional(),
+  destination_path: z.string().optional(),
+  destination_name: z.string().optional(),
+  asset_path: z.string().optional(),
+  replace_existing: z.boolean().optional(),
+  replace_existing_settings: z.boolean().optional(),
+}).passthrough();
+
+const TextureImportOptionsSchema = z.object({
+  compression_settings: z.string().optional(),
+  lod_group: z.string().optional(),
+  s_rgb: z.boolean().optional(),
+  srgb: z.boolean().optional(),
+  virtual_texture_streaming: z.boolean().optional(),
+  flip_green_channel: z.boolean().optional(),
+}).passthrough();
+
+const MeshImportOptionsSchema = z.object({
+  mesh_type: z.string().optional(),
+  import_materials: z.boolean().optional(),
+  import_textures: z.boolean().optional(),
+  import_animations: z.boolean().optional(),
+  combine_meshes: z.boolean().optional(),
+  generate_collision: z.boolean().optional(),
+  skeleton_path: z.string().optional(),
+}).passthrough();
+
+const ImportPayloadSchema = z.object({
+  items: z.array(ImportItemCommonSchema),
+}).passthrough();
+
+const TextureImportPayloadSchema = z.object({
+  items: z.array(ImportItemCommonSchema.extend({
+    options: TextureImportOptionsSchema.optional(),
+  }).passthrough()),
+}).passthrough();
+
+const MeshImportPayloadSchema = z.object({
+  items: z.array(ImportItemCommonSchema.extend({
+    options: MeshImportOptionsSchema.optional(),
+  }).passthrough()),
+}).passthrough();
+
+const ImportDiagnosticSchema = z.object({
+  severity: z.string(),
+  code: z.string(),
+  message: z.string(),
+  path: z.string().optional(),
+}).passthrough();
+
+const ImportJobItemSchema = z.object({
+  index: z.number().int().min(0),
+  status: z.string(),
+  filePath: z.string().optional(),
+  url: z.string().optional(),
+  assetPath: z.string().optional(),
+  destinationPath: z.string().optional(),
+  destinationName: z.string().optional(),
+  stagedFilePath: z.string().optional(),
+  importedObjects: z.array(z.string()),
+  dirtyPackages: z.array(z.string()),
+  diagnostics: z.array(ImportDiagnosticSchema),
+}).passthrough();
+
+const ImportJobSchema = z.object({
+  success: z.boolean(),
+  operation: z.string(),
+  status: z.string(),
+  terminal: z.boolean(),
+  validateOnly: z.boolean(),
+  createdAt: z.string(),
+  startedAt: z.string().optional(),
+  completedAt: z.string().optional(),
+  jobId: z.string().optional(),
+  itemCount: z.number().int().min(0),
+  acceptedItemCount: z.number().int().min(0),
+  failedItemCount: z.number().int().min(0),
+  items: z.array(ImportJobItemSchema),
+  importedObjects: z.array(z.string()),
+  dirtyPackages: z.array(z.string()),
+  diagnostics: z.array(ImportDiagnosticSchema),
+}).passthrough();
+
+const ImportJobListSchema = z.object({
+  success: z.boolean(),
+  operation: z.string(),
+  includeCompleted: z.boolean(),
+  jobCount: z.number().int().min(0),
+  jobs: z.array(ImportJobSchema),
+}).passthrough();
 
 const UserDefinedStructMutationOperationSchema = z.enum([
   'replace_fields',
@@ -3102,6 +3247,248 @@ RETURNS: JSON with success status, dirtyPackages, changedObjects, diagnostics, a
       };
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'import_assets',
+  {
+    title: 'Import Assets',
+    description: `Enqueue an async asset import job using subsystem JSON passthrough payloads.
+
+USAGE:
+- Provide payload.items with one or more file_path or url sources plus destination_path or asset_path.
+- Poll get_import_job with the returned jobId until terminal=true.
+- Set validate_only=true to validate the payload without importing.
+
+RETURNS: JSON job status with jobId, terminal flag, status counters, per-item diagnostics, dirtyPackages, and importedObjects.`,
+    inputSchema: {
+      payload: ImportPayloadSchema.describe(
+        'Subsystem passthrough payload object. Requires an items array and preserves snake_case import fields.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the import payload without importing.',
+      ),
+    },
+    outputSchema: ImportJobSchema,
+    annotations: {
+      title: 'Import Assets',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ImportAssets', {
+        PayloadJson: JSON.stringify(payload),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'reimport_assets',
+  {
+    title: 'Reimport Assets',
+    description: `Enqueue an async reimport job using subsystem JSON passthrough payloads.
+
+USAGE:
+- Provide payload.items describing existing imported assets plus replacement file_path or url sources.
+- Poll get_import_job with the returned jobId until terminal=true.
+- Set validate_only=true to validate the payload without reimporting.
+
+RETURNS: JSON job status with jobId, terminal flag, status counters, per-item diagnostics, dirtyPackages, and importedObjects.`,
+    inputSchema: {
+      payload: ImportPayloadSchema.describe(
+        'Subsystem passthrough payload object for reimport jobs. Requires an items array and preserves snake_case import fields.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the reimport payload without reimporting.',
+      ),
+    },
+    outputSchema: ImportJobSchema,
+    annotations: {
+      title: 'Reimport Assets',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ReimportAssets', {
+        PayloadJson: JSON.stringify(payload),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'get_import_job',
+  {
+    title: 'Get Import Job',
+    description: `Retrieve the current status for one async import job by id.
+
+USAGE:
+- Call after import_assets, reimport_assets, import_textures, or import_meshes.
+- Continue polling until terminal=true.
+
+RETURNS: JSON job status with per-item states, diagnostics, dirtyPackages, and importedObjects.`,
+    inputSchema: {
+      job_id: z.string().describe(
+        'Job id returned by an import tool.',
+      ),
+    },
+    outputSchema: ImportJobSchema,
+    annotations: {
+      title: 'Get Import Job',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ job_id }) => {
+    try {
+      const parsed = await callSubsystemJson('GetImportJob', {
+        JobId: job_id,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'list_import_jobs',
+  {
+    title: 'List Import Jobs',
+    description: `List async import jobs known to the subsystem.
+
+USAGE:
+- Default behavior can omit completed jobs to focus on active work.
+- Set include_completed=true to inspect historical terminal jobs.
+
+RETURNS: JSON passthrough summary of import jobs tracked by the subsystem.`,
+    inputSchema: {
+      include_completed: z.boolean().default(false).describe(
+        'When true, include completed terminal jobs in the listing.',
+      ),
+    },
+    outputSchema: ImportJobListSchema,
+    annotations: {
+      title: 'List Import Jobs',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ include_completed }) => {
+    try {
+      const parsed = await callSubsystemJson('ListImportJobs', {
+        bIncludeCompleted: include_completed,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'import_textures',
+  {
+    title: 'Import Textures',
+    description: `Enqueue an async texture import job with texture-specific option passthrough.
+
+USAGE:
+- Provide payload.items with file_path or url sources plus destination_path or asset_path.
+- Texture item options support compression_settings, lod_group, s_rgb/srgb, virtual_texture_streaming, and flip_green_channel.
+- Poll get_import_job with the returned jobId until terminal=true.
+
+RETURNS: JSON job status with jobId, terminal flag, status counters, per-item diagnostics, dirtyPackages, and importedObjects.`,
+    inputSchema: {
+      payload: TextureImportPayloadSchema.describe(
+        'Subsystem passthrough payload object for texture imports. Requires an items array and preserves snake_case texture option keys.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the texture import payload without importing.',
+      ),
+    },
+    outputSchema: ImportJobSchema,
+    annotations: {
+      title: 'Import Textures',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ImportTextures', {
+        PayloadJson: JSON.stringify(payload),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'import_meshes',
+  {
+    title: 'Import Meshes',
+    description: `Enqueue an async mesh import job with mesh-specific option passthrough.
+
+USAGE:
+- Provide payload.items with file_path or url sources plus destination_path or asset_path.
+- Mesh item options support mesh_type, import_materials, import_textures, import_animations, combine_meshes, generate_collision, and skeleton_path.
+- Poll get_import_job with the returned jobId until terminal=true.
+
+RETURNS: JSON job status with jobId, terminal flag, status counters, per-item diagnostics, dirtyPackages, and importedObjects.`,
+    inputSchema: {
+      payload: MeshImportPayloadSchema.describe(
+        'Subsystem passthrough payload object for mesh imports. Requires an items array and preserves snake_case mesh option keys.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mesh import payload without importing.',
+      ),
+    },
+    outputSchema: ImportJobSchema,
+    annotations: {
+      title: 'Import Meshes',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ImportMeshes', {
+        PayloadJson: JSON.stringify(payload),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
     }
   },
 );

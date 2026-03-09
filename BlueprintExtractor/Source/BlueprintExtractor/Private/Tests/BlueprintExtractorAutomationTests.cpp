@@ -1,10 +1,16 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "BlueprintExtractorSubsystem.h"
+#include "Authoring/AssetMutationHelpers.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "EditorFramework/AssetImportData.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/Texture.h"
 #include "Editor.h"
+#include "WidgetBlueprint.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
@@ -23,6 +29,9 @@ static constexpr TCHAR EnginePreviewMeshPath[] = TEXT("/Engine/EngineMeshes/Skel
 static constexpr TCHAR StateTreeSchemaPath[] = TEXT("/Script/GameplayStateTreeModule.StateTreeComponentSchema");
 static constexpr TCHAR FixtureDataAssetClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureDataAsset");
 static constexpr TCHAR FixtureRowStructPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRow");
+static constexpr TCHAR TextureImportSource[] = TEXT("ImportSources/T_Test.png");
+static constexpr TCHAR TextureImportSourceAlt[] = TEXT("ImportSources/T_Test_Alt.png");
+static constexpr TCHAR MeshImportSource[] = TEXT("ImportSources/SM_Test.obj");
 
 static FString MakeUniqueAssetPath(const FString& Prefix)
 {
@@ -139,6 +148,79 @@ static bool ExpectValidateOnlyResult(FAutomationTestBase& Test,
 	}
 
 	return true;
+}
+
+static TSharedPtr<FJsonObject> WaitForImportJob(FAutomationTestBase& Test,
+                                                UBlueprintExtractorSubsystem* Subsystem,
+                                                const FString& InitialJson,
+                                                const FString& Context,
+                                                FString* OutJobId = nullptr)
+{
+	const TSharedPtr<FJsonObject> Initial = ParseJsonObject(Test, InitialJson, Context + TEXT(" enqueue"));
+	if (!Initial.IsValid())
+	{
+		return nullptr;
+	}
+
+	FString JobId;
+	Test.TestTrue(*FString::Printf(TEXT("%s returns a jobId"), *Context), Initial->TryGetStringField(TEXT("jobId"), JobId) && !JobId.IsEmpty());
+	if (OutJobId)
+	{
+		*OutJobId = JobId;
+	}
+
+	bool bTerminal = false;
+	if (Initial->TryGetBoolField(TEXT("terminal"), bTerminal) && bTerminal)
+	{
+		return Initial;
+	}
+
+	for (int32 PollIndex = 0; PollIndex < 300; ++PollIndex)
+	{
+		FPlatformProcess::Sleep(0.1f);
+		const TSharedPtr<FJsonObject> Polled = ParseJsonObject(
+			Test,
+			Subsystem->GetImportJob(JobId),
+			Context + TEXT(" poll"));
+		if (!Polled.IsValid())
+		{
+			return nullptr;
+		}
+
+		if (IsFailureResult(Polled))
+		{
+			return Polled;
+		}
+
+		if (Polled->TryGetBoolField(TEXT("terminal"), bTerminal) && bTerminal)
+		{
+			return Polled;
+		}
+	}
+
+	Test.AddError(FString::Printf(TEXT("%s did not complete within polling window"), *Context));
+	return nullptr;
+}
+
+static bool JsonArrayContainsString(const TSharedPtr<FJsonObject>& Parsed,
+                                    const FString& FieldName,
+                                    const FString& ExpectedValue)
+{
+	const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+	if (!Parsed.IsValid() || !Parsed->TryGetArrayField(FieldName, Values) || !Values)
+	{
+		return false;
+	}
+
+	for (const TSharedPtr<FJsonValue>& Value : *Values)
+	{
+		if (Value.IsValid() && Value->AsString() == ExpectedValue)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 static UBlueprintExtractorSubsystem* GetSubsystem(FAutomationTestBase& Test)
@@ -351,6 +433,43 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
 		TEXT("CompileWidgetBlueprint"));
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Widget blueprint exists after initial compile"), WidgetBP);
+
+	const FName RootCanvasName(TEXT("RootCanvas"));
+	const FName TitleTextName(TEXT("TitleText"));
+	const FName BodyTextName(TEXT("BodyText"));
+	FGuid RootCanvasGuid;
+	if (WidgetBP)
+	{
+		Test.TestTrue(TEXT("Initial root widget GUID is tracked"), WidgetBP->WidgetVariableNameToGuidMap.Contains(RootCanvasName));
+		Test.TestTrue(TEXT("Initial child widget GUID is tracked"), WidgetBP->WidgetVariableNameToGuidMap.Contains(TitleTextName));
+		RootCanvasGuid = WidgetBP->WidgetVariableNameToGuidMap.FindRef(RootCanvasName);
+		Test.TestTrue(TEXT("Initial root widget GUID is valid"), RootCanvasGuid.IsValid());
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"CanvasPanel","name":"RootCanvas","is_variable":true,"children":[{"class":"TextBlock","name":"BodyText","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree rebuild"));
+
+	WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Widget blueprint exists after rebuild"), WidgetBP);
+	if (WidgetBP)
+	{
+		Test.TestTrue(TEXT("Rebuilt root widget GUID is preserved"), WidgetBP->WidgetVariableNameToGuidMap.FindRef(RootCanvasName) == RootCanvasGuid);
+		Test.TestTrue(TEXT("Rebuilt child widget GUID is added before compile"), WidgetBP->WidgetVariableNameToGuidMap.Contains(BodyTextName));
+		Test.TestFalse(TEXT("Removed child widget GUID is pruned during rebuild"), WidgetBP->WidgetVariableNameToGuidMap.Contains(TitleTextName));
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after rebuild"));
 
 	ExpectSuccessfulResult(
 		Test,
@@ -633,6 +752,132 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunImportCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString ImportRoot = FString::Printf(TEXT("%s/Imported"), ScratchRoot);
+	const FString TextureAssetPath = ImportRoot + TEXT("/T_Imported");
+	const FString MeshAssetPath = ImportRoot + TEXT("/SM_Imported");
+	const FString TextureObjectPath = MakeObjectPath(TextureAssetPath);
+	const FString MeshObjectPath = MakeObjectPath(MeshAssetPath);
+
+	const TSharedPtr<FJsonObject> TextureImportResult = WaitForImportJob(
+		Test,
+		Subsystem,
+		Subsystem->ImportTextures(
+			FString::Printf(
+				TEXT(R"json({"items":[{"file_path":"%s","destination_path":"%s","destination_name":"T_Imported","options":{"srgb":false,"flip_green_channel":true}}]})json"),
+				TextureImportSource,
+				*ImportRoot),
+			false),
+		TEXT("ImportTextures"));
+	Test.TestTrue(TEXT("Texture import completes"), TextureImportResult.IsValid());
+	Test.TestTrue(
+		TEXT("Texture import reports imported object path"),
+		JsonArrayContainsString(TextureImportResult, TEXT("importedObjects"), TextureObjectPath));
+
+	const TSharedPtr<FJsonObject> MeshImportResult = WaitForImportJob(
+		Test,
+		Subsystem,
+		Subsystem->ImportMeshes(
+			FString::Printf(
+				TEXT(R"json({"items":[{"file_path":"%s","destination_path":"%s","destination_name":"SM_Imported","options":{"mesh_type":"static","combine_meshes":true,"generate_collision":true}}]})json"),
+				MeshImportSource,
+				*ImportRoot),
+			false),
+		TEXT("ImportMeshes"));
+	Test.TestTrue(TEXT("Mesh import completes"), MeshImportResult.IsValid());
+	Test.TestTrue(
+		TEXT("Mesh import reports imported object path"),
+		JsonArrayContainsString(MeshImportResult, TEXT("importedObjects"), MeshObjectPath));
+
+	UTexture* ImportedTexture = Cast<UTexture>(ResolveAssetByPath(TextureObjectPath));
+	Test.TestNotNull(TEXT("Imported texture exists"), ImportedTexture);
+	if (ImportedTexture)
+	{
+		Test.TestFalse(TEXT("Imported texture applied sRGB override"), ImportedTexture->SRGB);
+	}
+
+	const TSharedPtr<FJsonObject> ReimportResult = WaitForImportJob(
+		Test,
+		Subsystem,
+		Subsystem->ReimportAssets(
+			FString::Printf(
+				TEXT(R"json({"items":[{"asset_path":"%s","file_path":"%s"}]})json"),
+				*TextureObjectPath,
+				TextureImportSourceAlt),
+			false),
+		TEXT("ReimportAssets"));
+	Test.TestTrue(TEXT("Texture reimport completes"), ReimportResult.IsValid());
+	Test.TestTrue(
+		TEXT("Texture reimport reports imported object path"),
+		JsonArrayContainsString(ReimportResult, TEXT("importedObjects"), TextureObjectPath));
+
+	ImportedTexture = Cast<UTexture>(ResolveAssetByPath(TextureObjectPath));
+	if (ImportedTexture && ImportedTexture->AssetImportData)
+	{
+		Test.TestTrue(
+			TEXT("Reimport updates texture source path"),
+			ImportedTexture->AssetImportData->GetFirstFilename().EndsWith(TEXT("T_Test_Alt.png")));
+	}
+
+	const TSharedPtr<FJsonObject> ReplaceExistingResult = WaitForImportJob(
+		Test,
+		Subsystem,
+		Subsystem->ImportTextures(
+			FString::Printf(
+				TEXT(R"json({"items":[{"file_path":"%s","destination_path":"%s","destination_name":"T_Imported","replace_existing":true}]})json"),
+				TextureImportSource,
+				*ImportRoot),
+			false),
+		TEXT("ImportTextures replace_existing"));
+	Test.TestTrue(TEXT("Replace-existing import completes"), ReplaceExistingResult.IsValid());
+
+	const TSharedPtr<FJsonObject> MissingSourceResult = ParseJsonObject(
+		Test,
+		Subsystem->ImportAssets(
+			FString::Printf(
+				TEXT(R"json({"items":[{"file_path":"ImportSources/DoesNotExist.png","destination_path":"%s","destination_name":"Missing"}]})json"),
+				*ImportRoot),
+			false),
+		TEXT("ImportAssets missing source"));
+	Test.TestTrue(TEXT("Missing source import fails"), IsFailureResult(MissingSourceResult));
+
+	const TSharedPtr<FJsonObject> UnsupportedMeshResult = ParseJsonObject(
+		Test,
+		Subsystem->ImportMeshes(
+			FString::Printf(
+				TEXT(R"json({"items":[{"file_path":"%s","destination_path":"%s","destination_name":"BadMesh","options":{"mesh_type":"static"}}]})json"),
+				TextureImportSource,
+				*ImportRoot),
+			false),
+		TEXT("ImportMeshes unsupported extension"));
+	Test.TestTrue(TEXT("Unsupported mesh helper extension fails"), IsFailureResult(UnsupportedMeshResult));
+
+	const TArray<FString> AssetsToSave = {TextureObjectPath, MeshObjectPath};
+	const TSharedPtr<FJsonObject> SaveResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray(AssetsToSave)),
+		TEXT("Save imported assets"));
+	if (SaveResult.IsValid() && SaveResult->HasTypedField<EJson::Boolean>(TEXT("saved")))
+	{
+		Test.TestTrue(TEXT("Save imported assets reports saved=true"), SaveResult->GetBoolField(TEXT("saved")));
+	}
+
+	Test.TestTrue(
+		TEXT("Imported texture package exists after SaveAssets"),
+		FPaths::FileExists(MakePackageFilename(TextureAssetPath)));
+	Test.TestTrue(
+		TEXT("Imported mesh package exists after SaveAssets"),
+		FPaths::FileExists(MakePackageFilename(MeshAssetPath)));
+	return true;
+}
+
 static bool RunMissingAssetCoverage(FAutomationTestBase& Test)
 {
 	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
@@ -690,6 +935,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("RoundTrip"), [this]()
 		{
 			TestTrue(TEXT("Round-trip coverage completes"), RunRoundTripCoverage(*this));
+		});
+
+		It(TEXT("ImportJobs"), [this]()
+		{
+			TestTrue(TEXT("Import job coverage completes"), RunImportCoverage(*this));
 		});
 	});
 }

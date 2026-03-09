@@ -12,6 +12,10 @@
 	"Installed": false,
 	"Plugins": [
 		{
+			"Name": "Interchange",
+			"Enabled": true
+		},
+		{
 			"Name": "PropertyBindingUtils",
 			"Enabled": true
 		},

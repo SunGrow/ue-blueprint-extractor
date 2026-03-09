@@ -4,6 +4,7 @@
 #include "PropertySerializer.h"
 
 #include "WidgetBlueprint.h"
+#include "Animation/WidgetAnimation.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
 #include "Components/PanelWidget.h"
@@ -140,6 +141,56 @@ static TSharedPtr<FJsonObject> MakeCompileResult(const bool bSuccess,
 	Result->SetNumberField(TEXT("errorCount"), ErrorCount);
 	Result->SetNumberField(TEXT("warningCount"), WarningCount);
 	return Result;
+}
+
+static void SyncWidgetVariableGuids(UWidgetBlueprint* WidgetBP)
+{
+#if WITH_EDITORONLY_DATA
+	if (!WidgetBP)
+	{
+		return;
+	}
+
+	const TMap<FName, FGuid> ExistingGuids = WidgetBP->WidgetVariableNameToGuidMap;
+	TMap<FName, FGuid> RebuiltGuids;
+
+	TArray<UWidget*> ActiveWidgets;
+	if (WidgetBP->WidgetTree)
+	{
+		WidgetBP->WidgetTree->GetAllWidgets(ActiveWidgets);
+	}
+
+	for (UWidget* Widget : ActiveWidgets)
+	{
+		if (!Widget)
+		{
+			continue;
+		}
+
+		const FName WidgetName = Widget->GetFName();
+		const FGuid* ExistingGuid = ExistingGuids.Find(WidgetName);
+		const FGuid GuidToUse = (ExistingGuid && ExistingGuid->IsValid())
+			? *ExistingGuid
+			: FGuid::NewDeterministicGuid(Widget->GetPathName());
+		RebuiltGuids.Add(WidgetName, GuidToUse);
+	}
+
+	// Preserve animation GUIDs across tree rebuilds because animations are not replaced here.
+	for (UWidgetAnimation* Animation : WidgetBP->Animations)
+	{
+		if (Animation)
+		{
+			const FName AnimationName = Animation->GetFName();
+			const FGuid* ExistingGuid = ExistingGuids.Find(AnimationName);
+			const FGuid GuidToUse = (ExistingGuid && ExistingGuid->IsValid())
+				? *ExistingGuid
+				: FGuid::NewDeterministicGuid(Animation->GetPathName());
+			RebuiltGuids.Add(AnimationName, GuidToUse);
+		}
+	}
+
+	WidgetBP->WidgetVariableNameToGuidMap = MoveTemp(RebuiltGuids);
+#endif
 }
 
 } // namespace WidgetTreeBuilderInternal
@@ -334,6 +385,16 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 		}
 
 		WidgetTree->RootWidget = nullptr;
+
+		// Detach removed widgets from the WidgetTree so the structural recompile
+		// does not keep seeing stale source widgets through their Outer chain.
+		for (UWidget* Widget : AllWidgets)
+		{
+			if (Widget && Widget->GetOuter() == WidgetTree)
+			{
+				Widget->Rename(nullptr, GetTransientPackage());
+			}
+		}
 	}
 
 	// Build the new tree from JSON
@@ -346,6 +407,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 	}
 
 	WidgetTree->RootWidget = RootWidget;
+	SyncWidgetVariableGuids(WidgetBP);
 
 	// Count total widgets
 	TArray<UWidget*> FinalWidgets;

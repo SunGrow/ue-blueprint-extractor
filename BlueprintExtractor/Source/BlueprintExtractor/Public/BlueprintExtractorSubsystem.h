@@ -7,6 +7,8 @@
 
 #include "BlueprintExtractorSubsystem.generated.h"
 
+class FBlueprintExtractorImportJobManager;
+
 /** Editor subsystem exposing blueprint extraction as string-based methods
  *  for remote invocation via the Web Remote Control API. */
 UCLASS()
@@ -19,11 +21,14 @@ class BLUEPRINTEXTRACTOR_API UBlueprintExtractorSubsystem : public UEditorSubsys
 // ============================================================
 private:
 	static EBlueprintExtractionScope ParseScope(const FString& ScopeString);
+	FBlueprintExtractorImportJobManager* ImportJobManager = nullptr;
 
 // ============================================================
 // Public Interface
 // ============================================================
 public:
+	virtual ~UBlueprintExtractorSubsystem() override;
+
 	/** Extracts a Blueprint asset to a JSON string. Returns an error JSON object on failure.
 	 *  GraphFilter is a comma-separated list of graph names to extract. Empty = all graphs. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
@@ -306,4 +311,28 @@ public:
 	                               const FString& Operation,
 	                               const FString& PayloadJson = TEXT(""),
 	                               const bool bValidateOnly = false);
+
+	/** Enqueues a generic async import job. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ImportAssets(const FString& PayloadJson, const bool bValidateOnly = false);
+
+	/** Enqueues an async reimport job for explicit asset paths. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ReimportAssets(const FString& PayloadJson, const bool bValidateOnly = false);
+
+	/** Enqueues an async texture-focused import job. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ImportTextures(const FString& PayloadJson, const bool bValidateOnly = false);
+
+	/** Enqueues an async mesh-focused import job. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ImportMeshes(const FString& PayloadJson, const bool bValidateOnly = false);
+
+	/** Returns the current state of a previously enqueued import job. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString GetImportJob(const FString& JobId);
+
+	/** Lists session-scoped import jobs. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ListImportJobs(const bool bIncludeCompleted = true);
 };
