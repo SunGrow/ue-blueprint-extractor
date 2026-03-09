@@ -33,6 +33,7 @@ public class BlueprintExtractor : ModuleRules
 			"InputCore",
 			"AIModule",
 			"MaterialEditor",
+			"PropertyBindingUtils",
 			"StateTreeModule",
 			"StructUtils",
 			"GameplayTags",

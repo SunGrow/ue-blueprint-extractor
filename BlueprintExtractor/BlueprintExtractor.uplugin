@@ -12,6 +12,10 @@
 	"Installed": false,
 	"Plugins": [
 		{
+			"Name": "PropertyBindingUtils",
+			"Enabled": true
+		},
+		{
 			"Name": "StateTree",
 			"Enabled": true
 		},
