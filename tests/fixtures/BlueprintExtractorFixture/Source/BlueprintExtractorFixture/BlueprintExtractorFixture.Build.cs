@@ -10,7 +10,10 @@ public class BlueprintExtractorFixture : ModuleRules
 		{
 			"Core",
 			"CoreUObject",
-			"Engine"
+			"Engine",
+			"Slate",
+			"SlateCore",
+			"UMG"
 		});
 	}
 }

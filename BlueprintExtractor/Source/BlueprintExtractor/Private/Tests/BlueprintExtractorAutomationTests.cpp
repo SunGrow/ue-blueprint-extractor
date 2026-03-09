@@ -29,6 +29,7 @@ static constexpr TCHAR EnginePreviewMeshPath[] = TEXT("/Engine/EngineMeshes/Skel
 static constexpr TCHAR StateTreeSchemaPath[] = TEXT("/Script/GameplayStateTreeModule.StateTreeComponentSchema");
 static constexpr TCHAR FixtureDataAssetClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureDataAsset");
 static constexpr TCHAR FixtureRowStructPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRow");
+static constexpr TCHAR FixtureBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureBindWidgetParent");
 static constexpr TCHAR TextureImportSource[] = TEXT("ImportSources/T_Test.png");
 static constexpr TCHAR TextureImportSourceAlt[] = TEXT("ImportSources/T_Test_Alt.png");
 static constexpr TCHAR MeshImportSource[] = TEXT("ImportSources/SM_Test.obj");
@@ -905,6 +906,99 @@ static bool RunMissingAssetCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunAbstractWidgetClassCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_AbstractClassGuard"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for abstract child guard"));
+
+	const TSharedPtr<FJsonObject> BuildResult = ParseJsonObject(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"CanvasPanel","name":"RootCanvas","is_variable":true,"children":[{"class":"UserWidget","name":"TitleBarArea","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree rejects abstract child class"));
+
+	Test.TestTrue(TEXT("BuildWidgetTree rejects abstract child classes"), IsFailureResult(BuildResult));
+
+	FString Error;
+	if (BuildResult.IsValid() && BuildResult->TryGetStringField(TEXT("error"), Error))
+	{
+		Test.TestTrue(TEXT("BuildWidgetTree reports an abstract-class error"), Error.Contains(TEXT("abstract")));
+	}
+
+	return true;
+}
+
+static bool RunBindWidgetParentCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_BindWidgetParent"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			FixtureBindWidgetParentClassPath),
+		TEXT("CreateWidgetBlueprint for BindWidget parent"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","children":[{"class":"HorizontalBox","name":"TitleBarArea","is_variable":true,"children":[{"class":"TextBlock","name":"TitleText","is_variable":true,"slot":{"Size":{"value":1,"sizeRule":"Fill"}}},{"class":"Button","name":"MinimizeButton","is_variable":true},{"class":"Button","name":"MaximizeButton","is_variable":true},{"class":"Button","name":"CloseButton","is_variable":true}]},{"class":"NamedSlot","name":"ContentSlot","is_variable":true,"slot":{"Size":{"value":1,"sizeRule":"Fill"}}}]})json"),
+			false),
+		TEXT("BuildWidgetTree for BindWidget parent"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint for BindWidget parent"));
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("BindWidget parent widget blueprint exists"), WidgetBP);
+	if (!WidgetBP)
+	{
+		return false;
+	}
+
+	auto HasGeneratedVariable = [WidgetBP](const TCHAR* VariableName)
+	{
+		return WidgetBP->GeneratedVariables.ContainsByPredicate([VariableName](const FBPVariableDescription& Variable)
+		{
+			return Variable.VarName == FName(VariableName);
+		});
+	};
+
+	Test.TestFalse(TEXT("TitleBarArea uses native BindWidget property instead of generated variable"), HasGeneratedVariable(TEXT("TitleBarArea")));
+	Test.TestFalse(TEXT("TitleText uses native BindWidget property instead of generated variable"), HasGeneratedVariable(TEXT("TitleText")));
+	Test.TestFalse(TEXT("MinimizeButton uses native BindWidget property instead of generated variable"), HasGeneratedVariable(TEXT("MinimizeButton")));
+	Test.TestFalse(TEXT("MaximizeButton uses native BindWidget property instead of generated variable"), HasGeneratedVariable(TEXT("MaximizeButton")));
+	Test.TestFalse(TEXT("CloseButton uses native BindWidget property instead of generated variable"), HasGeneratedVariable(TEXT("CloseButton")));
+	Test.TestFalse(TEXT("ContentSlot uses native BindWidget property instead of generated variable"), HasGeneratedVariable(TEXT("ContentSlot")));
+
+	return true;
+}
+
 } // namespace BlueprintExtractorAutomation
 
 BEGIN_DEFINE_SPEC(
@@ -923,6 +1017,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		{
 			TestTrue(TEXT("Missing asset coverage completes"), RunMissingAssetCoverage(*this));
 		});
+
+		It(TEXT("WidgetTreeRejectsAbstractClass"), [this]()
+		{
+			TestTrue(TEXT("Abstract widget class coverage completes"), RunAbstractWidgetClassCoverage(*this));
+		});
 	});
 
 	Describe(TEXT("Authoring"), [this]()
@@ -940,6 +1039,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("ImportJobs"), [this]()
 		{
 			TestTrue(TEXT("Import job coverage completes"), RunImportCoverage(*this));
+		});
+
+		It(TEXT("BindWidgetParentRoundTrip"), [this]()
+		{
+			TestTrue(TEXT("BindWidget parent coverage completes"), RunBindWidgetParentCoverage(*this));
 		});
 	});
 }

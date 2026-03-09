@@ -7,6 +7,7 @@
 #include "Animation/WidgetAnimation.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
+#include "Components/NamedSlot.h"
 #include "Components/PanelWidget.h"
 #include "Components/PanelSlot.h"
 #include "Blueprint/UserWidget.h"
@@ -16,10 +17,12 @@
 #include "JsonObjectConverter.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "EdGraphSchema_K2.h"
 #include "BlueprintCompilationManager.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "WidgetBlueprintEditorUtils.h"
 #include "WidgetBlueprintFactory.h"
 #include "Logging/TokenizedMessage.h"
 
@@ -184,6 +187,102 @@ static void SyncWidgetVariableGuids(UWidgetBlueprint* WidgetBP)
 	}
 
 	WidgetBP->WidgetVariableNameToGuidMap = MoveTemp(RebuiltGuids);
+#endif
+}
+
+static void SyncGeneratedWidgetVariables(UWidgetBlueprint* WidgetBP)
+{
+#if WITH_EDITORONLY_DATA
+	if (!WidgetBP)
+	{
+		return;
+	}
+
+	TArray<FBPVariableDescription> PreservedVariables;
+	PreservedVariables.Reserve(WidgetBP->GeneratedVariables.Num());
+
+	for (FBPVariableDescription& Variable : WidgetBP->GeneratedVariables)
+	{
+		const UClass* VariableClass = Cast<UClass>(Variable.VarType.PinSubCategoryObject.Get());
+		const bool bIsGeneratedWidgetVariable = Variable.VarType.PinCategory == UEdGraphSchema_K2::PC_Object
+			&& VariableClass
+			&& VariableClass->IsChildOf(UWidget::StaticClass());
+		if (!bIsGeneratedWidgetVariable)
+		{
+			PreservedVariables.Add(MoveTemp(Variable));
+		}
+	}
+
+	WidgetBP->GeneratedVariables = MoveTemp(PreservedVariables);
+
+	TArray<UWidget*> SortedWidgets = WidgetBP->GetAllSourceWidgets();
+	SortedWidgets.Sort([](const UWidget& Lhs, const UWidget& Rhs) { return Rhs.GetFName().LexicalLess(Lhs.GetFName()); });
+
+	for (UWidget* Widget : SortedWidgets)
+	{
+		if (!Widget)
+		{
+			continue;
+		}
+
+		const bool bShouldGenerateVariable = Widget->bIsVariable
+			|| Widget->IsA<UNamedSlot>()
+			|| WidgetBP->Bindings.ContainsByPredicate([&Widget](const FDelegateEditorBinding& Binding)
+			{
+				return Binding.ObjectName == Widget->GetName();
+			});
+		if (!bShouldGenerateVariable)
+		{
+			continue;
+		}
+
+		FObjectPropertyBase* ExistingProperty = WidgetBP->ParentClass
+			? CastField<FObjectPropertyBase>(WidgetBP->ParentClass->FindPropertyByName(Widget->GetFName()))
+			: nullptr;
+		if (ExistingProperty
+			&& FWidgetBlueprintEditorUtils::IsBindWidgetProperty(ExistingProperty)
+			&& Widget->IsA(ExistingProperty->PropertyClass))
+		{
+			continue;
+		}
+
+		UClass* WidgetClass = Widget->GetClass();
+		if (UBlueprintGeneratedClass* BPWidgetClass = Cast<UBlueprintGeneratedClass>(WidgetClass))
+		{
+			WidgetClass = BPWidgetClass->GetAuthoritativeClass();
+		}
+
+		const FGuid VarGuid = WidgetBP->WidgetVariableNameToGuidMap.FindRef(Widget->GetFName());
+		if (!ensure(VarGuid.IsValid()))
+		{
+			continue;
+		}
+
+		FBPVariableDescription WidgetVariableDesc;
+		WidgetVariableDesc.VarName = Widget->GetFName();
+		WidgetVariableDesc.VarGuid = VarGuid;
+		WidgetVariableDesc.VarType = FEdGraphPinType(
+			UEdGraphSchema_K2::PC_Object,
+			NAME_None,
+			WidgetClass,
+			EPinContainerType::None,
+			false,
+			FEdGraphTerminalType());
+		WidgetVariableDesc.FriendlyName = Widget->IsGeneratedName()
+			? Widget->GetName()
+			: Widget->GetLabelText().ToString();
+		WidgetVariableDesc.PropertyFlags = CPF_PersistentInstance | CPF_ExportObject | CPF_InstancedReference | CPF_RepSkip;
+
+		if (Widget->bIsVariable)
+		{
+			WidgetVariableDesc.PropertyFlags |= CPF_BlueprintVisible | CPF_BlueprintReadOnly | CPF_DisableEditOnInstance;
+
+			const FString& CategoryName = Widget->GetCategoryName();
+			WidgetVariableDesc.SetMetaData(TEXT("Category"), *(CategoryName.IsEmpty() ? WidgetBP->GetName() : CategoryName));
+		}
+
+		WidgetBP->GeneratedVariables.Add(MoveTemp(WidgetVariableDesc));
+	}
 #endif
 }
 
@@ -402,6 +501,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 
 	WidgetTree->RootWidget = RootWidget;
 	SyncWidgetVariableGuids(WidgetBP);
+	SyncGeneratedWidgetVariables(WidgetBP);
 
 	// Count total widgets
 	TArray<UWidget*> FinalWidgets;
@@ -707,6 +807,12 @@ UWidget* FWidgetTreeBuilder::CreateWidgetFromJson(UWidgetTree* WidgetTree,
 	if (!ResolvedClass)
 	{
 		OutErrors.Add(FString::Printf(TEXT("Could not resolve widget class: %s"), *ClassName));
+		return nullptr;
+	}
+
+	if (ResolvedClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		OutErrors.Add(FString::Printf(TEXT("Widget class '%s' is abstract and cannot be instantiated in a widget tree"), *ClassName));
 		return nullptr;
 	}
 
