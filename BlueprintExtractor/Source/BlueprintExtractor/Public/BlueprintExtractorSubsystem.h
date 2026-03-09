@@ -105,16 +105,205 @@ public:
 
 	/** Builds/replaces the entire widget hierarchy from JSON. Returns JSON with widget count and errors. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
-	FString BuildWidgetTree(const FString& AssetPath, const FString& WidgetTreeJson);
+	FString BuildWidgetTree(const FString& AssetPath,
+	                        const FString& WidgetTreeJson,
+	                        const bool bValidateOnly = false);
 
 	/** Patches properties on an existing widget. Returns JSON with success/error. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ModifyWidget(const FString& AssetPath,
 	                     const FString& WidgetName,
 	                     const FString& PropertiesJson,
-	                     const FString& SlotJson);
+	                     const FString& SlotJson,
+	                     const bool bValidateOnly = false);
 
 	/** Compiles a WidgetBlueprint. Returns JSON array of errors/warnings. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CompileWidgetBlueprint(const FString& AssetPath);
+
+	/** Saves one or more dirty asset packages explicitly. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString SaveAssets(const FString& AssetPathsJson);
+
+	/** Creates a new DataAsset of the specified concrete class. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateDataAsset(const FString& AssetPath,
+	                        const FString& AssetClassPath,
+	                        const FString& PropertiesJson = TEXT(""),
+	                        const bool bValidateOnly = false);
+
+	/** Applies a reflected property patch to an existing DataAsset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyDataAsset(const FString& AssetPath,
+	                        const FString& PropertiesJson,
+	                        const bool bValidateOnly = false);
+
+	/** Creates a new DataTable with the specified row struct and optional rows. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateDataTable(const FString& AssetPath,
+	                        const FString& RowStructPath,
+	                        const FString& RowsJson = TEXT("[]"),
+	                        const bool bValidateOnly = false);
+
+	/** Upserts, deletes, or replaces rows in an existing DataTable. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyDataTable(const FString& AssetPath,
+	                        const FString& PayloadJson,
+	                        const bool bValidateOnly = false);
+
+	/** Creates a new curve asset of the specified concrete curve type. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateCurve(const FString& AssetPath,
+	                    const FString& CurveType,
+	                    const FString& ChannelsJson = TEXT("{}"),
+	                    const bool bValidateOnly = false);
+
+	/** Modifies an existing curve asset by patching channels and key operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyCurve(const FString& AssetPath,
+	                    const FString& PayloadJson,
+	                    const bool bValidateOnly = false);
+
+	/** Creates a new CurveTable with the specified mode and optional rows. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateCurveTable(const FString& AssetPath,
+	                         const FString& CurveTableMode,
+	                         const FString& RowsJson = TEXT("[]"),
+	                         const bool bValidateOnly = false);
+
+	/** Upserts, deletes, or replaces rows in an existing CurveTable. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyCurveTable(const FString& AssetPath,
+	                         const FString& PayloadJson,
+	                         const bool bValidateOnly = false);
+
+	/** Creates a new MaterialInstanceConstant from a parent material/interface. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateMaterialInstance(const FString& AssetPath,
+	                               const FString& ParentMaterialPath,
+	                               const bool bValidateOnly = false);
+
+	/** Applies material override operations to an existing MaterialInstanceConstant. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyMaterialInstance(const FString& AssetPath,
+	                               const FString& PayloadJson,
+	                               const bool bValidateOnly = false);
+
+	/** Creates a new UserDefinedStruct asset from extractor-shaped field payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateUserDefinedStruct(const FString& AssetPath,
+	                                const FString& PayloadJson = TEXT(""),
+	                                const bool bValidateOnly = false);
+
+	/** Modifies an existing UserDefinedStruct with field-level operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyUserDefinedStruct(const FString& AssetPath,
+	                                const FString& Operation,
+	                                const FString& PayloadJson = TEXT(""),
+	                                const bool bValidateOnly = false);
+
+	/** Creates a new UserDefinedEnum asset from extractor-shaped entry payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateUserDefinedEnum(const FString& AssetPath,
+	                              const FString& PayloadJson = TEXT(""),
+	                              const bool bValidateOnly = false);
+
+	/** Modifies an existing UserDefinedEnum with entry-level operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyUserDefinedEnum(const FString& AssetPath,
+	                              const FString& Operation,
+	                              const FString& PayloadJson = TEXT(""),
+	                              const bool bValidateOnly = false);
+
+	/** Creates a new Blackboard asset from extractor-shaped key payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateBlackboard(const FString& AssetPath,
+	                         const FString& PayloadJson = TEXT(""),
+	                         const bool bValidateOnly = false);
+
+	/** Modifies an existing Blackboard asset with declarative key operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyBlackboard(const FString& AssetPath,
+	                         const FString& Operation,
+	                         const FString& PayloadJson = TEXT(""),
+	                         const bool bValidateOnly = false);
+
+	/** Creates a new BehaviorTree asset from extractor-shaped tree payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateBehaviorTree(const FString& AssetPath,
+	                           const FString& PayloadJson = TEXT(""),
+	                           const bool bValidateOnly = false);
+
+	/** Modifies an existing BehaviorTree asset with declarative tree operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyBehaviorTree(const FString& AssetPath,
+	                           const FString& Operation,
+	                           const FString& PayloadJson = TEXT(""),
+	                           const bool bValidateOnly = false);
+
+	/** Creates a new StateTree asset from extractor-shaped tree payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateStateTree(const FString& AssetPath,
+	                        const FString& PayloadJson = TEXT(""),
+	                        const bool bValidateOnly = false);
+
+	/** Modifies an existing StateTree asset with declarative tree operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyStateTree(const FString& AssetPath,
+	                        const FString& Operation,
+	                        const FString& PayloadJson = TEXT(""),
+	                        const bool bValidateOnly = false);
+
+	/** Creates a new AnimSequence asset from extractor-shaped metadata payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateAnimSequence(const FString& AssetPath,
+	                           const FString& PayloadJson = TEXT(""),
+	                           const bool bValidateOnly = false);
+
+	/** Modifies an existing AnimSequence asset with metadata authoring operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyAnimSequence(const FString& AssetPath,
+	                           const FString& Operation,
+	                           const FString& PayloadJson = TEXT(""),
+	                           const bool bValidateOnly = false);
+
+	/** Creates a new AnimMontage asset from extractor-shaped metadata payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateAnimMontage(const FString& AssetPath,
+	                          const FString& PayloadJson = TEXT(""),
+	                          const bool bValidateOnly = false);
+
+	/** Modifies an existing AnimMontage asset with metadata authoring operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyAnimMontage(const FString& AssetPath,
+	                          const FString& Operation,
+	                          const FString& PayloadJson = TEXT(""),
+	                          const bool bValidateOnly = false);
+
+	/** Creates a new BlendSpace asset from extractor-shaped sample and axis payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateBlendSpace(const FString& AssetPath,
+	                         const FString& PayloadJson = TEXT(""),
+	                         const bool bValidateOnly = false);
+
+	/** Modifies an existing BlendSpace asset with sample and axis operations. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyBlendSpace(const FString& AssetPath,
+	                         const FString& Operation,
+	                         const FString& PayloadJson = TEXT(""),
+	                         const bool bValidateOnly = false);
+
+	/** Creates a new Blueprint asset with optional member payloads. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateBlueprint(const FString& AssetPath,
+	                        const FString& ParentClassPath,
+	                        const FString& PayloadJson = TEXT(""),
+	                        const bool bValidateOnly = false);
+
+	/** Modifies member authoring surfaces on an existing Blueprint asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyBlueprintMembers(const FString& AssetPath,
+	                               const FString& Operation,
+	                               const FString& PayloadJson = TEXT(""),
+	                               const bool bValidateOnly = false);
 };

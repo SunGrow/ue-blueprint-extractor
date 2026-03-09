@@ -2,16 +2,54 @@ import { RemoteCallRequest, RemoteCallResponse } from './types.js';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 30010;
+const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000;
 const TIMEOUT_MS = 60_000;
+const SUBSYSTEM_PATH_ENV = 'UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH';
+
+export const DEFAULT_SUBSYSTEM_CANDIDATE_PATHS = [
+  '/Script/BlueprintExtractor.Default__BlueprintExtractorSubsystem',
+  '/Engine/Transient.BlueprintExtractorSubsystem',
+  '/Engine/Transient.BlueprintExtractorSubsystem_0',
+] as const;
+
+type FetchLike = typeof fetch;
+
+export interface UEClientOptions {
+  host?: string;
+  port?: number;
+  subsystemPath?: string | null;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+  connectionTimeoutMs?: number;
+  candidatePaths?: readonly string[];
+}
+
+function parsePort(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 export class UEClient {
   private host: string;
   private port: number;
+  private fetchImpl: FetchLike;
+  private timeoutMs: number;
+  private connectionTimeoutMs: number;
+  private candidatePaths: readonly string[];
   private subsystemPath: string | null = null;
 
-  constructor() {
-    this.host = process.env.UE_REMOTE_CONTROL_HOST ?? DEFAULT_HOST;
-    this.port = parseInt(process.env.UE_REMOTE_CONTROL_PORT ?? String(DEFAULT_PORT), 10);
+  constructor(options: UEClientOptions = {}) {
+    this.host = options.host ?? process.env.UE_REMOTE_CONTROL_HOST ?? DEFAULT_HOST;
+    this.port = options.port ?? parsePort(process.env.UE_REMOTE_CONTROL_PORT, DEFAULT_PORT);
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
+    this.connectionTimeoutMs = options.connectionTimeoutMs ?? DEFAULT_CONNECTION_TIMEOUT_MS;
+    this.candidatePaths = options.candidatePaths ?? DEFAULT_SUBSYSTEM_CANDIDATE_PATHS;
+    this.subsystemPath = options.subsystemPath ?? process.env[SUBSYSTEM_PATH_ENV] ?? null;
   }
 
   private get baseUrl(): string {
@@ -22,8 +60,8 @@ export class UEClient {
     // GET /remote/info — if it responds, UE is running with Remote Control
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${this.baseUrl}/remote/info`, { signal: controller.signal });
+      const timeout = setTimeout(() => controller.abort(), this.connectionTimeoutMs);
+      const res = await this.fetchImpl(`${this.baseUrl}/remote/info`, { signal: controller.signal });
       clearTimeout(timeout);
       return res.ok;
     } catch {
@@ -43,13 +81,7 @@ export class UEClient {
     // /Engine/Transient.BlueprintExtractorSubsystem
     // But the exact path depends on the engine. Let's try the standard pattern.
 
-    const candidatePaths = [
-      '/Script/BlueprintExtractor.Default__BlueprintExtractorSubsystem',
-      '/Engine/Transient.BlueprintExtractorSubsystem',
-      '/Engine/Transient.BlueprintExtractorSubsystem_0',
-    ];
-
-    for (const path of candidatePaths) {
+    for (const path of this.candidatePaths) {
       try {
         // Try calling ListAssets as a health check
         const res = await this.rawCall(path, 'ListAssets', { PackagePath: '/Game', bRecursive: false, ClassFilter: '' });
@@ -62,7 +94,9 @@ export class UEClient {
       }
     }
 
-    throw new Error('BlueprintExtractor subsystem not found. Ensure the plugin is loaded in the editor.');
+    throw new Error(
+      `BlueprintExtractor subsystem not found. Ensure the plugin is loaded in the editor or set ${SUBSYSTEM_PATH_ENV}.`,
+    );
   }
 
   private async rawCall(objectPath: string, functionName: string, parameters: Record<string, unknown>): Promise<RemoteCallResponse | null> {
@@ -74,10 +108,10 @@ export class UEClient {
     };
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const res = await fetch(`${this.baseUrl}/remote/object/call`, {
+      const res = await this.fetchImpl(`${this.baseUrl}/remote/object/call`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

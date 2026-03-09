@@ -94,6 +94,7 @@ TSharedPtr<FJsonObject> FStateTreeExtractor::ExtractState(const UStateTreeState*
 
 	Obj->SetStringField(TEXT("name"), State->Name.ToString());
 	Obj->SetStringField(TEXT("id"), State->ID.ToString());
+	Obj->SetStringField(TEXT("statePath"), State->GetPath());
 	Obj->SetBoolField(TEXT("enabled"), State->bEnabled);
 
 	if (!State->Description.IsEmpty())

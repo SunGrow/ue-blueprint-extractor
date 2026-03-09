@@ -27,10 +27,12 @@ public class BlueprintExtractor : ModuleRules
 			"ContentBrowser",
 			"ContentBrowserData",
 			"AssetTools",
+			"AssetRegistry",
 			"Json",
 			"JsonUtilities",
 			"InputCore",
 			"AIModule",
+			"MaterialEditor",
 			"StateTreeModule",
 			"StructUtils",
 			"GameplayTags",
@@ -40,7 +42,13 @@ public class BlueprintExtractor : ModuleRules
 
 		if (Target.bBuildEditor)
 		{
-			PrivateDependencyModuleNames.Add("StateTreeEditorModule");
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				"AIGraph",
+				"AnimationBlueprintLibrary",
+				"BehaviorTreeEditor",
+				"StateTreeEditorModule"
+			});
 		}
 	}
 }

@@ -1,5 +1,8 @@
 #include "Builders/WidgetTreeBuilder.h"
 
+#include "Authoring/AssetMutationHelpers.h"
+#include "PropertySerializer.h"
+
 #include "WidgetBlueprint.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
@@ -21,6 +24,7 @@
 
 #include "CoreGlobals.h"
 #include "UObject/UnrealType.h"
+#include "UObject/Package.h"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,6 +64,34 @@ static TSharedRef<FJsonValueArray> ErrorsToJsonArray(const TArray<FString>& Erro
 		Array.Add(MakeShared<FJsonValueString>(Err));
 	}
 	return MakeShared<FJsonValueArray>(Array);
+}
+
+static void AddLegacyErrorFields(const TSharedPtr<FJsonObject>& Result, const TArray<FString>& Errors)
+{
+	if (!Result.IsValid())
+	{
+		return;
+	}
+
+	Result->SetField(TEXT("errors"), ErrorsToJsonArray(Errors));
+	if (Errors.Num() > 0)
+	{
+		Result->SetStringField(TEXT("error"), Errors[0]);
+	}
+}
+
+static TSharedPtr<FJsonObject> BuildMutationResult(FAssetMutationContext& Context,
+                                                   const bool bSuccess,
+                                                   const TArray<FString>& Errors)
+{
+	for (const FString& Error : Errors)
+	{
+		Context.AddError(TEXT("mutation_error"), Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = Context.BuildResult(bSuccess);
+	AddLegacyErrorFields(Result, Errors);
+	return Result;
 }
 
 static FString GetBlueprintStatusString(const EBlueprintStatus Status)
@@ -121,6 +153,8 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 {
 	using namespace WidgetTreeBuilderInternal;
 
+	FAssetMutationContext Context(TEXT("create_widget_blueprint"), AssetPath, TEXT("WidgetBlueprint"), false);
+
 	// Determine the parent class name — default to UserWidget
 	const FString EffectiveClassName = ParentClassName.IsEmpty() ? TEXT("UserWidget") : ParentClassName;
 
@@ -159,30 +193,50 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 
 	if (!ParentClass)
 	{
-		return MakeErrorResult(FString::Printf(TEXT("Parent class not found: %s"), *EffectiveClassName));
+		Context.AddError(TEXT("parent_class_not_found"),
+		                 FString::Printf(TEXT("Parent class not found: %s"), *EffectiveClassName),
+		                 AssetPath);
+		return Context.BuildResult(false);
 	}
 
 	{
 		const bool bIsUserWidgetSubclass = ParentClass->IsChildOf(UUserWidget::StaticClass());
 		if (!bIsUserWidgetSubclass)
 		{
-			return MakeErrorResult(FString::Printf(
-				TEXT("Parent class '%s' is not a subclass of UUserWidget"), *ParentClass->GetName()));
+			Context.AddError(TEXT("invalid_parent_class"),
+			                 FString::Printf(TEXT("Parent class '%s' is not a subclass of UUserWidget"),
+			                 *ParentClass->GetName()),
+			                 AssetPath);
+			return Context.BuildResult(false);
 		}
 	}
+
+	if (DoesAssetExist(AssetPath))
+	{
+		Context.AddError(TEXT("asset_exists"),
+		                 FString::Printf(TEXT("Asset already exists: %s"), *AssetPath),
+		                 AssetPath);
+		return Context.BuildResult(false);
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Create Widget Blueprint")));
 
 	// Create the package
 	UPackage* Package = CreatePackage(*AssetPath);
 	if (!ensureMsgf(Package, TEXT("WidgetTreeBuilder: Failed to create package at '%s'"), *AssetPath))
 	{
-		return MakeErrorResult(FString::Printf(TEXT("Failed to create package at: %s"), *AssetPath));
+		Context.AddError(TEXT("package_create_failed"),
+		                 FString::Printf(TEXT("Failed to create package at: %s"), *AssetPath),
+		                 AssetPath);
+		return Context.BuildResult(false);
 	}
 
 	// Create the widget blueprint via factory
 	UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
 	if (!ensureMsgf(Factory, TEXT("WidgetTreeBuilder: Failed to create UWidgetBlueprintFactory")))
 	{
-		return MakeErrorResult(TEXT("Failed to create WidgetBlueprintFactory"));
+		Context.AddError(TEXT("factory_create_failed"), TEXT("Failed to create WidgetBlueprintFactory"));
+		return Context.BuildResult(false);
 	}
 	Factory->ParentClass = ParentClass;
 
@@ -197,15 +251,19 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 
 	if (!CreatedAsset)
 	{
-		return MakeErrorResult(FString::Printf(TEXT("FactoryCreateNew failed for: %s"), *AssetPath));
+		Context.AddError(TEXT("factory_create_new_failed"),
+		                 FString::Printf(TEXT("FactoryCreateNew failed for: %s"), *AssetPath),
+		                 AssetPath);
+		return Context.BuildResult(false);
 	}
 
 	// Notify asset registry
 	FAssetRegistryModule::AssetCreated(CreatedAsset);
 	Package->MarkPackageDirty();
+	Context.TrackDirtyObject(CreatedAsset);
+	Context.SetValidationSummary(true, TEXT("WidgetBlueprint creation inputs validated."));
 
-	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-	Result->SetBoolField(TEXT("success"), true);
+	const TSharedPtr<FJsonObject> Result = Context.BuildResult(true);
 	Result->SetStringField(TEXT("assetPath"), AssetPath);
 	Result->SetStringField(TEXT("parentClass"), ParentClass->GetName());
 	return Result;
@@ -216,25 +274,54 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 // ---------------------------------------------------------------------------
 
 TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* WidgetBP,
-                                                            const TSharedPtr<FJsonObject>& RootWidgetJson)
+                                                            const TSharedPtr<FJsonObject>& RootWidgetJson,
+                                                            const bool bValidateOnly)
 {
 	using namespace WidgetTreeBuilderInternal;
 
+	const FString AssetPath = WidgetBP ? WidgetBP->GetPathName() : FString();
+	FAssetMutationContext Context(TEXT("build_widget_tree"), AssetPath, TEXT("WidgetBlueprint"), bValidateOnly);
+
 	if (!ensureMsgf(WidgetBP, TEXT("WidgetTreeBuilder::BuildWidgetTree: null WidgetBP")))
 	{
-		return MakeErrorResult(TEXT("WidgetBlueprint is null"));
+		Context.AddError(TEXT("null_widget_blueprint"), TEXT("WidgetBlueprint is null"));
+		return Context.BuildResult(false);
 	}
 
 	if (!RootWidgetJson.IsValid() || RootWidgetJson->Values.Num() == 0)
 	{
-		return MakeErrorResult(TEXT("RootWidgetJson is null or empty"));
+		Context.AddError(TEXT("empty_widget_tree"), TEXT("RootWidgetJson is null or empty"), AssetPath);
+		return Context.BuildResult(false);
 	}
 
 	UWidgetTree* WidgetTree = WidgetBP->WidgetTree;
 	if (!ensureMsgf(WidgetTree, TEXT("WidgetTreeBuilder::BuildWidgetTree: null WidgetTree")))
 	{
-		return MakeErrorResult(TEXT("WidgetTree is null on the WidgetBlueprint"));
+		Context.AddError(TEXT("null_widget_tree"), TEXT("WidgetTree is null on the WidgetBlueprint"), AssetPath);
+		return Context.BuildResult(false);
 	}
+
+	// Preflight the payload on a transient tree so bad JSON never clears the live asset.
+	TArray<FString> ValidationErrors;
+	UWidgetTree* ValidationTree = NewObject<UWidgetTree>(GetTransientPackage(), NAME_None, RF_Transient);
+	UWidget* ValidationRoot = CreateWidgetFromJson(ValidationTree, nullptr, RootWidgetJson, ValidationErrors);
+	const bool bValidationSuccess = ValidationRoot != nullptr && ValidationErrors.Num() == 0;
+	Context.SetValidationSummary(bValidationSuccess,
+		bValidationSuccess ? TEXT("Widget tree payload validated.") : TEXT("Widget tree payload failed validation."),
+		ValidationErrors);
+	if (!bValidationSuccess)
+	{
+		return BuildMutationResult(Context, false, ValidationErrors);
+	}
+
+	if (bValidateOnly)
+	{
+		return BuildMutationResult(Context, true, {});
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Build Widget Tree")));
+	WidgetBP->Modify();
+	WidgetTree->Modify();
 
 	// Clear existing tree
 	{
@@ -255,7 +342,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 
 	if (!RootWidget)
 	{
-		return MakeErrorResult(TEXT("Failed to create root widget"), OutErrors);
+		return BuildMutationResult(Context, false, OutErrors);
 	}
 
 	WidgetTree->RootWidget = RootWidget;
@@ -267,11 +354,11 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
 	WidgetBP->MarkPackageDirty();
+	Context.TrackDirtyObject(WidgetBP);
 
-	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-	Result->SetBoolField(TEXT("success"), true);
+	const bool bSuccess = OutErrors.Num() == 0;
+	const TSharedPtr<FJsonObject> Result = BuildMutationResult(Context, bSuccess, OutErrors);
 	Result->SetNumberField(TEXT("widgetCount"), WidgetCount);
-	Result->SetField(TEXT("errors"), ErrorsToJsonArray(OutErrors));
 	return Result;
 }
 
@@ -282,30 +369,81 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* WidgetBP,
                                                          const FString& WidgetName,
                                                          const TSharedPtr<FJsonObject>& PropertiesJson,
-                                                         const TSharedPtr<FJsonObject>& SlotJson)
+                                                         const TSharedPtr<FJsonObject>& SlotJson,
+                                                         const bool bValidateOnly)
 {
 	using namespace WidgetTreeBuilderInternal;
 
+	const FString AssetPath = WidgetBP ? WidgetBP->GetPathName() : FString();
+	FAssetMutationContext Context(TEXT("modify_widget"), AssetPath, TEXT("WidgetBlueprint"), bValidateOnly);
+
 	if (!ensureMsgf(WidgetBP, TEXT("WidgetTreeBuilder::ModifyWidget: null WidgetBP")))
 	{
-		return MakeErrorResult(TEXT("WidgetBlueprint is null"));
+		Context.AddError(TEXT("null_widget_blueprint"), TEXT("WidgetBlueprint is null"));
+		return Context.BuildResult(false);
 	}
 
 	if (WidgetName.IsEmpty())
 	{
-		return MakeErrorResult(TEXT("WidgetName is empty"));
+		Context.AddError(TEXT("empty_widget_name"), TEXT("WidgetName is empty"), AssetPath);
+		return Context.BuildResult(false);
 	}
 
 	UWidgetTree* WidgetTree = WidgetBP->WidgetTree;
 	if (!ensureMsgf(WidgetTree, TEXT("WidgetTreeBuilder::ModifyWidget: null WidgetTree")))
 	{
-		return MakeErrorResult(TEXT("WidgetTree is null on the WidgetBlueprint"));
+		Context.AddError(TEXT("null_widget_tree"), TEXT("WidgetTree is null on the WidgetBlueprint"), AssetPath);
+		return Context.BuildResult(false);
 	}
 
 	UWidget* Widget = WidgetTree->FindWidget(FName(*WidgetName));
 	if (!Widget)
 	{
-		return MakeErrorResult(FString::Printf(TEXT("Widget not found: %s"), *WidgetName));
+		Context.AddError(TEXT("widget_not_found"),
+		                 FString::Printf(TEXT("Widget not found: %s"), *WidgetName),
+		                 WidgetName);
+		return Context.BuildResult(false);
+	}
+
+	TArray<FString> ValidationErrors;
+	if (PropertiesJson.IsValid() && PropertiesJson->Values.Num() > 0)
+	{
+		FPropertySerializer::ApplyPropertiesFromJson(Widget, PropertiesJson, ValidationErrors, true, true);
+	}
+
+	UPanelSlot* Slot = Widget->Slot;
+	if (SlotJson.IsValid() && SlotJson->Values.Num() > 0)
+	{
+		if (!Slot)
+		{
+			ValidationErrors.Add(FString::Printf(TEXT("Widget '%s' has no Slot (root widgets have no slot)"), *WidgetName));
+		}
+		else
+		{
+			FPropertySerializer::ApplyPropertiesFromJson(Slot, SlotJson, ValidationErrors, true, true);
+		}
+	}
+
+	const bool bValidationSuccess = ValidationErrors.Num() == 0;
+	Context.SetValidationSummary(bValidationSuccess,
+		bValidationSuccess ? TEXT("Widget modification payload validated.") : TEXT("Widget modification payload failed validation."),
+		ValidationErrors);
+	if (!bValidationSuccess)
+	{
+		return BuildMutationResult(Context, false, ValidationErrors);
+	}
+
+	if (bValidateOnly)
+	{
+		return BuildMutationResult(Context, true, {});
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Modify Widget")));
+	WidgetBP->Modify();
+	Widget->Modify();
+	if (Slot)
+	{
+		Slot->Modify();
 	}
 
 	TArray<FString> OutErrors;
@@ -324,7 +462,6 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 		const bool bHasSlotData = SlotJson.IsValid() && 0 < SlotJson->Values.Num();
 		if (bHasSlotData)
 		{
-			UPanelSlot* Slot = Widget->Slot;
 			if (!Slot)
 			{
 				OutErrors.Add(FString::Printf(
@@ -339,12 +476,12 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
 	WidgetBP->MarkPackageDirty();
+	Context.TrackDirtyObject(WidgetBP);
 
-	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-	Result->SetBoolField(TEXT("success"), true);
+	const bool bSuccess = OutErrors.Num() == 0;
+	const TSharedPtr<FJsonObject> Result = BuildMutationResult(Context, bSuccess, OutErrors);
 	Result->SetStringField(TEXT("widgetName"), WidgetName);
 	Result->SetStringField(TEXT("widgetClass"), Widget->GetClass()->GetName());
-	Result->SetField(TEXT("errors"), ErrorsToJsonArray(OutErrors));
 	return Result;
 }
 
@@ -356,9 +493,13 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 {
 	using namespace WidgetTreeBuilderInternal;
 
+	const FString AssetPath = WidgetBP ? WidgetBP->GetPathName() : FString();
+	FAssetMutationContext Context(TEXT("compile_widget_blueprint"), AssetPath, TEXT("WidgetBlueprint"), false);
+
 	if (!ensureMsgf(WidgetBP, TEXT("WidgetTreeBuilder::CompileWidgetBlueprint: null WidgetBP")))
 	{
-		return MakeErrorResult(TEXT("WidgetBlueprint is null"));
+		Context.AddError(TEXT("null_widget_blueprint"), TEXT("WidgetBlueprint is null"));
+		return Context.BuildResult(false);
 	}
 
 	if (GCompilingBlueprint || WidgetBP->bBeingCompiled || !FBlueprintCompilationManager::IsGeneratedClassLayoutReady())
@@ -369,7 +510,10 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 		TArray<TSharedPtr<FJsonValue>> MessageArray;
 		WarningArray.Add(MakeShared<FJsonValueString>(BusyMessage));
 		MessageArray.Add(MakeMessageValue(TEXT("warning"), BusyMessage));
-		return MakeCompileResult(false, TEXT("Busy"), EmptyArray, WarningArray, MessageArray, 0, 1);
+		const TSharedPtr<FJsonObject> CompileResult = MakeCompileResult(false, TEXT("Busy"), EmptyArray, WarningArray, MessageArray, 0, 1);
+		Context.SetCompileSummary(CompileResult);
+		Context.AddWarning(TEXT("compile_busy"), BusyMessage, AssetPath);
+		return Context.BuildResult(false);
 	}
 
 	const bool bHasGeneratedClass = (WidgetBP->GeneratedClass != nullptr);
@@ -395,7 +539,13 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 			MessageArray.Add(MakeMessageValue(TEXT("info"), TEXT("Blueprint is already up to date. Recompilation was skipped because the asset is clean.")));
 		}
 
-		return MakeCompileResult(true, GetBlueprintStatusString(WidgetBP->Status), EmptyArray, WarningArray, MessageArray, 0, WarningCount);
+		const TSharedPtr<FJsonObject> CompileResult = MakeCompileResult(true, GetBlueprintStatusString(WidgetBP->Status), EmptyArray, WarningArray, MessageArray, 0, WarningCount);
+		Context.SetCompileSummary(CompileResult);
+		if (WarningCount > 0)
+		{
+			Context.AddWarning(TEXT("compile_warning"), TEXT("Blueprint is already up to date with warnings."), AssetPath);
+		}
+		return Context.BuildResult(true);
 	}
 
 	FCompilerResultsLog CompileResults;
@@ -442,7 +592,21 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 	}
 
 	const bool bSuccess = (Status != BS_Error) && (ErrorCount == 0);
-	return MakeCompileResult(bSuccess, StatusString, ErrorArray, WarningArray, MessageArray, ErrorCount, WarningCount);
+	const TSharedPtr<FJsonObject> CompileResult = MakeCompileResult(bSuccess, StatusString, ErrorArray, WarningArray, MessageArray, ErrorCount, WarningCount);
+	Context.SetCompileSummary(CompileResult);
+	if (!bSuccess)
+	{
+		Context.AddError(TEXT("compile_failed"),
+		                 FString::Printf(TEXT("WidgetBlueprint compile failed with %d errors and %d warnings."), ErrorCount, WarningCount),
+		                 AssetPath);
+	}
+	else if (WarningCount > 0)
+	{
+		Context.AddWarning(TEXT("compile_warning"),
+		                   FString::Printf(TEXT("WidgetBlueprint compile completed with %d warnings."), WarningCount),
+		                   AssetPath);
+	}
+	return Context.BuildResult(bSuccess);
 }
 
 // ---------------------------------------------------------------------------
@@ -661,359 +825,7 @@ void FWidgetTreeBuilder::SetPropertiesFromJson(UObject* Target,
 		return;
 	}
 
-	const UClass* TargetClass = Target->GetClass();
-
-	for (const auto& Pair : PropertiesJson->Values)
-	{
-		const FString& Key = Pair.Key;
-		const TSharedPtr<FJsonValue>& JsonValue = Pair.Value;
-
-		if (!JsonValue.IsValid())
-		{
-			OutErrors.Add(FString::Printf(TEXT("Null JSON value for property '%s'"), *Key));
-			continue;
-		}
-
-		// Find the property by name
-		FProperty* Property = TargetClass->FindPropertyByName(FName(*Key));
-		if (!Property)
-		{
-			OutErrors.Add(FString::Printf(TEXT("Property '%s' not found on class '%s'"),
-				*Key, *TargetClass->GetName()));
-			continue;
-		}
-
-		void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Target);
-
-		// FBoolProperty
-		if (const FBoolProperty* BoolProp = CastField<FBoolProperty>(Property))
-		{
-			bool bValue = false;
-			if (JsonValue->TryGetBool(bValue))
-			{
-				BoolProp->SetPropertyValue(ValuePtr, bValue);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected bool value"), *Key));
-			}
-			continue;
-		}
-
-		// FIntProperty
-		if (const FIntProperty* IntProp = CastField<FIntProperty>(Property))
-		{
-			double NumValue = 0.0;
-			if (JsonValue->TryGetNumber(NumValue))
-			{
-				const int32 IntValue = static_cast<int32>(NumValue);
-				IntProp->SetPropertyValue(ValuePtr, IntValue);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected numeric value"), *Key));
-			}
-			continue;
-		}
-
-		// FInt64Property
-		if (const FInt64Property* Int64Prop = CastField<FInt64Property>(Property))
-		{
-			double NumValue = 0.0;
-			if (JsonValue->TryGetNumber(NumValue))
-			{
-				const int64 Int64Value = static_cast<int64>(NumValue);
-				Int64Prop->SetPropertyValue(ValuePtr, Int64Value);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected numeric value"), *Key));
-			}
-			continue;
-		}
-
-		// FFloatProperty
-		if (const FFloatProperty* FloatProp = CastField<FFloatProperty>(Property))
-		{
-			double NumValue = 0.0;
-			if (JsonValue->TryGetNumber(NumValue))
-			{
-				FloatProp->SetPropertyValue(ValuePtr, static_cast<float>(NumValue));
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected numeric value"), *Key));
-			}
-			continue;
-		}
-
-		// FDoubleProperty
-		if (const FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Property))
-		{
-			double NumValue = 0.0;
-			if (JsonValue->TryGetNumber(NumValue))
-			{
-				DoubleProp->SetPropertyValue(ValuePtr, NumValue);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected numeric value"), *Key));
-			}
-			continue;
-		}
-
-		// FStrProperty
-		if (const FStrProperty* StrProp = CastField<FStrProperty>(Property))
-		{
-			FString StrValue;
-			if (JsonValue->TryGetString(StrValue))
-			{
-				StrProp->SetPropertyValue(ValuePtr, StrValue);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string value"), *Key));
-			}
-			continue;
-		}
-
-		// FNameProperty
-		if (const FNameProperty* NameProp = CastField<FNameProperty>(Property))
-		{
-			FString StrValue;
-			if (JsonValue->TryGetString(StrValue))
-			{
-				NameProp->SetPropertyValue(ValuePtr, FName(*StrValue));
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string value for FName"), *Key));
-			}
-			continue;
-		}
-
-		// FTextProperty
-		if (const FTextProperty* TextProp = CastField<FTextProperty>(Property))
-		{
-			FString StrValue;
-			if (JsonValue->TryGetString(StrValue))
-			{
-				const FText TextValue = FText::FromString(StrValue);
-				TextProp->SetPropertyValue(ValuePtr, TextValue);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string value for FText"), *Key));
-			}
-			continue;
-		}
-
-		// FEnumProperty
-		if (const FEnumProperty* EnumProp = CastField<FEnumProperty>(Property))
-		{
-			FString StrValue;
-			if (JsonValue->TryGetString(StrValue))
-			{
-				const UEnum* Enum = EnumProp->GetEnum();
-				const int64 EnumValue = Enum->GetValueByNameString(StrValue);
-				if (EnumValue == INDEX_NONE)
-				{
-					OutErrors.Add(FString::Printf(TEXT("Property '%s': invalid enum value '%s'"),
-						*Key, *StrValue));
-				}
-				else
-				{
-					EnumProp->GetUnderlyingProperty()->SetIntPropertyValue(ValuePtr, EnumValue);
-				}
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string for enum"), *Key));
-			}
-			continue;
-		}
-
-		// FByteProperty (may have an enum)
-		if (const FByteProperty* ByteProp = CastField<FByteProperty>(Property))
-		{
-			if (ByteProp->Enum)
-			{
-				FString StrValue;
-				if (JsonValue->TryGetString(StrValue))
-				{
-					const int64 EnumValue = ByteProp->Enum->GetValueByNameString(StrValue);
-					if (EnumValue == INDEX_NONE)
-					{
-						OutErrors.Add(FString::Printf(TEXT("Property '%s': invalid enum value '%s'"),
-							*Key, *StrValue));
-					}
-					else
-					{
-						ByteProp->SetIntPropertyValue(ValuePtr, EnumValue);
-					}
-				}
-				else
-				{
-					OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string for byte-enum"), *Key));
-				}
-			}
-			else
-			{
-				double NumValue = 0.0;
-				if (JsonValue->TryGetNumber(NumValue))
-				{
-					ByteProp->SetIntPropertyValue(ValuePtr, static_cast<int64>(NumValue));
-				}
-				else
-				{
-					OutErrors.Add(FString::Printf(TEXT("Property '%s': expected numeric value for byte"), *Key));
-				}
-			}
-			continue;
-		}
-
-		// FStructProperty
-		if (const FStructProperty* StructProp = CastField<FStructProperty>(Property))
-		{
-			const TSharedPtr<FJsonObject> StructObj = JsonValue->AsObject();
-			if (StructObj.IsValid())
-			{
-				// Use FJsonObjectConverter to deserialize the struct
-				const bool bConverted = FJsonObjectConverter::JsonObjectToUStruct(
-					StructObj.ToSharedRef(), StructProp->Struct, ValuePtr);
-
-				if (!bConverted)
-				{
-					OutErrors.Add(FString::Printf(
-						TEXT("Property '%s': JsonObjectToUStruct failed for struct '%s'"),
-						*Key, *StructProp->Struct->GetName()));
-				}
-			}
-			else
-			{
-				// Try ImportText from string
-				FString StrValue;
-				if (JsonValue->TryGetString(StrValue))
-				{
-					const TCHAR* ImportResult = Property->ImportText_Direct(*StrValue, ValuePtr, Target, PPF_None);
-					if (!ImportResult)
-					{
-						OutErrors.Add(FString::Printf(
-							TEXT("Property '%s': ImportText failed for struct value '%s'"),
-							*Key, *StrValue));
-					}
-				}
-				else
-				{
-					OutErrors.Add(FString::Printf(
-						TEXT("Property '%s': expected object or string for struct '%s'"),
-						*Key, *StructProp->Struct->GetName()));
-				}
-			}
-			continue;
-		}
-
-		// FObjectPropertyBase (includes FObjectProperty)
-		if (const FObjectPropertyBase* ObjProp = CastField<FObjectPropertyBase>(Property))
-		{
-			FString PathValue;
-			if (JsonValue->TryGetString(PathValue))
-			{
-				UObject* LoadedObj = StaticLoadObject(UObject::StaticClass(), nullptr, *PathValue);
-				if (LoadedObj)
-				{
-					ObjProp->SetObjectPropertyValue(ValuePtr, LoadedObj);
-				}
-				else
-				{
-					OutErrors.Add(FString::Printf(TEXT("Property '%s': failed to load object at '%s'"),
-						*Key, *PathValue));
-				}
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string path for object"), *Key));
-			}
-			continue;
-		}
-
-		// FSoftObjectProperty
-		if (const FSoftObjectProperty* SoftObjProp = CastField<FSoftObjectProperty>(Property))
-		{
-			FString PathValue;
-			if (JsonValue->TryGetString(PathValue))
-			{
-				const FSoftObjectPtr SoftPtr{FSoftObjectPath{PathValue}};
-				SoftObjProp->SetPropertyValue(ValuePtr, SoftPtr);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string path for soft object"), *Key));
-			}
-			continue;
-		}
-
-		// FSoftClassProperty
-		if (const FSoftClassProperty* SoftClassProp = CastField<FSoftClassProperty>(Property))
-		{
-			FString PathValue;
-			if (JsonValue->TryGetString(PathValue))
-			{
-				const FSoftObjectPtr SoftPtr{FSoftObjectPath{PathValue}};
-				SoftClassProp->SetPropertyValue(ValuePtr, SoftPtr);
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string path for soft class"), *Key));
-			}
-			continue;
-		}
-
-		// FClassProperty
-		if (const FClassProperty* ClassProp = CastField<FClassProperty>(Property))
-		{
-			FString PathValue;
-			if (JsonValue->TryGetString(PathValue))
-			{
-				UClass* LoadedClass = StaticLoadClass(ClassProp->MetaClass, nullptr, *PathValue);
-				if (LoadedClass)
-				{
-					ClassProp->SetObjectPropertyValue(ValuePtr, LoadedClass);
-				}
-				else
-				{
-					OutErrors.Add(FString::Printf(TEXT("Property '%s': failed to load class at '%s'"),
-						*Key, *PathValue));
-				}
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(TEXT("Property '%s': expected string path for class"), *Key));
-			}
-			continue;
-		}
-
-		// DEFAULT: try ImportText from string
-		{
-			FString StrValue;
-			if (JsonValue->TryGetString(StrValue))
-			{
-				const TCHAR* ImportResult = Property->ImportText_Direct(*StrValue, ValuePtr, Target, PPF_None);
-				if (!ImportResult)
-				{
-					OutErrors.Add(FString::Printf(
-						TEXT("Property '%s': ImportText failed for value '%s' (type: %s)"),
-						*Key, *StrValue, *Property->GetClass()->GetName()));
-				}
-			}
-			else
-			{
-				OutErrors.Add(FString::Printf(
-					TEXT("Property '%s': unsupported property type '%s'"),
-					*Key, *Property->GetClass()->GetName()));
-			}
-		}
-	}
+	FPropertySerializer::ApplyPropertiesFromJson(Target, PropertiesJson, OutErrors, false, true);
 }
 
 // ---------------------------------------------------------------------------

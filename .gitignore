@@ -1,0 +1,17 @@
+.artifacts/
+.buildplugin-*/
+.vs/
+*.VC.db
+
+BlueprintExtractor/Binaries/
+BlueprintExtractor/Intermediate/
+
+MCP/dist/
+MCP/node_modules/
+MCP/*.tgz
+
+tests/fixtures/BlueprintExtractorFixture/Binaries/
+tests/fixtures/BlueprintExtractorFixture/DerivedDataCache/
+tests/fixtures/BlueprintExtractorFixture/Intermediate/
+tests/fixtures/BlueprintExtractorFixture/Plugins/
+tests/fixtures/BlueprintExtractorFixture/Saved/

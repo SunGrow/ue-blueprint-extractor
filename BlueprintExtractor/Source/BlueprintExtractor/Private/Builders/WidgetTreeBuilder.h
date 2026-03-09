@@ -17,13 +17,15 @@ struct FWidgetTreeBuilder
 
 	/** Clears existing widget tree and builds a new one from JSON. */
 	static TSharedPtr<FJsonObject> BuildWidgetTree(UWidgetBlueprint* WidgetBP,
-	                                               const TSharedPtr<FJsonObject>& RootWidgetJson);
+	                                               const TSharedPtr<FJsonObject>& RootWidgetJson,
+	                                               bool bValidateOnly = false);
 
 	/** Patches properties and/or slot config on an existing widget by name. */
 	static TSharedPtr<FJsonObject> ModifyWidget(UWidgetBlueprint* WidgetBP,
 	                                            const FString& WidgetName,
 	                                            const TSharedPtr<FJsonObject>& PropertiesJson,
-	                                            const TSharedPtr<FJsonObject>& SlotJson);
+	                                            const TSharedPtr<FJsonObject>& SlotJson,
+	                                            bool bValidateOnly = false);
 
 	/** Triggers blueprint compile and returns errors/warnings. */
 	static TSharedPtr<FJsonObject> CompileWidgetBlueprint(UWidgetBlueprint* WidgetBP);

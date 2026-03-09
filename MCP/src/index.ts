@@ -1,16 +1,18 @@
 #!/usr/bin/env node
+import { pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { UEClient } from './ue-client.js';
 import { compactBlueprint } from './compactor.js';
 
-const client = new UEClient();
+export type UEClientLike = Pick<UEClient, 'callSubsystem'>;
 
-const server = new McpServer({
-  name: 'blueprint-extractor',
-  version: '1.8.0',
-});
+export function createBlueprintExtractorServer(client: UEClientLike = new UEClient()) {
+  const server = new McpServer({
+    name: 'blueprint-extractor',
+    version: '1.9.0',
+  });
 
 // Shared scope enum with detailed descriptions
 const scopeEnum = z.enum([
@@ -65,6 +67,90 @@ server.resource(
     }],
   }),
 );
+
+server.resource(
+  'write-capabilities',
+  'blueprint://write-capabilities',
+  {
+    description: 'Reference for explicit-save authoring workflows, write-result shape, and currently supported write-capable asset families.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Write Capabilities',
+        '',
+        'General rules:',
+        '- Write tools mutate assets in the running UE editor and return structured diagnostics.',
+        '- Writes do NOT auto-save packages. Call save_assets after successful mutations you want to persist.',
+        '- Write responses include: success, operation, assetPath, assetClass, changedObjects, dirtyPackages, diagnostics, and optional validation/compile summaries.',
+        '',
+        'Current write-capable families:',
+        '- WidgetBlueprint: create_widget_blueprint, build_widget_tree, modify_widget, modify_widget_blueprint, compile_widget_blueprint',
+        '- DataAsset: create_data_asset, modify_data_asset',
+        '- DataTable: create_data_table, modify_data_table',
+        '- Curve: create_curve, modify_curve',
+        '- CurveTable: create_curve_table, modify_curve_table',
+        '- MaterialInstance: create_material_instance, modify_material_instance',
+        '- UserDefinedStruct: create_user_defined_struct, modify_user_defined_struct',
+        '- UserDefinedEnum: create_user_defined_enum, modify_user_defined_enum',
+        '- Blackboard: create_blackboard, modify_blackboard',
+        '- BehaviorTree: create_behavior_tree, modify_behavior_tree',
+        '- StateTree: create_state_tree, modify_state_tree',
+        '- AnimSequence: create_anim_sequence, modify_anim_sequence',
+        '- AnimMontage: create_anim_montage, modify_anim_montage',
+        '- BlendSpace: create_blend_space, modify_blend_space',
+        '- Blueprint members: create_blueprint, modify_blueprint_members',
+        '- Shared persistence: save_assets',
+        '',
+        'Supported selectors and operation surfaces:',
+        '- UserDefinedStruct: field selector by guid or name; operations replace_fields, patch_field, rename_field, remove_field, reorder_fields.',
+        '- UserDefinedEnum: entry selector by name; operations replace_entries, rename_entry, remove_entry, reorder_entries.',
+        '- Blackboard: key selector by entryName; operations replace_keys, patch_key, remove_key, set_parent.',
+        '- BehaviorTree: node selector by nodePath; operations replace_tree, patch_node, patch_attachment, set_blackboard.',
+        '- StateTree: selectors by stateId/statePath, editorNodeId, or transitionId; operations replace_tree, patch_state, patch_editor_node, patch_transition, set_schema.',
+        '- AnimSequence: notify selector by notifyId/notifyGuid with notifyIndex or track metadata as fallback; operations replace_notifies, patch_notify, replace_sync_markers, replace_curve_metadata.',
+        '- AnimMontage: notify selector by notifyId/notifyGuid with notifyIndex or track metadata as fallback; operations replace_notifies, patch_notify, replace_sections, replace_slots.',
+        '- BlendSpace: sample selector by sampleIndex; operations replace_samples, patch_sample, set_axes.',
+        '- Blueprint members: selectors by variableName, componentName, and functionName; operations replace_variables, patch_variable, replace_components, patch_component, replace_function_stubs, patch_class_defaults, compile.',
+        '',
+        'WidgetBlueprint guidance:',
+        '- build_widget_tree is still a full-tree replace operation.',
+        '- modify_widget_blueprint is the higher-level alias: replace_tree, patch_widget, or compile.',
+        '- compile_widget_blueprint validates the asset but still does not save it.',
+        '',
+        'Explicit deferrals:',
+        '- No arbitrary Blueprint, Material, Niagara, or BehaviorTree graph synthesis.',
+        '- No ControlRig, IK controller, or live world editing surfaces.',
+        '- Animation authoring is limited to metadata, sections, slots, samples, notifies, sync markers, and curve metadata; raw authored track synthesis is out of scope.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+async function callSubsystemJson(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const result = await client.callSubsystem(method, params);
+  const parsed = JSON.parse(result) as Record<string, unknown>;
+  if (typeof parsed.error === 'string' && parsed.error.length > 0) {
+    throw new Error(parsed.error);
+  }
+  return parsed;
+}
+
+function jsonToolSuccess(parsed: Record<string, unknown>) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+    structuredContent: parsed,
+  };
+}
+
+function jsonToolError(e: unknown) {
+  return {
+    content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
+    isError: true,
+  };
+}
 
 // Tool 1: extract_blueprint
 server.registerTool(
@@ -849,6 +935,229 @@ const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
   children: z.array(WidgetNodeSchema).optional().describe('Child widgets (only valid for panel widgets)'),
 }));
 
+const WidgetBlueprintMutationOperationSchema = z.enum([
+  'replace_tree',
+  'patch_widget',
+  'compile',
+]);
+
+const PropertyEntrySchema = z.object({
+  name: z.string(),
+  value: z.unknown(),
+});
+
+const DataTableRowSchema = z.object({
+  rowName: z.string().describe('Row name/key in the table.'),
+  values: z.record(z.string(), z.unknown()).optional().describe(
+    'Optional row values object keyed by property name.',
+  ),
+  properties: z.union([
+    z.record(z.string(), z.unknown()),
+    z.array(PropertyEntrySchema),
+  ]).optional().describe(
+    'Optional row property payload. Accepts either a property map or the extractor-style [{name, value}] array.',
+  ),
+});
+
+const CurveInterpModeSchema = z.enum([
+  'None',
+  'Linear',
+  'Constant',
+  'Cubic',
+]);
+
+const CurveExtrapolationSchema = z.enum([
+  'None',
+  'Cycle',
+  'CycleWithOffset',
+  'Oscillate',
+  'Linear',
+  'Constant',
+]);
+
+const RichCurveKeySchema = z.object({
+  time: z.number(),
+  value: z.number(),
+  arriveTangent: z.number().optional(),
+  leaveTangent: z.number().optional(),
+  interpMode: CurveInterpModeSchema.optional(),
+});
+
+const CurveChannelSchema = z.object({
+  defaultValue: z.number().nullable().optional(),
+  preInfinityExtrap: CurveExtrapolationSchema.optional(),
+  postInfinityExtrap: CurveExtrapolationSchema.optional(),
+  keys: z.array(RichCurveKeySchema).optional(),
+});
+
+const CurveTypeSchema = z.enum([
+  'Float',
+  'Vector',
+  'LinearColor',
+]);
+
+const CurveTableModeSchema = z.enum([
+  'RichCurves',
+  'SimpleCurves',
+]);
+
+const CurveKeyDeleteSchema = z.object({
+  channel: z.string(),
+  time: z.number(),
+});
+
+const CurveKeyUpsertSchema = z.object({
+  channel: z.string(),
+  key: RichCurveKeySchema,
+});
+
+const CurveTableRowSchema = z.object({
+  rowName: z.string(),
+  curve: CurveChannelSchema,
+});
+
+const JsonObjectSchema = z.record(z.string(), z.unknown());
+
+const UserDefinedStructMutationOperationSchema = z.enum([
+  'replace_fields',
+  'patch_field',
+  'rename_field',
+  'remove_field',
+  'reorder_fields',
+]);
+
+const UserDefinedEnumMutationOperationSchema = z.enum([
+  'replace_entries',
+  'rename_entry',
+  'remove_entry',
+  'reorder_entries',
+]);
+
+const BlackboardMutationOperationSchema = z.enum([
+  'replace_keys',
+  'patch_key',
+  'remove_key',
+  'set_parent',
+]);
+
+const BehaviorTreeMutationOperationSchema = z.enum([
+  'replace_tree',
+  'patch_node',
+  'patch_attachment',
+  'set_blackboard',
+]);
+
+const StateTreeMutationOperationSchema = z.enum([
+  'replace_tree',
+  'patch_state',
+  'patch_editor_node',
+  'patch_transition',
+  'set_schema',
+]);
+
+const AnimSequenceMutationOperationSchema = z.enum([
+  'replace_notifies',
+  'patch_notify',
+  'replace_sync_markers',
+  'replace_curve_metadata',
+]);
+
+const AnimMontageMutationOperationSchema = z.enum([
+  'replace_notifies',
+  'patch_notify',
+  'replace_sections',
+  'replace_slots',
+]);
+
+const BlendSpaceMutationOperationSchema = z.enum([
+  'replace_samples',
+  'patch_sample',
+  'set_axes',
+]);
+
+const BlueprintMemberMutationOperationSchema = z.enum([
+  'replace_variables',
+  'patch_variable',
+  'replace_components',
+  'patch_component',
+  'replace_function_stubs',
+  'patch_class_defaults',
+  'compile',
+]);
+
+const UserDefinedStructFieldSchema = z.object({
+  guid: z.string().optional(),
+  name: z.string().optional(),
+  friendlyName: z.string().optional(),
+  pinType: JsonObjectSchema.optional(),
+  metadata: JsonObjectSchema.optional(),
+  defaultValue: z.unknown().optional(),
+}).passthrough();
+
+const UserDefinedEnumEntrySchema = z.object({
+  name: z.string(),
+  displayName: z.string().optional(),
+}).passthrough();
+
+const BlackboardKeySchema = z.object({
+  entryName: z.string().optional(),
+  name: z.string().optional(),
+  keyTypePath: z.string().optional(),
+  baseClass: z.string().optional(),
+  enumType: z.string().optional(),
+  enumName: z.string().optional(),
+  properties: JsonObjectSchema.optional(),
+}).passthrough();
+
+const BehaviorTreeNodeSelectorSchema = z.object({
+  nodePath: z.string().optional(),
+}).passthrough();
+
+const StateTreeStateSelectorSchema = z.object({
+  stateId: z.string().optional(),
+  id: z.string().optional(),
+  statePath: z.string().optional(),
+  path: z.string().optional(),
+  stateName: z.string().optional(),
+  name: z.string().optional(),
+}).passthrough();
+
+const StateTreeEditorNodeSelectorSchema = z.object({
+  editorNodeId: z.string().optional(),
+  id: z.string().optional(),
+}).passthrough();
+
+const StateTreeTransitionSelectorSchema = z.object({
+  transitionId: z.string().optional(),
+  id: z.string().optional(),
+}).passthrough();
+
+const AnimationNotifySelectorSchema = z.object({
+  notifyId: z.string().optional(),
+  notifyGuid: z.string().optional(),
+  notifyName: z.string().optional(),
+  notifyIndex: z.number().int().min(0).optional(),
+  trackIndex: z.number().int().min(0).optional(),
+  trackName: z.string().optional(),
+}).passthrough();
+
+const BlendParameterSchema = z.object({
+  name: z.string().optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  gridNum: z.number().int().optional(),
+  interpolationType: z.string().optional(),
+  snapToGrid: z.boolean().optional(),
+  wrapInput: z.boolean().optional(),
+}).passthrough();
+
+const BlendSpaceSampleSchema = z.object({
+  sampleIndex: z.number().int().min(0).optional(),
+  animation: z.string().optional(),
+  animSequence: z.string().optional(),
+  sampleValue: JsonObjectSchema.optional(),
+}).passthrough();
+
 // Tool 8: create_widget_blueprint
 server.registerTool(
   'create_widget_blueprint',
@@ -859,7 +1168,7 @@ server.registerTool(
 USAGE: Provide the content path where the asset should be created and optionally a parent class.
 Default parent is UserWidget. For CommonUI widgets use CommonActivatableWidget, CommonButtonBase, etc.
 
-RETURNS: JSON with success status, asset path, and parent class name.`,
+RETURNS: JSON with success status, asset path, parent class name, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path for the new WidgetBlueprint (e.g. /Game/UI/WBP_MyWidget)',
@@ -905,7 +1214,7 @@ WARNING: This REPLACES the existing widget tree — all current widgets will be 
 USAGE: Provide the asset path and a root_widget object describing the full tree recursively.
 Each widget node has: class, name, is_variable, slot (optional), properties (optional), children (optional).
 
-RETURNS: JSON with success status, widget count, and any errors.`,
+RETURNS: JSON with success status, widget count, validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to an existing WidgetBlueprint',
@@ -949,7 +1258,7 @@ server.registerTool(
 USAGE: Specify the asset path, widget name, and the properties/slot values to change.
 Only specified properties are modified — others remain unchanged.
 
-RETURNS: JSON with success status, widget name, class, and any errors.`,
+RETURNS: JSON with success status, widget name, class, validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint',
@@ -1000,7 +1309,7 @@ server.registerTool(
 
 USAGE: Call after building or modifying a widget tree to verify compilation.
 
-RETURNS: JSON with success status, compilation status, error count, warning count, and error details.`,
+RETURNS: JSON with success status, compile summary, dirtyPackages, and diagnostics. Compilation does not save the asset.`,
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint to compile',
@@ -1028,13 +1337,1788 @@ RETURNS: JSON with success status, compilation status, error count, warning coun
   },
 );
 
+server.registerTool(
+  'create_data_asset',
+  {
+    title: 'Create DataAsset',
+    description: `Create a concrete UE5 DataAsset asset and optionally initialize top-level editable properties.
+
+USAGE:
+- Provide a content path for the new asset and a concrete UDataAsset subclass path.
+- properties is optional and applies a reflected property patch to the new asset.
+- Set validate_only=true to preflight the class and property payload without creating the asset.
+
+RETURNS: JSON with mutation diagnostics, dirtyPackages, and the created asset class. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new DataAsset (e.g. /Game/Data/DA_NewItem)',
+      ),
+      asset_class_path: z.string().describe(
+        'Concrete UDataAsset subclass path or class object path (e.g. /Script/MyModule.MyDataAssetClass or /Game/Blueprints/BP_MyDataAssetClass.BP_MyDataAssetClass_C).',
+      ),
+      properties: z.record(z.string(), z.unknown()).optional().describe(
+        'Optional top-level editable property payload to apply after creation.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the class and property payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create DataAsset',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, asset_class_path, properties, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('CreateDataAsset', {
+        AssetPath: asset_path,
+        AssetClassPath: asset_class_path,
+        PropertiesJson: JSON.stringify(properties ?? {}),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'modify_data_asset',
+  {
+    title: 'Modify DataAsset',
+    description: `Apply a reflected property patch to an existing UE5 DataAsset.
+
+USAGE:
+- Provide the asset path and a properties object containing editable top-level property values.
+- Set validate_only=true to check the patch without mutating the asset.
+- This tool is best for property-driven DataAssets; use extract_dataasset first to inspect the current schema and values.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the DataAsset to modify.',
+      ),
+      properties: z.record(z.string(), z.unknown()).describe(
+        'Top-level editable property patch payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the property payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify DataAsset',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, properties, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('ModifyDataAsset', {
+        AssetPath: asset_path,
+        PropertiesJson: JSON.stringify(properties ?? {}),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'create_data_table',
+  {
+    title: 'Create DataTable',
+    description: `Create a UE5 DataTable with a concrete row struct and optional initial rows.
+
+USAGE:
+- Provide the new asset path and a row struct path.
+- rows accepts either values objects or extractor-style properties arrays.
+- Set validate_only=true to validate the row struct and rows without creating the asset.
+
+RETURNS: JSON with validation summary, rowStructType, rowCount, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new DataTable (e.g. /Game/Data/DT_Items).',
+      ),
+      row_struct_path: z.string().describe(
+        'Script struct path for the row type (e.g. /Script/MyModule.MyTableRow).',
+      ),
+      rows: z.array(DataTableRowSchema).default([]).describe(
+        'Optional initial rows. Each row accepts either values or properties.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the row struct and rows without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create DataTable',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, row_struct_path, rows, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('CreateDataTable', {
+        AssetPath: asset_path,
+        RowStructPath: row_struct_path,
+        RowsJson: JSON.stringify(rows ?? []),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'modify_data_table',
+  {
+    title: 'Modify DataTable',
+    description: `Modify a UE5 DataTable by upserting rows, deleting rows, or replacing the full row set.
+
+USAGE:
+- rows upserts row payloads. Existing row values are preserved for omitted fields.
+- delete_rows removes rows by name.
+- replace_rows clears the table before applying rows.
+- Set validate_only=true to check the payload without mutating the asset.
+
+RETURNS: JSON with validation summary, rowCount, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the DataTable to modify.',
+      ),
+      rows: z.array(DataTableRowSchema).optional().describe(
+        'Optional row upsert payload.',
+      ),
+      delete_rows: z.array(z.string()).optional().describe(
+        'Optional row names to delete.',
+      ),
+      replace_rows: z.boolean().default(false).describe(
+        'When true, clear the table before applying rows.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify DataTable',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, rows, delete_rows, replace_rows, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('ModifyDataTable', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify({
+          rows: rows ?? [],
+          deleteRows: delete_rows ?? [],
+          replaceRows: replace_rows,
+        }),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'create_curve',
+  {
+    title: 'Create Curve',
+    description: `Create a UE5 curve asset (Float, Vector, or LinearColor) and optionally initialize channel data.
+
+USAGE:
+- Provide the new asset path and curve_type.
+- channels should follow the extractor shape: default for Float, x/y/z for Vector, r/g/b/a for LinearColor.
+- Set validate_only=true to verify the channel payload without creating the asset.
+
+RETURNS: JSON with curveType, validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new curve asset.',
+      ),
+      curve_type: CurveTypeSchema.describe(
+        'Concrete curve asset type to create.',
+      ),
+      channels: z.record(z.string(), CurveChannelSchema).default({}).describe(
+        'Optional channel payload keyed by channel name.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the channel payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create Curve',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, curve_type, channels, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('CreateCurve', {
+        AssetPath: asset_path,
+        CurveType: curve_type,
+        ChannelsJson: JSON.stringify(channels ?? {}),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'modify_curve',
+  {
+    title: 'Modify Curve',
+    description: `Modify a UE5 curve asset by patching channels and upserting or deleting individual keys.
+
+USAGE:
+- channels replaces the specified channel payloads using the extractor shape.
+- delete_keys removes keys by channel and time.
+- upsert_keys inserts or updates keys by channel and time.
+- Set validate_only=true to verify the payload without mutating the asset.
+
+RETURNS: JSON with curveType, validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the curve asset to modify.',
+      ),
+      channels: z.record(z.string(), CurveChannelSchema).optional().describe(
+        'Optional channel patch payload.',
+      ),
+      delete_keys: z.array(CurveKeyDeleteSchema).optional().describe(
+        'Optional key deletions by channel and time.',
+      ),
+      upsert_keys: z.array(CurveKeyUpsertSchema).optional().describe(
+        'Optional key upserts by channel.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Curve',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, channels, delete_keys, upsert_keys, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('ModifyCurve', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify({
+          channels: channels ?? {},
+          deleteKeys: delete_keys ?? [],
+          upsertKeys: upsert_keys ?? [],
+        }),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'create_curve_table',
+  {
+    title: 'Create CurveTable',
+    description: `Create a UE5 CurveTable in RichCurves or SimpleCurves mode and optionally initialize rows.
+
+USAGE:
+- Provide the new asset path and curve_table_mode.
+- rows accepts extractor-shaped curve rows with rowName and curve.
+- Set validate_only=true to verify the mode and rows without creating the asset.
+
+RETURNS: JSON with curveTableMode, rowCount, validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new CurveTable.',
+      ),
+      curve_table_mode: CurveTableModeSchema.describe(
+        'CurveTable storage mode.',
+      ),
+      rows: z.array(CurveTableRowSchema).default([]).describe(
+        'Optional initial curve rows.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mode and rows without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create CurveTable',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, curve_table_mode, rows, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('CreateCurveTable', {
+        AssetPath: asset_path,
+        CurveTableMode: curve_table_mode,
+        RowsJson: JSON.stringify(rows ?? []),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'modify_curve_table',
+  {
+    title: 'Modify CurveTable',
+    description: `Modify a UE5 CurveTable by upserting rows, deleting rows, or replacing the full row set.
+
+USAGE:
+- rows upserts row payloads. Existing rows are preserved for omitted fields.
+- delete_rows removes rows by name.
+- replace_rows clears the table before applying rows.
+- Set validate_only=true to check the payload without mutating the asset.
+
+RETURNS: JSON with curveTableMode, rowCount, validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the CurveTable to modify.',
+      ),
+      rows: z.array(CurveTableRowSchema).optional().describe(
+        'Optional curve row upsert payload.',
+      ),
+      delete_rows: z.array(z.string()).optional().describe(
+        'Optional row names to delete.',
+      ),
+      replace_rows: z.boolean().default(false).describe(
+        'When true, clear the table before applying rows.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify CurveTable',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, rows, delete_rows, replace_rows, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('ModifyCurveTable', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify({
+          rows: rows ?? [],
+          deleteRows: delete_rows ?? [],
+          replaceRows: replace_rows,
+        }),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'create_material_instance',
+  {
+    title: 'Create MaterialInstance',
+    description: `Create a UE5 MaterialInstanceConstant from a parent material or material instance.
+
+USAGE:
+- Provide the new asset path and the parent material path.
+- Set validate_only=true to verify the parent material path without creating the asset.
+
+RETURNS: JSON with diagnostics, dirtyPackages, and parentMaterial. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new material instance (e.g. /Game/Materials/MI_NewSurface).',
+      ),
+      parent_material_path: z.string().describe(
+        'UE content path to the parent material or material instance.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the parent material path without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create MaterialInstance',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, parent_material_path, validate_only }) => {
+    try {
+      const result = await client.callSubsystem('CreateMaterialInstance', {
+        AssetPath: asset_path,
+        ParentMaterialPath: parent_material_path,
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'modify_material_instance',
+  {
+    title: 'Modify MaterialInstance',
+    description: `Modify a UE5 MaterialInstanceConstant by reparenting it or applying scalar/vector/texture/static-switch parameter overrides.
+
+USAGE:
+- Provide any subset of parentMaterial, scalarParameters, vectorParameters, textureParameters, and staticSwitchParameters.
+- Set validate_only=true to verify the payload without mutating the asset.
+- textureParameters entries may set value to null to clear a texture override.
+
+RETURNS: JSON with validation summary, diagnostics, and dirtyPackages. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the MaterialInstanceConstant to modify.',
+      ),
+      parentMaterial: z.string().optional().describe(
+        'Optional new parent material or material instance path.',
+      ),
+      scalarParameters: z.array(z.object({
+        name: z.string(),
+        value: z.number(),
+      })).optional().describe(
+        'Optional scalar override list.',
+      ),
+      vectorParameters: z.array(z.object({
+        name: z.string(),
+        value: z.object({
+          r: z.number(),
+          g: z.number(),
+          b: z.number(),
+          a: z.number(),
+        }),
+      })).optional().describe(
+        'Optional vector override list.',
+      ),
+      textureParameters: z.array(z.object({
+        name: z.string(),
+        value: z.string().nullable(),
+      })).optional().describe(
+        'Optional texture override list. Set value to null to clear an override.',
+      ),
+      staticSwitchParameters: z.array(z.object({
+        name: z.string(),
+        value: z.boolean(),
+      })).optional().describe(
+        'Optional static switch override list.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify MaterialInstance',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, validate_only, ...payload }) => {
+    try {
+      const result = await client.callSubsystem('ModifyMaterialInstance', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload),
+        bValidateOnly: validate_only,
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'modify_widget_blueprint',
+  {
+    title: 'Modify Widget Blueprint',
+    description: `High-level WidgetBlueprint mutation tool.
+
+USAGE:
+- operation="replace_tree": provide root_widget to rebuild the full widget tree.
+- operation="patch_widget": provide widget_name and properties and/or slot to patch one widget.
+- operation="compile": compile the asset and return diagnostics without saving.
+- Set compile_after=true on replace_tree or patch_widget to run a compile immediately after mutation.
+
+RETURNS: JSON with mutation result, optional compile summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint',
+      ),
+      operation: WidgetBlueprintMutationOperationSchema.describe(
+        'WidgetBlueprint mutation mode: replace_tree, patch_widget, or compile.',
+      ),
+      root_widget: WidgetNodeSchema.optional().describe(
+        'Required for operation="replace_tree".',
+      ),
+      widget_name: z.string().optional().describe(
+        'Required for operation="patch_widget".',
+      ),
+      properties: z.record(z.string(), z.unknown()).optional().describe(
+        'Property patch for operation="patch_widget".',
+      ),
+      slot: z.record(z.string(), z.unknown()).optional().describe(
+        'Slot patch for operation="patch_widget".',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, only validate the requested mutation and return diagnostics without modifying the asset.',
+      ),
+      compile_after: z.boolean().default(false).describe(
+        'When true, compile after replace_tree or patch_widget and include compile results.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Widget Blueprint',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, root_widget, widget_name, properties, slot, validate_only, compile_after }) => {
+    try {
+      let mutation: any;
+
+      if (operation === 'replace_tree') {
+        if (!root_widget) {
+          return { content: [{ type: 'text' as const, text: 'Error: root_widget is required for operation="replace_tree"' }], isError: true };
+        }
+        const result = await client.callSubsystem('BuildWidgetTree', {
+          AssetPath: asset_path,
+          WidgetTreeJson: JSON.stringify(root_widget),
+          bValidateOnly: validate_only,
+        });
+        mutation = JSON.parse(result);
+      } else if (operation === 'patch_widget') {
+        if (!widget_name) {
+          return { content: [{ type: 'text' as const, text: 'Error: widget_name is required for operation="patch_widget"' }], isError: true };
+        }
+        const result = await client.callSubsystem('ModifyWidget', {
+          AssetPath: asset_path,
+          WidgetName: widget_name,
+          PropertiesJson: JSON.stringify(properties ?? {}),
+          SlotJson: JSON.stringify(slot ?? {}),
+          bValidateOnly: validate_only,
+        });
+        mutation = JSON.parse(result);
+      } else {
+        const result = await client.callSubsystem('CompileWidgetBlueprint', { AssetPath: asset_path });
+        mutation = JSON.parse(result);
+      }
+
+      if (mutation.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${mutation.error}` }], isError: true };
+      }
+
+      let compileResult: any = null;
+      if (compile_after && !validate_only && operation !== 'compile' && mutation.success) {
+        const compile = await client.callSubsystem('CompileWidgetBlueprint', { AssetPath: asset_path });
+        compileResult = JSON.parse(compile);
+        if (compileResult.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${compileResult.error}` }], isError: true };
+        }
+      }
+
+      const structuredContent = compileResult
+        ? { ...mutation, compile: compileResult.compile ?? compileResult }
+        : mutation;
+
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(structuredContent, null, 2) }],
+        structuredContent,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'create_user_defined_struct',
+  {
+    title: 'Create UserDefinedStruct',
+    description: `Create a UE5 UserDefinedStruct asset from extractor-shaped field definitions.
+
+USAGE:
+- payload may be the direct struct payload or the extractor wrapper { userDefinedStruct: { ... } }.
+- fields should follow the extractor shape, including pinType, metadata, and defaultValue.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new UserDefinedStruct asset.',
+      ),
+      payload: JsonObjectSchema.default({}).describe(
+        'Extractor-shaped UserDefinedStruct payload. Accepts either { fields: [...] } or { userDefinedStruct: { fields: [...] } }.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the field payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create UserDefinedStruct',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateUserDefinedStruct', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_user_defined_struct',
+  {
+    title: 'Modify UserDefinedStruct',
+    description: `Modify a UE5 UserDefinedStruct with field-level authoring operations.
+
+USAGE:
+- operation="replace_fields": payload.fields replaces the full field list using extractor-shaped definitions.
+- operation="patch_field" or "rename_field": payload identifies the field by guid or name.
+- operation="remove_field": payload identifies the field by guid or name.
+- operation="reorder_fields": payload.fieldOrder supplies the desired field order.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the UserDefinedStruct to modify.',
+      ),
+      operation: UserDefinedStructMutationOperationSchema.describe(
+        'Field-level mutation operation to apply.',
+      ),
+      payload: z.object({
+        userDefinedStruct: z.object({
+          fields: z.array(UserDefinedStructFieldSchema).optional(),
+        }).passthrough().optional(),
+        fields: z.array(UserDefinedStructFieldSchema).optional(),
+        field: UserDefinedStructFieldSchema.optional(),
+        guid: z.string().optional(),
+        name: z.string().optional(),
+        fieldName: z.string().optional(),
+        newName: z.string().optional(),
+        fieldOrder: z.array(z.string()).optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Field selectors accept guid or name.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify UserDefinedStruct',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyUserDefinedStruct', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_user_defined_enum',
+  {
+    title: 'Create UserDefinedEnum',
+    description: `Create a UE5 UserDefinedEnum asset from extractor-shaped entry payloads.
+
+USAGE:
+- payload may be the direct enum payload or the extractor wrapper { userDefinedEnum: { ... } }.
+- entries should follow the extractor shape with name and optional displayName.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new UserDefinedEnum asset.',
+      ),
+      payload: z.object({
+        userDefinedEnum: z.object({
+          entries: z.array(UserDefinedEnumEntrySchema).optional(),
+        }).passthrough().optional(),
+        entries: z.array(UserDefinedEnumEntrySchema).optional(),
+      }).passthrough().default({}).describe(
+        'Extractor-shaped UserDefinedEnum payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the entry payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create UserDefinedEnum',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateUserDefinedEnum', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_user_defined_enum',
+  {
+    title: 'Modify UserDefinedEnum',
+    description: `Modify a UE5 UserDefinedEnum with entry-level authoring operations.
+
+USAGE:
+- operation="replace_entries": payload.entries replaces the full entry list.
+- operation="rename_entry" or "remove_entry": payload selects an entry by name.
+- operation="reorder_entries": payload.entries supplies the desired ordered entry list.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the UserDefinedEnum to modify.',
+      ),
+      operation: UserDefinedEnumMutationOperationSchema.describe(
+        'Entry-level mutation operation to apply.',
+      ),
+      payload: z.object({
+        userDefinedEnum: z.object({
+          entries: z.array(UserDefinedEnumEntrySchema).optional(),
+        }).passthrough().optional(),
+        entries: z.array(UserDefinedEnumEntrySchema).optional(),
+        name: z.string().optional(),
+        entryName: z.string().optional(),
+        newName: z.string().optional(),
+        displayName: z.string().optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Entry selectors use name.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify UserDefinedEnum',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyUserDefinedEnum', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_blackboard',
+  {
+    title: 'Create Blackboard',
+    description: `Create a UE5 BlackboardData asset from extractor-shaped key payloads.
+
+USAGE:
+- payload may be direct key data or the extractor wrapper { blackboard: { ... } }.
+- keys should use extractor fields such as entryName, keyTypePath, baseClass, enumType, enumName, description, category, instanceSync, and properties.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new BlackboardData asset.',
+      ),
+      payload: z.object({
+        blackboard: z.object({
+          parentBlackboard: z.string().optional(),
+          keys: z.array(BlackboardKeySchema).optional(),
+        }).passthrough().optional(),
+        parentBlackboard: z.string().optional(),
+        keys: z.array(BlackboardKeySchema).optional(),
+      }).passthrough().default({}).describe(
+        'Extractor-shaped Blackboard payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the blackboard payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create Blackboard',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateBlackboard', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_blackboard',
+  {
+    title: 'Modify Blackboard',
+    description: `Modify a UE5 BlackboardData asset with declarative key operations.
+
+USAGE:
+- operation="replace_keys": payload.keys replaces the local key list using extractor-shaped entries.
+- operation="patch_key" or "remove_key": payload selects a key by entryName and may update keyTypePath or reflected properties.
+- operation="set_parent": payload.parentBlackboard sets or clears the parent blackboard.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the BlackboardData asset to modify.',
+      ),
+      operation: BlackboardMutationOperationSchema.describe(
+        'Blackboard mutation operation to apply.',
+      ),
+      payload: z.object({
+        blackboard: z.object({
+          parentBlackboard: z.string().optional(),
+          keys: z.array(BlackboardKeySchema).optional(),
+        }).passthrough().optional(),
+        parentBlackboard: z.string().optional(),
+        keys: z.array(BlackboardKeySchema).optional(),
+        entryName: z.string().optional(),
+        name: z.string().optional(),
+        key: BlackboardKeySchema.optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Key selectors use entryName.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Blackboard',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyBlackboard', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_behavior_tree',
+  {
+    title: 'Create BehaviorTree',
+    description: `Create a UE5 BehaviorTree asset from extractor-shaped tree payloads.
+
+USAGE:
+- payload may be the direct tree payload or the extractor wrapper { behaviorTree: { ... } }.
+- rootNode should use extractor-shaped node objects, including nodeClassPath, properties, decorators, services, and child ordering.
+- Set validate_only=true to preflight the tree without creating the asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new BehaviorTree asset.',
+      ),
+      payload: z.object({
+        behaviorTree: JsonObjectSchema.optional(),
+        blackboardAsset: z.string().optional(),
+        rootNode: JsonObjectSchema.optional(),
+      }).passthrough().default({}).describe(
+        'Extractor-shaped BehaviorTree payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the tree payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create BehaviorTree',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateBehaviorTree', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_behavior_tree',
+  {
+    title: 'Modify BehaviorTree',
+    description: `Modify a UE5 BehaviorTree with declarative subtree and attachment operations.
+
+USAGE:
+- operation="replace_tree": payload rootNode replaces the full tree using extractor-shaped node objects.
+- operation="patch_node" or "patch_attachment": payload selects by nodePath and applies reflected property changes.
+- operation="set_blackboard": payload.blackboardAsset updates the linked blackboard asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the BehaviorTree asset to modify.',
+      ),
+      operation: BehaviorTreeMutationOperationSchema.describe(
+        'BehaviorTree mutation operation to apply.',
+      ),
+      payload: z.object({
+        behaviorTree: JsonObjectSchema.optional(),
+        selector: BehaviorTreeNodeSelectorSchema.optional(),
+        nodePath: z.string().optional(),
+        blackboardAsset: z.string().optional(),
+        rootNode: JsonObjectSchema.optional(),
+        node: JsonObjectSchema.optional(),
+        attachment: JsonObjectSchema.optional(),
+        properties: JsonObjectSchema.optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Targeted edits use nodePath.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify BehaviorTree',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyBehaviorTree', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_state_tree',
+  {
+    title: 'Create StateTree',
+    description: `Create a UE5 StateTree asset from extractor-shaped editor data.
+
+USAGE:
+- payload may be the direct tree payload or the extractor wrapper { stateTree: { ... } }.
+- schema is optional but recommended; states, evaluators, globalTasks, and transitions should follow extractor shapes.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation and compile summaries, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new StateTree asset.',
+      ),
+      payload: z.object({
+        stateTree: JsonObjectSchema.optional(),
+        schema: z.string().optional(),
+        states: z.array(JsonObjectSchema).optional(),
+        evaluators: z.array(JsonObjectSchema).optional(),
+        globalTasks: z.array(JsonObjectSchema).optional(),
+      }).passthrough().default({}).describe(
+        'Extractor-shaped StateTree payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate and compile the payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create StateTree',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateStateTree', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_state_tree',
+  {
+    title: 'Modify StateTree',
+    description: `Modify a UE5 StateTree with declarative tree, state, editor-node, and transition operations.
+
+USAGE:
+- operation="replace_tree": payload uses the extractor-shaped StateTree object.
+- operation="patch_state": payload selects a state by stateId or statePath and applies extractor-shaped state data.
+- operation="patch_editor_node": payload selects by editorNodeId and patches nodeStructType, instanceProperties, or nodeProperties.
+- operation="patch_transition": payload selects by transitionId and patches target, timing, or conditions.
+- operation="set_schema": payload.schema changes the StateTree schema class.
+
+RETURNS: JSON with validation and compile summaries, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the StateTree asset to modify.',
+      ),
+      operation: StateTreeMutationOperationSchema.describe(
+        'StateTree mutation operation to apply.',
+      ),
+      payload: z.object({
+        stateTree: JsonObjectSchema.optional(),
+        schema: z.string().optional(),
+        state: JsonObjectSchema.optional(),
+        editorNode: JsonObjectSchema.optional(),
+        transition: JsonObjectSchema.optional(),
+        selector: z.union([
+          StateTreeStateSelectorSchema,
+          StateTreeEditorNodeSelectorSchema,
+          StateTreeTransitionSelectorSchema,
+        ]).optional(),
+        stateId: z.string().optional(),
+        statePath: z.string().optional(),
+        editorNodeId: z.string().optional(),
+        transitionId: z.string().optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Selectors support stateId/statePath, editorNodeId, and transitionId.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate and compile the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify StateTree',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyStateTree', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_anim_sequence',
+  {
+    title: 'Create AnimSequence',
+    description: `Create a UE5 AnimSequence asset from extractor-shaped metadata payloads.
+
+USAGE:
+- payload may be the direct sequence payload or the extractor wrapper { animSequence: { ... } }.
+- payload must include skeleton or skeletonPath on create. previewMesh is optional.
+- notifies, syncMarkers, and curves follow the extractor shape.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new AnimSequence asset.',
+      ),
+      payload: z.object({
+        animSequence: JsonObjectSchema.optional(),
+        skeleton: z.string().optional(),
+        skeletonPath: z.string().optional(),
+        previewMesh: z.string().optional(),
+        previewSkeletalMesh: z.string().optional(),
+        notifies: z.array(JsonObjectSchema).optional(),
+        syncMarkers: z.array(JsonObjectSchema).optional(),
+        curves: z.array(JsonObjectSchema).optional(),
+      }).passthrough().default({}).describe(
+        'Extractor-shaped AnimSequence payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create AnimSequence',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateAnimSequence', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_anim_sequence',
+  {
+    title: 'Modify AnimSequence',
+    description: `Modify a UE5 AnimSequence by replacing or patching notifies, sync markers, and curve metadata.
+
+USAGE:
+- operation="replace_notifies": payload.notifies replaces the authored notify list.
+- operation="patch_notify": payload selects a notify by notifyId or notifyGuid, with index or track metadata as fallback.
+- operation="replace_sync_markers": payload.syncMarkers replaces authored sync markers.
+- operation="replace_curve_metadata": payload.curves replaces authored curve metadata.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the AnimSequence asset to modify.',
+      ),
+      operation: AnimSequenceMutationOperationSchema.describe(
+        'AnimSequence mutation operation to apply.',
+      ),
+      payload: z.object({
+        animSequence: JsonObjectSchema.optional(),
+        selector: AnimationNotifySelectorSchema.optional(),
+        notify: JsonObjectSchema.optional(),
+        notifies: z.array(JsonObjectSchema).optional(),
+        syncMarkers: z.array(JsonObjectSchema).optional(),
+        curves: z.array(JsonObjectSchema).optional(),
+        notifyId: z.string().optional(),
+        notifyGuid: z.string().optional(),
+        notifyIndex: z.number().int().min(0).optional(),
+        trackIndex: z.number().int().min(0).optional(),
+        trackName: z.string().optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Notify selectors prefer notifyId or notifyGuid and fall back to notifyIndex/track metadata.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify AnimSequence',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyAnimSequence', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_anim_montage',
+  {
+    title: 'Create AnimMontage',
+    description: `Create a UE5 AnimMontage asset from extractor-shaped metadata payloads.
+
+USAGE:
+- payload may be the direct montage payload or the extractor wrapper { animMontage: { ... } }.
+- payload should include sourceAnimation or skeleton on create. previewMesh is optional.
+- notifies, sections, and slots follow the extractor shape.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new AnimMontage asset.',
+      ),
+      payload: z.object({
+        animMontage: JsonObjectSchema.optional(),
+        sourceAnimation: z.string().optional(),
+        sourceAnimSequence: z.string().optional(),
+        skeleton: z.string().optional(),
+        skeletonPath: z.string().optional(),
+        previewMesh: z.string().optional(),
+        previewSkeletalMesh: z.string().optional(),
+        notifies: z.array(JsonObjectSchema).optional(),
+        sections: z.array(JsonObjectSchema).optional(),
+        slots: z.array(JsonObjectSchema).optional(),
+      }).passthrough().default({}).describe(
+        'Extractor-shaped AnimMontage payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create AnimMontage',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateAnimMontage', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_anim_montage',
+  {
+    title: 'Modify AnimMontage',
+    description: `Modify a UE5 AnimMontage by replacing or patching notifies, sections, and slot tracks.
+
+USAGE:
+- operation="replace_notifies": payload.notifies replaces montage notifies.
+- operation="patch_notify": payload selects a notify by notifyId or notifyGuid, with index or track metadata as fallback.
+- operation="replace_sections": payload.sections replaces section ordering and next-section links.
+- operation="replace_slots": payload.slots replaces authored slot tracks and referenced animation segments.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the AnimMontage asset to modify.',
+      ),
+      operation: AnimMontageMutationOperationSchema.describe(
+        'AnimMontage mutation operation to apply.',
+      ),
+      payload: z.object({
+        animMontage: JsonObjectSchema.optional(),
+        selector: AnimationNotifySelectorSchema.optional(),
+        notify: JsonObjectSchema.optional(),
+        notifies: z.array(JsonObjectSchema).optional(),
+        sections: z.array(JsonObjectSchema).optional(),
+        slots: z.array(JsonObjectSchema).optional(),
+        notifyId: z.string().optional(),
+        notifyGuid: z.string().optional(),
+        notifyIndex: z.number().int().min(0).optional(),
+        trackIndex: z.number().int().min(0).optional(),
+        trackName: z.string().optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Notify selectors prefer notifyId or notifyGuid and fall back to notifyIndex/track metadata.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify AnimMontage',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyAnimMontage', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_blend_space',
+  {
+    title: 'Create BlendSpace',
+    description: `Create a UE5 BlendSpace or BlendSpace1D asset from extractor-shaped sample and axis payloads.
+
+USAGE:
+- payload may be the direct blend-space payload or the extractor wrapper { blendSpace: { ... } }.
+- payload must include skeleton or skeletonPath on create. Set is1D=true for BlendSpace1D.
+- axisX, axisY, and samples follow the extractor shape.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new BlendSpace asset.',
+      ),
+      payload: z.object({
+        blendSpace: JsonObjectSchema.optional(),
+        skeleton: z.string().optional(),
+        skeletonPath: z.string().optional(),
+        previewMesh: z.string().optional(),
+        previewSkeletalMesh: z.string().optional(),
+        is1D: z.boolean().optional(),
+        axisX: BlendParameterSchema.optional(),
+        axisY: BlendParameterSchema.optional(),
+        samples: z.array(BlendSpaceSampleSchema).optional(),
+      }).passthrough().default({}).describe(
+        'Extractor-shaped BlendSpace payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create BlendSpace',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateBlendSpace', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_blend_space',
+  {
+    title: 'Modify BlendSpace',
+    description: `Modify a UE5 BlendSpace by replacing or patching samples and axis definitions.
+
+USAGE:
+- operation="replace_samples": payload.samples replaces the authored sample list.
+- operation="patch_sample": payload selects a sample by sampleIndex and patches sampleValue or animation.
+- operation="set_axes": payload.axisX and payload.axisY patch axis definitions and interpolation settings.
+
+RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the BlendSpace asset to modify.',
+      ),
+      operation: BlendSpaceMutationOperationSchema.describe(
+        'BlendSpace mutation operation to apply.',
+      ),
+      payload: z.object({
+        blendSpace: JsonObjectSchema.optional(),
+        selector: z.object({
+          sampleIndex: z.number().int().min(0).optional(),
+        }).passthrough().optional(),
+        sample: BlendSpaceSampleSchema.optional(),
+        sampleIndex: z.number().int().min(0).optional(),
+        samples: z.array(BlendSpaceSampleSchema).optional(),
+        axisX: BlendParameterSchema.optional(),
+        axisY: BlendParameterSchema.optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Sample selectors use sampleIndex.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify BlendSpace',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyBlendSpace', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_blueprint',
+  {
+    title: 'Create Blueprint',
+    description: `Create a UE5 Blueprint asset with optional variables, component templates, function stubs, class defaults, and compile.
+
+USAGE:
+- parent_class_path is required and should resolve to the Blueprint parent class.
+- payload may be the direct Blueprint payload or the extractor wrapper { blueprint: { ... } }.
+- payload supports variables, rootComponents, functionStubs/functions, and classDefaults.
+- Set validate_only=true to preflight the payload without creating the asset.
+
+RETURNS: JSON with validation and compile summaries, dirtyPackages, and diagnostics. The asset is not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new Blueprint asset.',
+      ),
+      parent_class_path: z.string().describe(
+        'Parent class path for the new Blueprint (e.g. /Script/Engine.Actor or /Game/Blueprints/BP_BaseActor.BP_BaseActor_C).',
+      ),
+      payload: z.object({
+        blueprint: JsonObjectSchema.optional(),
+        variables: z.array(JsonObjectSchema).optional(),
+        rootComponents: z.array(JsonObjectSchema).optional(),
+        functionStubs: z.array(JsonObjectSchema).optional(),
+        functions: z.array(JsonObjectSchema).optional(),
+        classDefaults: JsonObjectSchema.optional(),
+      }).passthrough().default({}).describe(
+        'Optional extractor-shaped Blueprint member payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create Blueprint',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, parent_class_path, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateBlueprint', {
+        AssetPath: asset_path,
+        ParentClassPath: parent_class_path,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_blueprint_members',
+  {
+    title: 'Modify Blueprint Members',
+    description: `Modify Blueprint member authoring surfaces without synthesizing arbitrary graphs.
+
+USAGE:
+- operation="replace_variables" or "replace_components": payload replaces the full variable or component set using extractor-shaped entries.
+- operation="patch_variable": payload selects by variableName or name and patches metadata/defaults.
+- operation="patch_component": payload selects by componentName or name and patches component defaults or hierarchy fields.
+- operation="replace_function_stubs": payload.functionStubs or payload.functions replaces function shell graphs.
+- operation="patch_class_defaults": payload.classDefaults or payload.properties patches generated-class defaults.
+- operation="compile": validates and recompiles the Blueprint without saving it.
+
+RETURNS: JSON with validation and compile summaries, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Blueprint asset to modify.',
+      ),
+      operation: BlueprintMemberMutationOperationSchema.describe(
+        'Blueprint member mutation operation to apply.',
+      ),
+      payload: z.object({
+        blueprint: JsonObjectSchema.optional(),
+        variables: z.array(JsonObjectSchema).optional(),
+        variable: JsonObjectSchema.optional(),
+        variableName: z.string().optional(),
+        rootComponents: z.array(JsonObjectSchema).optional(),
+        components: JsonObjectSchema.optional(),
+        component: JsonObjectSchema.optional(),
+        componentName: z.string().optional(),
+        functionStubs: z.array(JsonObjectSchema).optional(),
+        functions: z.array(JsonObjectSchema).optional(),
+        functionName: z.string().optional(),
+        classDefaults: JsonObjectSchema.optional(),
+        properties: JsonObjectSchema.optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Selectors use variableName, componentName, and functionName.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Blueprint Members',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyBlueprintMembers', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'save_assets',
+  {
+    title: 'Save Assets',
+    description: `Persist dirty UE asset packages explicitly.
+
+USAGE:
+- Call after one or more successful write operations to save those dirty packages to disk.
+- Pass the asset paths you want to persist. The tool resolves the owning packages and saves them.
+- Read-only extraction tools do not require this.
+
+RETURNS: JSON with success status, dirtyPackages, changedObjects, diagnostics, and saved=true when all requested packages were saved.`,
+    inputSchema: {
+      asset_paths: z.array(z.string()).describe(
+        'Array of UE content paths to save (e.g. ["/Game/UI/WBP_MainMenu", "/Game/Data/DA_Items"]).',
+      ),
+    },
+    annotations: {
+      title: 'Save Assets',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_paths }) => {
+    try {
+      const result = await client.callSubsystem('SaveAssets', {
+        AssetPathsJson: JSON.stringify(asset_paths),
+      });
+      const parsed = JSON.parse(result);
+      if (parsed.error) {
+        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+        structuredContent: parsed,
+      };
+    } catch (e) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+  return server;
+}
+
 // Start server
 async function main() {
+  const server = createBlueprintExtractorServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch((e) => {
-  console.error('Fatal:', e);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error('Fatal:', e);
+    process.exit(1);
+  });
+}

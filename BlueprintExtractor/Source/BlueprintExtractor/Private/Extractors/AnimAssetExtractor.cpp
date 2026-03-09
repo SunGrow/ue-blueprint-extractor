@@ -51,6 +51,30 @@ static FString NotifyEventTypeToString(const EAnimNotifyEventType::Type NotifyEv
 	}
 }
 
+static FString MontageTickTypeToString(const EMontageNotifyTickType::Type TickType)
+{
+	switch (TickType)
+	{
+	case EMontageNotifyTickType::BranchingPoint:
+		return TEXT("BranchingPoint");
+	default:
+		return TEXT("Queued");
+	}
+}
+
+static FString NotifyFilterTypeToString(const ENotifyFilterType::Type FilterType)
+{
+	switch (FilterType)
+	{
+	case ENotifyFilterType::NoFiltering:
+		return TEXT("NoFiltering");
+	case ENotifyFilterType::LOD:
+		return TEXT("LOD");
+	default:
+		return TEXT("NoFiltering");
+	}
+}
+
 static FString CurveInterpModeToString(const ERichCurveInterpMode InterpMode)
 {
 	switch (InterpMode)
@@ -123,6 +147,50 @@ static TSharedPtr<FJsonObject> SerializeBlendParameter(const FBlendParameter& Bl
 	return ParameterObject;
 }
 
+static FString GetNotifyGuidString(const FAnimNotifyEvent& NotifyEvent)
+{
+#if WITH_EDITORONLY_DATA
+	return NotifyEvent.Guid.IsValid()
+		? NotifyEvent.Guid.ToString(EGuidFormats::DigitsWithHyphens)
+		: FString();
+#else
+	return FString();
+#endif
+}
+
+static FString BuildNotifyId(const FAnimNotifyEvent& NotifyEvent, const int32 NotifyIndex)
+{
+	const FString NotifyGuid = GetNotifyGuidString(NotifyEvent);
+	if (!NotifyGuid.IsEmpty())
+	{
+		return NotifyGuid;
+	}
+
+	return FString::Printf(TEXT("index:%d"), NotifyIndex);
+}
+
+static FString GetTrackName(const UAnimSequenceBase* AnimBase, const int32 TrackIndex)
+{
+#if WITH_EDITORONLY_DATA
+	if (AnimBase && AnimBase->AnimNotifyTracks.IsValidIndex(TrackIndex))
+	{
+		return AnimBase->AnimNotifyTracks[TrackIndex].TrackName.ToString();
+	}
+#endif
+	return FString();
+}
+
+static FString GetMarkerGuidString(const FAnimSyncMarker& SyncMarker)
+{
+#if WITH_EDITORONLY_DATA
+	return SyncMarker.Guid.IsValid()
+		? SyncMarker.Guid.ToString(EGuidFormats::DigitsWithHyphens)
+		: FString();
+#else
+	return FString();
+#endif
+}
+
 } // namespace AnimAssetExtractorInternal
 
 TSharedPtr<FJsonObject> FAnimAssetExtractor::ExtractAnimSequence(const UAnimSequence* AnimSequence)
@@ -148,11 +216,20 @@ TSharedPtr<FJsonObject> FAnimAssetExtractor::ExtractAnimSequence(const UAnimSequ
 	SequenceObject->SetArrayField(TEXT("curves"), ExtractCurves(AnimSequence));
 
 	TArray<TSharedPtr<FJsonValue>> SyncMarkers;
-	for (const FAnimSyncMarker& SyncMarker : AnimSequence->AuthoredSyncMarkers)
+	for (int32 MarkerIndex = 0; MarkerIndex < AnimSequence->AuthoredSyncMarkers.Num(); ++MarkerIndex)
 	{
+		const FAnimSyncMarker& SyncMarker = AnimSequence->AuthoredSyncMarkers[MarkerIndex];
 		TSharedPtr<FJsonObject> MarkerObject = MakeShared<FJsonObject>();
 		MarkerObject->SetStringField(TEXT("markerName"), SyncMarker.MarkerName.ToString());
 		MarkerObject->SetNumberField(TEXT("time"), SyncMarker.Time);
+		MarkerObject->SetNumberField(TEXT("markerIndex"), MarkerIndex);
+		MarkerObject->SetNumberField(TEXT("trackIndex"), SyncMarker.TrackIndex);
+		MarkerObject->SetStringField(TEXT("trackName"), AnimAssetExtractorInternal::GetTrackName(AnimSequence, SyncMarker.TrackIndex));
+		const FString MarkerGuid = AnimAssetExtractorInternal::GetMarkerGuidString(SyncMarker);
+		if (!MarkerGuid.IsEmpty())
+		{
+			MarkerObject->SetStringField(TEXT("markerGuid"), MarkerGuid);
+		}
 		SyncMarkers.Add(MakeShared<FJsonValueObject>(MarkerObject));
 	}
 	SequenceObject->SetArrayField(TEXT("syncMarkers"), SyncMarkers);
@@ -278,6 +355,7 @@ TSharedPtr<FJsonObject> FAnimAssetExtractor::ExtractBlendSpace(const UBlendSpace
 		const FBlendSample& Sample = BlendSpace->GetBlendSample(SampleIndex);
 
 		TSharedPtr<FJsonObject> SampleObject = MakeShared<FJsonObject>();
+		SampleObject->SetNumberField(TEXT("sampleIndex"), SampleIndex);
 		if (Sample.Animation)
 		{
 			SampleObject->SetStringField(TEXT("animation"), Sample.Animation->GetPathName());
@@ -309,8 +387,9 @@ TArray<TSharedPtr<FJsonValue>> FAnimAssetExtractor::ExtractNotifies(const UAnimS
 		return Notifies;
 	}
 
-	for (const FAnimNotifyEvent& NotifyEvent : AnimBase->Notifies)
+	for (int32 NotifyIndex = 0; NotifyIndex < AnimBase->Notifies.Num(); ++NotifyIndex)
 	{
+		const FAnimNotifyEvent& NotifyEvent = AnimBase->Notifies[NotifyIndex];
 		TSharedPtr<FJsonObject> NotifyObject = MakeShared<FJsonObject>();
 
 		FString NotifyName = NotifyEvent.NotifyName.ToString();
@@ -323,6 +402,15 @@ TArray<TSharedPtr<FJsonValue>> FAnimAssetExtractor::ExtractNotifies(const UAnimS
 			NotifyName = NotifyEvent.NotifyStateClass->GetNotifyName();
 		}
 		NotifyObject->SetStringField(TEXT("notifyName"), NotifyName);
+		NotifyObject->SetStringField(TEXT("notifyId"), AnimAssetExtractorInternal::BuildNotifyId(NotifyEvent, NotifyIndex));
+		NotifyObject->SetNumberField(TEXT("notifyIndex"), NotifyIndex);
+		NotifyObject->SetNumberField(TEXT("trackIndex"), NotifyEvent.TrackIndex);
+		NotifyObject->SetStringField(TEXT("trackName"), AnimAssetExtractorInternal::GetTrackName(AnimBase, NotifyEvent.TrackIndex));
+		const FString NotifyGuid = AnimAssetExtractorInternal::GetNotifyGuidString(NotifyEvent);
+		if (!NotifyGuid.IsEmpty())
+		{
+			NotifyObject->SetStringField(TEXT("notifyGuid"), NotifyGuid);
+		}
 
 		UObject* NotifyInstance = nullptr;
 		if (NotifyEvent.Notify)
@@ -343,6 +431,14 @@ TArray<TSharedPtr<FJsonValue>> FAnimAssetExtractor::ExtractNotifies(const UAnimS
 		NotifyObject->SetNumberField(TEXT("triggerTime"), NotifyEvent.GetTriggerTime());
 		NotifyObject->SetNumberField(TEXT("endTriggerTime"), NotifyEvent.GetEndTriggerTime());
 		NotifyObject->SetNumberField(TEXT("duration"), NotifyEvent.GetDuration());
+		NotifyObject->SetNumberField(TEXT("notifyTriggerChance"), NotifyEvent.NotifyTriggerChance);
+		NotifyObject->SetStringField(TEXT("notifyFilterType"), AnimAssetExtractorInternal::NotifyFilterTypeToString(NotifyEvent.NotifyFilterType));
+		NotifyObject->SetNumberField(TEXT("notifyFilterLOD"), NotifyEvent.NotifyFilterLOD);
+		NotifyObject->SetBoolField(TEXT("canBeFilteredViaRequest"), NotifyEvent.bCanBeFilteredViaRequest);
+		NotifyObject->SetBoolField(TEXT("triggerOnDedicatedServer"), NotifyEvent.bTriggerOnDedicatedServer);
+		NotifyObject->SetBoolField(TEXT("triggerOnFollower"), NotifyEvent.bTriggerOnFollower);
+		NotifyObject->SetStringField(TEXT("montageTickType"), AnimAssetExtractorInternal::MontageTickTypeToString(NotifyEvent.MontageTickType));
+		NotifyObject->SetBoolField(TEXT("convertedFromBranchingPoint"), NotifyEvent.bConvertedFromBranchingPoint);
 
 		if (NotifyInstance)
 		{

@@ -288,3 +288,592 @@ TArray<TSharedPtr<FJsonValue>> FPropertySerializer::SerializeUserProperties(
 
 	return Properties;
 }
+
+namespace PropertySerializerInternal
+{
+
+static void AddError(TArray<FString>& OutErrors, const FString& Message)
+{
+	OutErrors.Add(Message);
+}
+
+struct FTemporaryPropertyStorage
+{
+	const FProperty* Property = nullptr;
+	void* Data = nullptr;
+
+	explicit FTemporaryPropertyStorage(const FProperty* InProperty)
+		: Property(InProperty)
+	{
+		if (Property)
+		{
+			Data = FMemory::Malloc(Property->GetSize(), Property->GetMinAlignment());
+			Property->InitializeValue(Data);
+		}
+	}
+
+	~FTemporaryPropertyStorage()
+	{
+		if (Property && Data)
+		{
+			Property->DestroyValue(Data);
+			FMemory::Free(Data);
+		}
+	}
+};
+
+static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
+                                             void* ValuePtr,
+                                             UObject* OwnerObject,
+                                             const TSharedPtr<FJsonValue>& JsonValue,
+                                             TArray<FString>& OutErrors,
+                                             bool bValidationOnly);
+
+static bool ApplyObjectReference(const FObjectPropertyBase* ObjectProperty,
+                                 void* ValuePtr,
+                                 const TSharedPtr<FJsonValue>& JsonValue,
+                                 TArray<FString>& OutErrors,
+                                 bool bValidationOnly)
+{
+	if (!JsonValue.IsValid())
+	{
+		ObjectProperty->SetObjectPropertyValue(ValuePtr, nullptr);
+		return true;
+	}
+
+	if (JsonValue->Type == EJson::Null)
+	{
+		if (!bValidationOnly)
+		{
+			ObjectProperty->SetObjectPropertyValue(ValuePtr, nullptr);
+		}
+		return true;
+	}
+
+	FString PathValue;
+	if (!JsonValue->TryGetString(PathValue))
+	{
+		AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected string asset path"), *ObjectProperty->GetName()));
+		return false;
+	}
+
+	if (PathValue.IsEmpty())
+	{
+		if (!bValidationOnly)
+		{
+			ObjectProperty->SetObjectPropertyValue(ValuePtr, nullptr);
+		}
+		return true;
+	}
+
+	UObject* LoadedObject = StaticLoadObject(ObjectProperty->PropertyClass, nullptr, *PathValue);
+	if (!LoadedObject)
+	{
+		AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to load object '%s'"),
+			*ObjectProperty->GetName(), *PathValue));
+		return false;
+	}
+
+	if (!bValidationOnly)
+	{
+		ObjectProperty->SetObjectPropertyValue(ValuePtr, LoadedObject);
+	}
+
+	return true;
+}
+
+static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
+                                             void* ValuePtr,
+                                             UObject* OwnerObject,
+                                             const TSharedPtr<FJsonValue>& JsonValue,
+                                             TArray<FString>& OutErrors,
+                                             const bool bValidationOnly)
+{
+	if (!Property)
+	{
+		return false;
+	}
+
+	if (!JsonValue.IsValid())
+	{
+		AddError(OutErrors, FString::Printf(TEXT("Property '%s': JSON value is null"), *Property->GetName()));
+		return false;
+	}
+
+	void* WorkingPtr = ValuePtr;
+	TUniquePtr<FTemporaryPropertyStorage> TempStorage;
+	if (bValidationOnly)
+	{
+		TempStorage = MakeUnique<FTemporaryPropertyStorage>(Property);
+		if (ValuePtr)
+		{
+			Property->CopyCompleteValue(TempStorage->Data, ValuePtr);
+		}
+		WorkingPtr = TempStorage->Data;
+	}
+
+	if (const FBoolProperty* BoolProp = CastField<FBoolProperty>(Property))
+	{
+		bool bValue = false;
+		if (!JsonValue->TryGetBool(bValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected bool value"), *Property->GetName()));
+			return false;
+		}
+		if (!bValidationOnly)
+		{
+			BoolProp->SetPropertyValue(WorkingPtr, bValue);
+		}
+		return true;
+	}
+
+	if (const FEnumProperty* EnumProp = CastField<FEnumProperty>(Property))
+	{
+		FString EnumText;
+		if (!JsonValue->TryGetString(EnumText))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected enum string"), *Property->GetName()));
+			return false;
+		}
+
+		const UEnum* Enum = EnumProp->GetEnum();
+		const int64 EnumValue = Enum ? Enum->GetValueByNameString(EnumText) : INDEX_NONE;
+		if (EnumValue == INDEX_NONE)
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': invalid enum value '%s'"),
+				*Property->GetName(), *EnumText));
+			return false;
+		}
+
+		if (!bValidationOnly)
+		{
+			EnumProp->GetUnderlyingProperty()->SetIntPropertyValue(WorkingPtr, EnumValue);
+		}
+		return true;
+	}
+
+	if (const FByteProperty* ByteProp = CastField<FByteProperty>(Property))
+	{
+		if (ByteProp->Enum)
+		{
+			FString EnumText;
+			if (!JsonValue->TryGetString(EnumText))
+			{
+				AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected enum string"), *Property->GetName()));
+				return false;
+			}
+
+			const int64 EnumValue = ByteProp->Enum->GetValueByNameString(EnumText);
+			if (EnumValue == INDEX_NONE)
+			{
+				AddError(OutErrors, FString::Printf(TEXT("Property '%s': invalid enum value '%s'"),
+					*Property->GetName(), *EnumText));
+				return false;
+			}
+
+			if (!bValidationOnly)
+			{
+				ByteProp->SetIntPropertyValue(WorkingPtr, EnumValue);
+			}
+			return true;
+		}
+
+		double NumberValue = 0.0;
+		if (!JsonValue->TryGetNumber(NumberValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected numeric value"), *Property->GetName()));
+			return false;
+		}
+		if (!bValidationOnly)
+		{
+			ByteProp->SetIntPropertyValue(WorkingPtr, static_cast<int64>(NumberValue));
+		}
+		return true;
+	}
+
+	if (const FNumericProperty* NumericProp = CastField<FNumericProperty>(Property))
+	{
+		double NumberValue = 0.0;
+		if (!JsonValue->TryGetNumber(NumberValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected numeric value"), *Property->GetName()));
+			return false;
+		}
+
+		if (!bValidationOnly)
+		{
+			if (NumericProp->IsInteger())
+			{
+				NumericProp->SetIntPropertyValue(WorkingPtr, static_cast<int64>(NumberValue));
+			}
+			else if (NumericProp->IsFloatingPoint())
+			{
+				NumericProp->SetFloatingPointPropertyValue(WorkingPtr, NumberValue);
+			}
+		}
+
+		return true;
+	}
+
+	if (const FStrProperty* StrProp = CastField<FStrProperty>(Property))
+	{
+		FString StringValue;
+		if (!JsonValue->TryGetString(StringValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected string value"), *Property->GetName()));
+			return false;
+		}
+		if (!bValidationOnly)
+		{
+			StrProp->SetPropertyValue(WorkingPtr, StringValue);
+		}
+		return true;
+	}
+
+	if (const FNameProperty* NameProp = CastField<FNameProperty>(Property))
+	{
+		FString StringValue;
+		if (!JsonValue->TryGetString(StringValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected string value"), *Property->GetName()));
+			return false;
+		}
+		if (!bValidationOnly)
+		{
+			NameProp->SetPropertyValue(WorkingPtr, FName(*StringValue));
+		}
+		return true;
+	}
+
+	if (const FTextProperty* TextProp = CastField<FTextProperty>(Property))
+	{
+		FString StringValue;
+		if (!JsonValue->TryGetString(StringValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected string value"), *Property->GetName()));
+			return false;
+		}
+		if (!bValidationOnly)
+		{
+			TextProp->SetPropertyValue(WorkingPtr, FText::FromString(StringValue));
+		}
+		return true;
+	}
+
+	if (const FArrayProperty* ArrayProp = CastField<FArrayProperty>(Property))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* JsonArray = nullptr;
+		if (!JsonValue->TryGetArray(JsonArray) || !JsonArray)
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected array value"), *Property->GetName()));
+			return false;
+		}
+
+		FScriptArrayHelper ArrayHelper(ArrayProp, WorkingPtr);
+		if (!bValidationOnly)
+		{
+			ArrayHelper.Resize(JsonArray->Num());
+		}
+
+		bool bArraySuccess = true;
+		for (int32 Index = 0; Index < JsonArray->Num(); ++Index)
+		{
+			if (bValidationOnly)
+			{
+				FTemporaryPropertyStorage ElementStorage(ArrayProp->Inner);
+				bArraySuccess &= ApplyJsonValueToPropertyInternal(ArrayProp->Inner,
+					ElementStorage.Data, OwnerObject, (*JsonArray)[Index], OutErrors, true);
+				continue;
+			}
+
+			bArraySuccess &= ApplyJsonValueToPropertyInternal(ArrayProp->Inner,
+				ArrayHelper.GetRawPtr(Index), OwnerObject, (*JsonArray)[Index], OutErrors, false);
+		}
+
+		return bArraySuccess;
+	}
+
+	if (const FSetProperty* SetProp = CastField<FSetProperty>(Property))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* JsonArray = nullptr;
+		if (!JsonValue->TryGetArray(JsonArray) || !JsonArray)
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected array value for set"), *Property->GetName()));
+			return false;
+		}
+
+		bool bSetSuccess = true;
+		if (!bValidationOnly)
+		{
+			FScriptSetHelper SetHelper(SetProp, WorkingPtr);
+			SetHelper.EmptyElements(JsonArray->Num());
+
+			for (int32 Index = 0; Index < JsonArray->Num(); ++Index)
+			{
+				const int32 AddedIndex = SetHelper.AddDefaultValue_Invalid_NeedsRehash();
+				bSetSuccess &= ApplyJsonValueToPropertyInternal(SetProp->ElementProp,
+					SetHelper.GetElementPtr(AddedIndex), OwnerObject, (*JsonArray)[Index], OutErrors, false);
+			}
+			SetHelper.Rehash();
+		}
+		else
+		{
+			for (const TSharedPtr<FJsonValue>& ElementValue : *JsonArray)
+			{
+				FTemporaryPropertyStorage ElementStorage(SetProp->ElementProp);
+				bSetSuccess &= ApplyJsonValueToPropertyInternal(SetProp->ElementProp,
+					ElementStorage.Data, OwnerObject, ElementValue, OutErrors, true);
+			}
+		}
+
+		return bSetSuccess;
+	}
+
+	if (const FMapProperty* MapProp = CastField<FMapProperty>(Property))
+	{
+		const TSharedPtr<FJsonObject> JsonObject = JsonValue->AsObject();
+		if (!JsonObject.IsValid())
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected object value for map"), *Property->GetName()));
+			return false;
+		}
+
+		bool bMapSuccess = true;
+		if (!bValidationOnly)
+		{
+			FScriptMapHelper MapHelper(MapProp, WorkingPtr);
+			MapHelper.EmptyValues(JsonObject->Values.Num());
+
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : JsonObject->Values)
+			{
+				const int32 AddedIndex = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
+				FString KeyText = Pair.Key;
+				if (!MapProp->KeyProp->ImportText_Direct(*KeyText, MapHelper.GetKeyPtr(AddedIndex), OwnerObject, PPF_None))
+				{
+					AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to parse map key '%s'"),
+						*Property->GetName(), *Pair.Key));
+					bMapSuccess = false;
+				}
+				bMapSuccess &= ApplyJsonValueToPropertyInternal(MapProp->ValueProp,
+					MapHelper.GetValuePtr(AddedIndex), OwnerObject, Pair.Value, OutErrors, false);
+			}
+			MapHelper.Rehash();
+		}
+		else
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : JsonObject->Values)
+			{
+				FTemporaryPropertyStorage KeyStorage(MapProp->KeyProp);
+				if (!MapProp->KeyProp->ImportText_Direct(*Pair.Key, KeyStorage.Data, OwnerObject, PPF_None))
+				{
+					AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to parse map key '%s'"),
+						*Property->GetName(), *Pair.Key));
+					bMapSuccess = false;
+				}
+
+				FTemporaryPropertyStorage ValueStorage(MapProp->ValueProp);
+				bMapSuccess &= ApplyJsonValueToPropertyInternal(MapProp->ValueProp,
+					ValueStorage.Data, OwnerObject, Pair.Value, OutErrors, true);
+			}
+		}
+
+		return bMapSuccess;
+	}
+
+	if (const FStructProperty* StructProp = CastField<FStructProperty>(Property))
+	{
+		if (const TSharedPtr<FJsonObject> StructValue = JsonValue->AsObject())
+		{
+			const bool bConverted = FJsonObjectConverter::JsonObjectToUStruct(
+				StructValue.ToSharedRef(), StructProp->Struct, WorkingPtr);
+			if (!bConverted)
+			{
+				AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to parse struct '%s'"),
+					*Property->GetName(), *StructProp->Struct->GetName()));
+			}
+			return bConverted;
+		}
+
+		FString StringValue;
+		if (!JsonValue->TryGetString(StringValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected object or string for struct"),
+				*Property->GetName()));
+			return false;
+		}
+
+		const TCHAR* ImportResult = Property->ImportText_Direct(*StringValue, WorkingPtr, OwnerObject, PPF_None);
+		if (!ImportResult)
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to import struct value '%s'"),
+				*Property->GetName(), *StringValue));
+			return false;
+		}
+
+		return true;
+	}
+
+	if (const FSoftObjectProperty* SoftObjectProperty = CastField<FSoftObjectProperty>(Property))
+	{
+		if (JsonValue->Type == EJson::Null)
+		{
+			if (!bValidationOnly)
+			{
+				SoftObjectProperty->SetPropertyValue(WorkingPtr, FSoftObjectPtr());
+			}
+			return true;
+		}
+
+		FString PathValue;
+		if (!JsonValue->TryGetString(PathValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected string path"), *Property->GetName()));
+			return false;
+		}
+
+		if (!bValidationOnly)
+		{
+			SoftObjectProperty->SetPropertyValue(WorkingPtr, FSoftObjectPtr(FSoftObjectPath(PathValue)));
+		}
+		return true;
+	}
+
+	if (const FSoftClassProperty* SoftClassProperty = CastField<FSoftClassProperty>(Property))
+	{
+		if (JsonValue->Type == EJson::Null)
+		{
+			if (!bValidationOnly)
+			{
+				SoftClassProperty->SetPropertyValue(WorkingPtr, FSoftObjectPtr());
+			}
+			return true;
+		}
+
+		FString PathValue;
+		if (!JsonValue->TryGetString(PathValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected string path"), *Property->GetName()));
+			return false;
+		}
+
+		if (!bValidationOnly)
+		{
+			SoftClassProperty->SetPropertyValue(WorkingPtr, FSoftObjectPtr(FSoftObjectPath(PathValue)));
+		}
+		return true;
+	}
+
+	if (const FClassProperty* ClassProperty = CastField<FClassProperty>(Property))
+	{
+		if (JsonValue->Type == EJson::Null)
+		{
+			if (!bValidationOnly)
+			{
+				ClassProperty->SetObjectPropertyValue(WorkingPtr, nullptr);
+			}
+			return true;
+		}
+
+		FString PathValue;
+		if (!JsonValue->TryGetString(PathValue))
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': expected string class path"), *Property->GetName()));
+			return false;
+		}
+
+		UClass* LoadedClass = StaticLoadClass(ClassProperty->MetaClass, nullptr, *PathValue);
+		if (!LoadedClass)
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to load class '%s'"),
+				*Property->GetName(), *PathValue));
+			return false;
+		}
+
+		if (!bValidationOnly)
+		{
+			ClassProperty->SetObjectPropertyValue(WorkingPtr, LoadedClass);
+		}
+		return true;
+	}
+
+	if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+	{
+		const bool bObjectResult = ApplyObjectReference(ObjectProperty, WorkingPtr, JsonValue, OutErrors, bValidationOnly);
+		return bObjectResult;
+	}
+
+	FString StringValue;
+	if (!JsonValue->TryGetString(StringValue))
+	{
+		AddError(OutErrors, FString::Printf(TEXT("Property '%s': unsupported JSON value for property type '%s'"),
+			*Property->GetName(), *Property->GetClass()->GetName()));
+		return false;
+	}
+
+	const TCHAR* ImportResult = Property->ImportText_Direct(*StringValue, WorkingPtr, OwnerObject, PPF_None);
+	if (!ImportResult)
+	{
+		AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to import value '%s'"),
+			*Property->GetName(), *StringValue));
+		return false;
+	}
+
+	return true;
+}
+
+} // namespace PropertySerializerInternal
+
+bool FPropertySerializer::ApplyJsonValueToProperty(const FProperty* Property,
+                                                   void* ValuePtr,
+                                                   UObject* OwnerObject,
+                                                   const TSharedPtr<FJsonValue>& JsonValue,
+                                                   TArray<FString>& OutErrors,
+                                                   const bool bValidationOnly)
+{
+	return PropertySerializerInternal::ApplyJsonValueToPropertyInternal(
+		Property, ValuePtr, OwnerObject, JsonValue, OutErrors, bValidationOnly);
+}
+
+bool FPropertySerializer::ApplyPropertiesFromJson(UObject* Target,
+                                                  const TSharedPtr<FJsonObject>& PropertiesJson,
+                                                  TArray<FString>& OutErrors,
+                                                  const bool bValidationOnly,
+                                                  const bool bRequireEditableProperty)
+{
+	if (!Target || !PropertiesJson.IsValid())
+	{
+		return true;
+	}
+
+	bool bSuccess = true;
+	const UClass* TargetClass = Target->GetClass();
+
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : PropertiesJson->Values)
+	{
+		FProperty* Property = TargetClass->FindPropertyByName(FName(*Pair.Key));
+		if (!Property)
+		{
+			PropertySerializerInternal::AddError(
+				OutErrors,
+				FString::Printf(TEXT("Property '%s' not found on class '%s'"),
+					*Pair.Key, *TargetClass->GetName()));
+			bSuccess = false;
+			continue;
+		}
+
+		if (bRequireEditableProperty && !Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible))
+		{
+			PropertySerializerInternal::AddError(
+				OutErrors,
+				FString::Printf(TEXT("Property '%s' is not editable on class '%s'"),
+					*Pair.Key, *TargetClass->GetName()));
+			bSuccess = false;
+			continue;
+		}
+
+		void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Target);
+		bSuccess &= ApplyJsonValueToProperty(Property, ValuePtr, Target, Pair.Value, OutErrors, bValidationOnly);
+	}
+
+	return bSuccess;
+}

@@ -16,4 +16,15 @@ struct FPropertySerializer
 		const void* Container,
 		const UClass* ContainerClass,
 		const TArray<const UClass*>& SkipClasses);
+	static bool ApplyJsonValueToProperty(const FProperty* Property,
+	                                     void* ValuePtr,
+	                                     UObject* OwnerObject,
+	                                     const TSharedPtr<FJsonValue>& JsonValue,
+	                                     TArray<FString>& OutErrors,
+	                                     bool bValidationOnly = false);
+	static bool ApplyPropertiesFromJson(UObject* Target,
+	                                    const TSharedPtr<FJsonObject>& PropertiesJson,
+	                                    TArray<FString>& OutErrors,
+	                                    bool bValidationOnly = false,
+	                                    bool bRequireEditableProperty = true);
 };

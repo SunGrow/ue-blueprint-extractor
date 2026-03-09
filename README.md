@@ -1,6 +1,6 @@
 # Blueprint Extractor
 
-UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, MaterialInstance, AnimSequence, AnimMontage, and BlendSpace data to structured JSON, and creates/modifies WidgetBlueprint widget trees programmatically — for C++ conversion and analysis.
+UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, MaterialInstance, AnimSequence, AnimMontage, and BlendSpace data to structured JSON, and supports explicit-save authoring for all currently feasible editor-side families: WidgetBlueprints, MaterialInstances, DataAssets, DataTables, Curves, CurveTables, UserDefinedStructs, UserDefinedEnums, Blackboards, BehaviorTrees, StateTrees, AnimSequences, AnimMontages, BlendSpaces, and Blueprint members.
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
@@ -21,7 +21,7 @@ ue-blueprint-extractor/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts                 # MCP tool definitions (21 tools)
+│       ├── index.ts                 # MCP tool definitions (51 tools + 2 resources)
 │       ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
 │       ├── ue-client.ts             # UE Remote Control HTTP client
 │       └── types.ts                 # Shared TypeScript types
@@ -233,43 +233,57 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
   +-- WidgetTreeExtractor          (widget hierarchy, slots, properties, bindings)
   +-- BlueprintJsonSchema          (pin type serialization, flag bitmasks)
   +-- WidgetTreeBuilder            (create, build, modify, compile WidgetBlueprints)
+  +-- Authoring/*                  (shared mutation session, explicit-save writes for feasible asset families)
 
 MCP Server (Node.js/TypeScript)    (stdio transport, bridges Claude Code <-> UE Remote Control)
   +-- UEClient                     (HTTP client for PUT /remote/object/call)
 ```
 
-## MCP Server (Claude Code Integration)
+## MCP Server (Claude Code and Codex)
 
-The plugin includes an MCP (Model Context Protocol) server that lets Claude Code extract Blueprint/StateTree data and create/modify WidgetBlueprint widget trees on demand from a running UE5 editor.
+The plugin includes an MCP (Model Context Protocol) server that lets Claude Code or Codex extract UE assets and perform explicit-save authoring across the currently supported families from a running UE5 editor.
 
 ### Prerequisites
 
 - Node.js 18+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- Codex CLI
 - **Web Remote Control** plugin enabled in UE5 (Edit > Plugins > search "Remote Control")
 
 ### Setup
 
 **Option A: npx (recommended)**
 
-Run the install script — it registers the npm package with Claude Code via `npx`:
+Run the install script for your client. Each script registers the npm package via `npx`:
 
 ```bash
-# Windows (PowerShell)
+# Claude Code: Windows (PowerShell)
 .\install-mcp.ps1
 
-# macOS / Linux
+# Claude Code: macOS / Linux
 ./install-mcp.sh
+
+# Codex: Windows (PowerShell)
+.\install-codex-mcp.ps1
+
+# Codex: macOS / Linux
+./install-codex-mcp.sh
 ```
 
 Or register manually:
 
 ```bash
-# macOS / Linux
+# Claude Code: macOS / Linux
 claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@latest
 
-# Windows (npx requires cmd /c wrapper)
+# Claude Code: Windows (npx requires cmd /c wrapper)
 claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@latest
+
+# Codex: macOS / Linux
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
+
+# Codex: Windows (npx requires cmd /c wrapper)
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@latest
 ```
 
 **Option B: Local build**
@@ -277,14 +291,20 @@ claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30
 Build the MCP server from source (useful for development):
 
 ```bash
-# Windows (PowerShell)
+# Claude Code: Windows (PowerShell)
 .\install-mcp.ps1 -Local
 
-# macOS / Linux
+# Claude Code: macOS / Linux
 ./install-mcp.sh --local
+
+# Codex: Windows (PowerShell)
+.\install-codex-mcp.ps1 -Local
+
+# Codex: macOS / Linux
+./install-codex-mcp.sh --local
 ```
 
-Then restart Claude Code. The 21 tools will appear automatically.
+Then open a new session or restart your client. The tools will appear automatically after the MCP is registered with that client.
 
 ### MCP Tools
 
@@ -310,7 +330,37 @@ Then restart Claude Code. The 21 tools will appear automatically.
 | `create_widget_blueprint` | Create a new WidgetBlueprint asset with a specified parent class |
 | `build_widget_tree` | Build/replace the entire widget hierarchy of a WidgetBlueprint from a JSON tree |
 | `modify_widget` | Patch properties and/or slot config on an existing widget by name |
+| `modify_widget_blueprint` | High-level widget alias for replace-tree, patch-widget, and validate/compile workflows |
 | `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings plus counts |
+| `create_data_asset` | Create a concrete DataAsset asset and optionally initialize editable properties |
+| `modify_data_asset` | Apply a reflected property patch to an existing DataAsset |
+| `create_data_table` | Create a DataTable with a concrete row struct and optional initial rows |
+| `modify_data_table` | Upsert, delete, or replace rows in an existing DataTable |
+| `create_curve` | Create a CurveFloat, CurveVector, or CurveLinearColor asset with optional channel payloads |
+| `modify_curve` | Patch curve channels and upsert or delete individual keys |
+| `create_curve_table` | Create a CurveTable in rich or simple mode with optional initial rows |
+| `modify_curve_table` | Upsert, delete, or replace rows in an existing CurveTable |
+| `create_material_instance` | Create a MaterialInstanceConstant from a parent material/interface |
+| `modify_material_instance` | Reparent a MaterialInstanceConstant or apply scalar/vector/texture/static-switch overrides |
+| `create_user_defined_struct` | Create a UserDefinedStruct from extractor-shaped field payloads |
+| `modify_user_defined_struct` | Replace, patch, rename, remove, or reorder UserDefinedStruct fields |
+| `create_user_defined_enum` | Create a UserDefinedEnum from extractor-shaped entry payloads |
+| `modify_user_defined_enum` | Replace, rename, remove, or reorder UserDefinedEnum entries |
+| `create_blackboard` | Create a BlackboardData asset from extractor-shaped key payloads |
+| `modify_blackboard` | Replace, patch, remove, or reparent Blackboard keys |
+| `create_behavior_tree` | Create a BehaviorTree from extractor-shaped tree payloads |
+| `modify_behavior_tree` | Replace a BehaviorTree, patch nodes/attachments by `nodePath`, or set the blackboard |
+| `create_state_tree` | Create a StateTree from extractor-shaped editor data payloads |
+| `modify_state_tree` | Replace a StateTree, patch states/editor nodes/transitions, or change schema |
+| `create_anim_sequence` | Create an AnimSequence from extractor-shaped notify, sync-marker, and curve metadata payloads |
+| `modify_anim_sequence` | Replace or patch AnimSequence notifies, sync markers, and curve metadata |
+| `create_anim_montage` | Create an AnimMontage from extractor-shaped notify, section, and slot payloads |
+| `modify_anim_montage` | Replace or patch AnimMontage notifies, sections, and slots |
+| `create_blend_space` | Create a BlendSpace or BlendSpace1D from extractor-shaped axis and sample payloads |
+| `modify_blend_space` | Replace or patch BlendSpace samples and axes |
+| `create_blueprint` | Create a Blueprint with optional variables, component templates, function stubs, and class defaults |
+| `modify_blueprint_members` | Replace or patch Blueprint variables, components, function stubs, class defaults, and compile |
+| `save_assets` | Explicitly save dirty asset packages after successful write operations |
 
 ### Architecture
 
@@ -328,10 +378,12 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — All 21 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. A `blueprint://` resource for static scope documentation is also exposed.
-- **Small, distinct surface** — 21 tools with non-overlapping purposes. Extraction tools are read-only; widget creation tools are write operations.
+- **Right primitive** — All 51 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. `blueprint://scopes` and `blueprint://write-capabilities` provide static capability references.
+- **Small, distinct surface** — 51 tools with non-overlapping purposes. Extraction tools are read-only; authoring tools are explicit write operations with separate save semantics.
 - **Description quality** — Each tool includes usage guidelines, scope size estimates, and workflow hints (e.g., "use `search_assets` first") to maximize selection accuracy.
-- **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; write tools (`create_widget_blueprint`, `build_widget_tree`, `modify_widget`) require confirmation.
+- **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; all write tools and `save_assets` require confirmation.
+- **Explicit save** — Write operations mutate assets and mark packages dirty, but they do not save automatically. Call `save_assets` when you want to persist the dirty packages to disk.
+- **Bounded authoring** — The write surface covers reflected properties, declarative trees, schema assets, animation metadata, and Blueprint members; arbitrary graph/controller/world synthesis is still intentionally deferred.
 - **Security** — stdio transport, env-based credentials (`UE_REMOTE_CONTROL_PORT`), local-only by default. No auth tokens or remote access.
 
 ### Environment Variables
@@ -340,6 +392,73 @@ The MCP server follows current best practices for tool design:
 |----------|---------|-------------|
 | `UE_REMOTE_CONTROL_HOST` | `127.0.0.1` | UE editor host |
 | `UE_REMOTE_CONTROL_PORT` | `30010` | Remote Control HTTP port |
+| `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH` | auto-probe | Optional explicit subsystem object path override for deterministic live testing |
+
+## Testing
+
+Testing is split into three layers:
+
+- UE editor automation for the plugin itself. These tests live under `BlueprintExtractor/Source/BlueprintExtractor/Private/Tests/` and call `UBlueprintExtractorSubsystem` directly.
+- Fast MCP contract and HTTP tests under `MCP/tests/` using Vitest, the official MCP SDK client, in-memory transports, and a tiny mock Remote Control server.
+- Live stdio-to-UE smoke tests that are disabled by default and only run when you opt in with environment variables.
+
+### MCP tests
+
+```bash
+cd MCP
+npm install
+npm run test
+```
+
+Optional live MCP smoke:
+
+```bash
+cd MCP
+BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
+```
+
+`test:live` expects a UE editor to already be running with Remote Control enabled. It will create scratch assets under `/Game/__GeneratedTests__/Live` and can also smoke-test committed fixture assets when you provide any of these optional asset-path environment variables:
+
+- `BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT`
+- `BLUEPRINT_EXTRACTOR_TEST_WIDGET_BLUEPRINT`
+- `BLUEPRINT_EXTRACTOR_TEST_STATE_TREE`
+- `BLUEPRINT_EXTRACTOR_TEST_BEHAVIOR_TREE`
+- `BLUEPRINT_EXTRACTOR_TEST_BLACKBOARD`
+- `BLUEPRINT_EXTRACTOR_TEST_DATA_ASSET`
+- `BLUEPRINT_EXTRACTOR_TEST_DATA_TABLE`
+- `BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_STRUCT`
+- `BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_ENUM`
+- `BLUEPRINT_EXTRACTOR_TEST_CURVE`
+- `BLUEPRINT_EXTRACTOR_TEST_CURVE_TABLE`
+- `BLUEPRINT_EXTRACTOR_TEST_MATERIAL_INSTANCE`
+- `BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE`
+- `BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE`
+- `BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE`
+
+### UE automation tests
+
+The repository includes a shell fixture project at `tests/fixtures/BlueprintExtractorFixture/`. The runner scripts sync the plugin source into that fixture project before building so the checked-in fixture stays lightweight.
+
+Windows:
+
+```powershell
+.\scripts\test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.6"
+```
+
+macOS / Linux:
+
+```bash
+./scripts/test-ue.sh --engine-root "/path/to/UE_5.6"
+```
+
+Both scripts:
+
+- sync `BlueprintExtractor/` into `tests/fixtures/BlueprintExtractorFixture/Plugins/BlueprintExtractor`
+- optionally run `BuildPlugin`
+- build the `BlueprintExtractorFixtureEditor` target
+- execute `Automation RunTests BlueprintExtractor` headlessly with `UnrealEditor-Cmd`
+
+Mutable automation output is expected under `/Game/__GeneratedTests__`. The fixture project should remain read-only apart from generated build/cache folders and the synced plugin copy.
 
 ## Publishing (Maintainers)
 
@@ -352,6 +471,17 @@ npm publish --access public
 ```
 
 ## Changelog
+
+### Unreleased
+- **18 new authoring tools** — added `create_user_defined_struct`, `modify_user_defined_struct`, `create_user_defined_enum`, `modify_user_defined_enum`, `create_blackboard`, `modify_blackboard`, `create_behavior_tree`, `modify_behavior_tree`, `create_state_tree`, `modify_state_tree`, `create_anim_sequence`, `modify_anim_sequence`, `create_anim_montage`, `modify_anim_montage`, `create_blend_space`, `modify_blend_space`, `create_blueprint`, and `modify_blueprint_members`.
+- **Stable writer selectors** — BehaviorTree writes now target `nodePath`, StateTree writes support `stateId`/`statePath`, `editorNodeId`, and `transitionId`, animation writes expose stable notify identifiers plus `sampleIndex`, and Blueprint/member/schema surfaces use explicit selector fields.
+- **Feasible-family write coverage** — explicit-save authoring now spans schema assets, AI assets, StateTrees, animation metadata assets, and Blueprint member authoring while still deferring arbitrary graph synthesis, controller editing, and live world mutation.
+
+### 1.9.0
+- **Shared write core** — added normalized mutation results, explicit `save_assets` persistence, validation-only write flows, and reusable reflected property patching for editor-side authoring.
+- **Widget hardening** — widget tree replacement now preflights before destructive changes, widget/property writes use the shared mutation layer, and `modify_widget_blueprint` remains the higher-level alias for tree replacement, patching, and compile workflows.
+- **New authoring families** — added `create_data_table`, `modify_data_table`, `create_curve`, `modify_curve`, `create_curve_table`, and `modify_curve_table`, alongside the already added `create_data_asset`, `modify_data_asset`, `create_material_instance`, and `modify_material_instance`.
+- **Capability docs** — added `blueprint://write-capabilities` and updated MCP descriptions around explicit-save behavior and current write-capable asset families.
 
 ### 1.8.0
 - **10 new extraction tools** — added `extract_behavior_tree`, `extract_blackboard`, `extract_user_defined_struct`, `extract_user_defined_enum`, `extract_curve`, `extract_curvetable`, `extract_material_instance`, `extract_anim_sequence`, `extract_anim_montage`, and `extract_blend_space`.
