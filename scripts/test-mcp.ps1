@@ -43,7 +43,7 @@ try {
     }
 
     if ($PublishDryRun) {
-        Invoke-Step -Label 'npm publish --dry-run' -FilePath 'npm' -Arguments @('publish', '--dry-run')
+        Invoke-Step -Label 'npm run test:publish-gate' -FilePath 'npm' -Arguments @('run', 'test:publish-gate')
     }
 }
 finally {

@@ -43,8 +43,8 @@ jobs:
       - name: MCP tarball startup smoke
         run: npm run test:pack-smoke
 
-      - name: MCP publish dry-run
-        run: npm publish --dry-run
+      - name: MCP publish gate
+        run: npm run test:publish-gate
 
   ue-automation-5_6:
     name: ue-automation-5_6

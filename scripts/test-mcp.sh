@@ -60,5 +60,5 @@ if [[ "$pack_smoke" -eq 1 ]]; then
 fi
 
 if [[ "$publish_dry_run" -eq 1 ]]; then
-  run_step "npm publish --dry-run" npm publish --dry-run
+  run_step "npm run test:publish-gate" npm run test:publish-gate
 fi

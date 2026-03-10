@@ -43,6 +43,7 @@
     "test:stdio": "npm run build && vitest run tests/stdio.integration.test.ts",
     "test:live": "npm run build && vitest run tests/live.e2e.test.ts",
     "test:pack-smoke": "node tests/pack-smoke.mjs",
+    "test:publish-gate": "node tests/publish-gate.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
