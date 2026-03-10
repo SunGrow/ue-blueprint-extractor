@@ -41,7 +41,7 @@ Live MCP smoke requires a running editor with the plugin loaded. Set:
 
 ## UE Automation
 
-The checked-in fixture shell lives at `tests/fixtures/BlueprintExtractorFixture/`.
+The checked-in fixture shell lives at `tests/fixtures/BlueprintExtractorFixture/`, with the short project file `BPXFixture.uproject`.
 The fixture intentionally does not commit a plugin copy; `scripts/test-ue.*` stage the fixture to a temp directory and sync the local `BlueprintExtractor/` plugin into `Plugins/BlueprintExtractor` there.
 
 Windows:
@@ -67,7 +67,7 @@ The UE runner:
 1. stages the fixture project into a temp directory,
 2. syncs `BlueprintExtractor/` into the staged fixture's `Plugins/BlueprintExtractor`,
 3. optionally runs `BuildPlugin`,
-4. builds `BlueprintExtractorFixtureEditor`,
+4. builds `BPXFixtureEditor`,
 5. runs headless editor automation via `UnrealEditor-Cmd`.
 
 The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, structural widget mutations, classic material graph authoring, material-instance parity, and a CommonUI parent canary.

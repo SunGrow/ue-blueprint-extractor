@@ -45,7 +45,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
 if [[ -z "$project_path" ]]; then
-  project_path="$repo_root/tests/fixtures/BlueprintExtractorFixture/BlueprintExtractorFixture.uproject"
+  project_path="$repo_root/tests/fixtures/BlueprintExtractorFixture/BPXFixture.uproject"
 fi
 
 if [[ -z "$engine_root" ]]; then
@@ -102,7 +102,7 @@ assert_path "$build_sh" "Build.sh"
 assert_path "$run_uat" "RunUAT"
 
 if [[ -z "$stage_root" ]]; then
-  stage_root="$(mktemp -d "${TMPDIR:-/tmp}/BlueprintExtractorFixture-$engine_label-XXXXXX")"
+  stage_root="$(mktemp -d "${TMPDIR:-/tmp}/BPXFixture-$engine_label-XXXXXX")"
 fi
 
 echo "==> Staging fixture project into $stage_root"
@@ -157,7 +157,7 @@ fi
 if [[ "$skip_build_project" -eq 0 ]]; then
   run_step "Build fixture editor target" \
     "$build_sh" \
-    BlueprintExtractorFixtureEditor \
+    BPXFixtureEditor \
     "$host_platform" \
     Development \
     "-Project=$project_path" \

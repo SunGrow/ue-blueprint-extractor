@@ -490,7 +490,7 @@ BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 
 ### UE automation tests
 
-The repository includes a shell fixture project at `tests/fixtures/BlueprintExtractorFixture/`. The runner scripts sync the plugin source into that fixture project before building so the checked-in fixture stays lightweight.
+The repository includes a shell fixture project at `tests/fixtures/BlueprintExtractorFixture/` with the short project file `BPXFixture.uproject`. The runner scripts sync the plugin source into that fixture project before building so the checked-in fixture stays lightweight.
 
 Windows:
 
@@ -508,7 +508,7 @@ Both scripts:
 
 - sync `BlueprintExtractor/` into `tests/fixtures/BlueprintExtractorFixture/Plugins/BlueprintExtractor`
 - optionally run `BuildPlugin`
-- build the `BlueprintExtractorFixtureEditor` target
+- build the `BPXFixtureEditor` target
 - execute `Automation RunTests BlueprintExtractor` headlessly with `UnrealEditor-Cmd`
 
 The repository also includes `.github/workflows/ci.yml` and `.github/workflows/nightly.yml`. The UE lanes assume self-hosted Windows runners labeled `ue-5.6`, `ue-5.7`, and `ue-live`, plus repository variables for engine roots and live Remote Control endpoints.

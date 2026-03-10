@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$EngineRoot = $env:UE_ENGINE_ROOT,
-    [string]$ProjectPath = (Join-Path $PSScriptRoot '..\tests\fixtures\BlueprintExtractorFixture\BlueprintExtractorFixture.uproject'),
+    [string]$ProjectPath = (Join-Path $PSScriptRoot '..\tests\fixtures\BlueprintExtractorFixture\BPXFixture.uproject'),
     [string]$StageRoot = $env:UE_FIXTURE_STAGE_ROOT,
     [string]$AutomationFilter = 'BlueprintExtractor',
     [switch]$BuildPlugin,
@@ -106,7 +106,7 @@ Assert-PathExists -Path $RunUat -Description 'RunUAT.bat'
 Assert-PathExists -Path $PluginDescriptor -Description 'BlueprintExtractor.uplugin'
 
 if ([string]::IsNullOrWhiteSpace($StageRoot)) {
-    $StageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BlueprintExtractorFixture-{0}-{1}" -f $EngineLabel, [guid]::NewGuid().ToString('N'))
+    $StageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("BPXFixture-{0}-{1}" -f $EngineLabel, [guid]::NewGuid().ToString('N'))
 }
 
 Write-Host "==> Staging fixture project into $StageRoot"
@@ -161,7 +161,7 @@ if (-not $SkipBuildProject) {
         -Label 'Build fixture editor target' `
         -FilePath $BuildBat `
         -Arguments @(
-            'BlueprintExtractorFixtureEditor',
+            'BPXFixtureEditor',
             'Win64',
             'Development',
             "-Project=$ResolvedProjectPath",

@@ -2,9 +2,9 @@ using UnrealBuildTool;
 using System.Collections.Generic;
 using System;
 
-public class BlueprintExtractorFixtureTarget : TargetRules
+public class BPXFixtureTarget : TargetRules
 {
-	public BlueprintExtractorFixtureTarget(TargetInfo Target) : base(Target)
+	public BPXFixtureTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Game;
 		DefaultBuildSettings = Enum.TryParse<BuildSettingsVersion>("V6", out var BuildSettingsV6)
