@@ -74,6 +74,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ExtractMaterialInstance(const FString& AssetPath);
 
+	/** Extracts a base Material asset to a compact JSON graph snapshot. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractMaterial(const FString& AssetPath, const bool bVerbose = false);
+
+	/** Extracts a MaterialFunction, MaterialLayer, or MaterialLayerBlend asset to a compact JSON graph snapshot. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractMaterialFunction(const FString& AssetPath, const bool bVerbose = false);
+
 	/** Extracts an AnimSequence asset to a JSON string. Returns an error JSON object on failure. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ExtractAnimSequence(const FString& AssetPath);
@@ -204,6 +212,36 @@ public:
 	FString ModifyMaterialInstance(const FString& AssetPath,
 	                               const FString& PayloadJson,
 	                               const bool bValidateOnly = false);
+
+	/** Creates a new base Material asset with optional initial texture and settings payload. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateMaterial(const FString& AssetPath,
+	                       const FString& InitialTexturePath = TEXT(""),
+	                       const FString& SettingsJson = TEXT(""),
+	                       const bool bValidateOnly = false);
+
+	/** Applies graph and settings operations to an existing Material asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyMaterial(const FString& AssetPath,
+	                       const FString& PayloadJson,
+	                       const bool bValidateOnly = false);
+
+	/** Creates a new MaterialFunction-family asset. asset_kind: function, layer, or layer_blend. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateMaterialFunction(const FString& AssetPath,
+	                               const FString& AssetKind = TEXT("function"),
+	                               const FString& SettingsJson = TEXT(""),
+	                               const bool bValidateOnly = false);
+
+	/** Applies graph and settings operations to an existing MaterialFunction-family asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyMaterialFunction(const FString& AssetPath,
+	                               const FString& PayloadJson,
+	                               const bool bValidateOnly = false);
+
+	/** Recompiles or refreshes a material-family asset without saving it. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CompileMaterialAsset(const FString& AssetPath);
 
 	/** Creates a new UserDefinedStruct asset from extractor-shaped field payloads. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")

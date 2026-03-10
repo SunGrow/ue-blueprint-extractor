@@ -18,6 +18,7 @@
 #include "Extractors/UserDefinedEnumExtractor.h"
 #include "Extractors/CurveExtractor.h"
 #include "Extractors/CurveTableExtractor.h"
+#include "Extractors/MaterialGraphExtractor.h"
 #include "Extractors/MaterialInstanceExtractor.h"
 #include "Extractors/AnimAssetExtractor.h"
 #include "Extractors/WidgetTreeExtractor.h"
@@ -43,6 +44,9 @@
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
 #include "Materials/MaterialInstance.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialFunction.h"
+#include "Materials/MaterialFunctionInterface.h"
 #include "StateTree.h"
 #include "StateTreeEditorData.h"
 #include "StateTreeState.h"
@@ -710,6 +714,64 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractMaterialInstanceToJso
 	return FMaterialInstanceExtractor::Extract(MaterialInstance);
 }
 
+bool UBlueprintExtractorLibrary::ExtractMaterialToJson(UMaterial* Material, const FString& OutputPath)
+{
+	if (!Material)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractMaterialToJson: null Material"));
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> JsonRoot = ExtractMaterialToJsonObject(Material);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted Material '%s' to '%s'"), *Material->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractMaterialToJsonObject(UMaterial* Material, const bool bVerbose)
+{
+	return FMaterialGraphExtractor::ExtractMaterial(Material, bVerbose);
+}
+
+bool UBlueprintExtractorLibrary::ExtractMaterialFunctionToJson(UMaterialFunctionInterface* MaterialFunction, const FString& OutputPath)
+{
+	if (!MaterialFunction)
+	{
+		UE_LOG(LogBlueprintExtractor, Error, TEXT("ExtractMaterialFunctionToJson: null MaterialFunction"));
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> JsonRoot = ExtractMaterialFunctionToJsonObject(MaterialFunction);
+	if (!JsonRoot)
+	{
+		return false;
+	}
+
+	if (WriteJsonToFile(JsonRoot, OutputPath))
+	{
+		UE_LOG(LogBlueprintExtractor, Log, TEXT("Extracted MaterialFunction '%s' to '%s'"), *MaterialFunction->GetName(), *OutputPath);
+		return true;
+	}
+
+	UE_LOG(LogBlueprintExtractor, Error, TEXT("Failed to write JSON to '%s'"), *OutputPath);
+	return false;
+}
+
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractMaterialFunctionToJsonObject(UMaterialFunctionInterface* MaterialFunction, const bool bVerbose)
+{
+	return FMaterialGraphExtractor::ExtractMaterialFunction(MaterialFunction, bVerbose);
+}
+
 // ---------------------------------------------------------------------------
 // Animation asset extraction
 // ---------------------------------------------------------------------------
@@ -1091,6 +1153,28 @@ TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectBehaviorTreeReference
 	return Refs;
 }
 
+TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectMaterialReferences(const UMaterial* Material)
+{
+	TArray<FSoftObjectPath> Refs;
+	if (!Material)
+	{
+		return Refs;
+	}
+
+	return Refs;
+}
+
+TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectMaterialFunctionReferences(const UMaterialFunctionInterface* MaterialFunction)
+{
+	TArray<FSoftObjectPath> Refs;
+	if (!MaterialFunction)
+	{
+		return Refs;
+	}
+
+	return Refs;
+}
+
 TArray<FSoftObjectPath> UBlueprintExtractorLibrary::CollectMaterialInstanceReferences(const UMaterialInstance* MaterialInstance)
 {
 	TArray<FSoftObjectPath> Refs;
@@ -1270,6 +1354,24 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractWithCascade(const TAr
 				Refs = CollectMaterialInstanceReferences(MaterialInstance);
 			}
 		}
+		else if (UMaterial* Material = Cast<UMaterial>(Current.Asset))
+		{
+			AssetType = TEXT("Material");
+			bSuccess = ExtractMaterialToJson(Material, FullPath);
+			if (Current.Depth < MaxDepth)
+			{
+				Refs = CollectMaterialReferences(Material);
+			}
+		}
+		else if (UMaterialFunctionInterface* MaterialFunction = Cast<UMaterialFunctionInterface>(Current.Asset))
+		{
+			AssetType = TEXT("MaterialFunction");
+			bSuccess = ExtractMaterialFunctionToJson(MaterialFunction, FullPath);
+			if (Current.Depth < MaxDepth)
+			{
+				Refs = CollectMaterialFunctionReferences(MaterialFunction);
+			}
+		}
 		else if (UAnimSequence* AnimSequence = Cast<UAnimSequence>(Current.Asset))
 		{
 			AssetType = TEXT("AnimSequence");
@@ -1342,6 +1444,8 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractWithCascade(const TAr
 				|| Cast<UUserDefinedEnum>(RefAsset)
 				|| Cast<UCurveBase>(RefAsset)
 				|| Cast<UCurveTable>(RefAsset)
+				|| Cast<UMaterial>(RefAsset)
+				|| Cast<UMaterialFunctionInterface>(RefAsset)
 				|| Cast<UMaterialInstance>(RefAsset)
 				|| Cast<UAnimSequence>(RefAsset)
 				|| Cast<UAnimMontage>(RefAsset)

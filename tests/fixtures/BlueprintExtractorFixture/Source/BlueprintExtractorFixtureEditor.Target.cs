@@ -1,12 +1,15 @@
 using UnrealBuildTool;
 using System.Collections.Generic;
+using System;
 
 public class BlueprintExtractorFixtureEditorTarget : TargetRules
 {
 	public BlueprintExtractorFixtureEditorTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Editor;
-		DefaultBuildSettings = BuildSettingsVersion.V5;
+		DefaultBuildSettings = Enum.TryParse<BuildSettingsVersion>("V6", out var BuildSettingsV6)
+			? BuildSettingsV6
+			: BuildSettingsVersion.V5;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
 		ExtraModuleNames.AddRange(new List<string>
 		{

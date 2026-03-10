@@ -13,6 +13,7 @@
 #include "Authoring/DataAssetAuthoring.h"
 #include "Authoring/DataTableAuthoring.h"
 #include "Import/ImportJobManager.h"
+#include "Authoring/MaterialGraphAuthoring.h"
 #include "Authoring/MaterialInstanceAuthoring.h"
 #include "Authoring/StateTreeAuthoring.h"
 #include "Authoring/UserDefinedEnumAuthoring.h"
@@ -29,6 +30,8 @@
 #include "Engine/DataAsset.h"
 #include "Engine/DataTable.h"
 #include "Engine/UserDefinedEnum.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialFunctionInterface.h"
 #include "Materials/MaterialInstance.h"
 #include "StateTree.h"
 #include "StructUtils/UserDefinedStruct.h"
@@ -161,6 +164,21 @@ static bool ResolveAssetClassFilter(const FString& ClassFilter, FTopLevelAssetPa
 	if (ClassFilter.Equals(TEXT("MaterialInstance"), ESearchCase::IgnoreCase))
 	{
 		OutClassPath = UMaterialInstance::StaticClass()->GetClassPathName();
+		bOutRecursiveClasses = true;
+		return true;
+	}
+
+	if (ClassFilter.Equals(TEXT("Material"), ESearchCase::IgnoreCase))
+	{
+		OutClassPath = UMaterial::StaticClass()->GetClassPathName();
+		return true;
+	}
+
+	if (ClassFilter.Equals(TEXT("MaterialFunction"), ESearchCase::IgnoreCase)
+		|| ClassFilter.Equals(TEXT("MaterialLayer"), ESearchCase::IgnoreCase)
+		|| ClassFilter.Equals(TEXT("MaterialLayerBlend"), ESearchCase::IgnoreCase))
+	{
+		OutClassPath = UMaterialFunctionInterface::StaticClass()->GetClassPathName();
 		bOutRecursiveClasses = true;
 		return true;
 	}
@@ -403,6 +421,40 @@ FString UBlueprintExtractorSubsystem::ExtractMaterialInstance(const FString& Ass
 	if (!JsonObject.IsValid())
 	{
 		return MakeErrorJson(TEXT("Failed to extract MaterialInstance"));
+	}
+
+	return SerializeJsonObject(JsonObject);
+}
+
+FString UBlueprintExtractorSubsystem::ExtractMaterial(const FString& AssetPath, const bool bVerbose)
+{
+	UMaterial* Material = LoadAssetByPath<UMaterial>(AssetPath);
+	if (!Material)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a Material: %s"), *AssetPath));
+	}
+
+	const TSharedPtr<FJsonObject> JsonObject = UBlueprintExtractorLibrary::ExtractMaterialToJsonObject(Material, bVerbose);
+	if (!JsonObject.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to extract Material"));
+	}
+
+	return SerializeJsonObject(JsonObject);
+}
+
+FString UBlueprintExtractorSubsystem::ExtractMaterialFunction(const FString& AssetPath, const bool bVerbose)
+{
+	UMaterialFunctionInterface* MaterialFunction = LoadAssetByPath<UMaterialFunctionInterface>(AssetPath);
+	if (!MaterialFunction)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a MaterialFunction asset: %s"), *AssetPath));
+	}
+
+	const TSharedPtr<FJsonObject> JsonObject = UBlueprintExtractorLibrary::ExtractMaterialFunctionToJsonObject(MaterialFunction, bVerbose);
+	if (!JsonObject.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to extract MaterialFunction asset"));
 	}
 
 	return SerializeJsonObject(JsonObject);
@@ -1114,6 +1166,143 @@ FString UBlueprintExtractorSubsystem::ModifyMaterialInstance(const FString& Asse
 	if (!Result.IsValid())
 	{
 		return MakeErrorJson(TEXT("Failed to modify MaterialInstance"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CreateMaterial(const FString& AssetPath,
+                                                     const FString& InitialTexturePath,
+                                                     const FString& SettingsJson,
+                                                     const bool bValidateOnly)
+{
+	TSharedPtr<FJsonObject> ParsedSettings = MakeShared<FJsonObject>();
+	if (!SettingsJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(SettingsJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedSettings) || !ParsedSettings.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for SettingsJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FMaterialGraphAuthoring::CreateMaterial(
+		AssetPath,
+		InitialTexturePath,
+		ParsedSettings,
+		bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to create Material"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ModifyMaterial(const FString& AssetPath,
+                                                     const FString& PayloadJson,
+                                                     const bool bValidateOnly)
+{
+	UMaterial* Material = LoadAssetByPath<UMaterial>(AssetPath);
+	if (!Material)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a Material: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FMaterialGraphAuthoring::ModifyMaterial(
+		Material,
+		ParsedPayload,
+		bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to modify Material"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CreateMaterialFunction(const FString& AssetPath,
+                                                             const FString& AssetKind,
+                                                             const FString& SettingsJson,
+                                                             const bool bValidateOnly)
+{
+	TSharedPtr<FJsonObject> ParsedSettings = MakeShared<FJsonObject>();
+	if (!SettingsJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(SettingsJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedSettings) || !ParsedSettings.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for SettingsJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FMaterialGraphAuthoring::CreateMaterialFunction(
+		AssetPath,
+		AssetKind,
+		ParsedSettings,
+		bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to create MaterialFunction asset"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ModifyMaterialFunction(const FString& AssetPath,
+                                                             const FString& PayloadJson,
+                                                             const bool bValidateOnly)
+{
+	UMaterialFunctionInterface* MaterialFunction = LoadAssetByPath<UMaterialFunctionInterface>(AssetPath);
+	if (!MaterialFunction)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a MaterialFunction asset: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FMaterialGraphAuthoring::ModifyMaterialFunction(
+		MaterialFunction,
+		ParsedPayload,
+		bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to modify MaterialFunction asset"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CompileMaterialAsset(const FString& AssetPath)
+{
+	UObject* Asset = ResolveAssetByPath(AssetPath);
+	if (!Asset)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+	}
+
+	const TSharedPtr<FJsonObject> Result = FMaterialGraphAuthoring::CompileMaterialAsset(Asset);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to compile material asset"));
 	}
 
 	return SerializeJsonObject(Result);

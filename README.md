@@ -1,6 +1,6 @@
 # Blueprint Extractor
 
-UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, MaterialInstance, AnimSequence, AnimMontage, and BlendSpace data to structured JSON. It also supports explicit-save authoring for the current feasible editor-side families and async import or reimport jobs for textures and meshes through the MCP bridge.
+UE5 editor plugin that extracts Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, Material, MaterialFunction-family assets, MaterialInstance, AnimSequence, AnimMontage, and BlendSpace data to structured JSON. It also supports explicit-save authoring for the current feasible editor-side families and async import or reimport jobs for textures and meshes through the MCP bridge.
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
@@ -47,7 +47,7 @@ ue-blueprint-extractor/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── src/
-│   │   ├── index.ts                 # MCP tool definitions (58 tools + 6 resources + 2 resource templates)
+│   │   ├── index.ts                 # MCP tool definitions (65 tools + 7 resources + 2 resource templates)
 │   │   ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
 │   │   ├── ue-client.ts             # UE Remote Control HTTP client
 │   │   └── types.ts                 # Shared TypeScript types
@@ -95,7 +95,9 @@ UBlueprintExtractorLibrary::ExtractDataTableToJson(DataTable, OutputPath);
 UBlueprintExtractorLibrary::ExtractBehaviorTreeToJson(BehaviorTree, OutputPath);
 UBlueprintExtractorLibrary::ExtractBlackboardToJson(BlackboardData, OutputPath);
 
-// Single MaterialInstance / animation asset
+// Single Material / MaterialFunction / MaterialInstance / animation asset
+UBlueprintExtractorLibrary::ExtractMaterialToJson(Material, OutputPath);
+UBlueprintExtractorLibrary::ExtractMaterialFunctionToJson(MaterialFunction, OutputPath);
 UBlueprintExtractorLibrary::ExtractMaterialInstanceToJson(MaterialInstance, OutputPath);
 UBlueprintExtractorLibrary::ExtractAnimSequenceToJson(AnimSequence, OutputPath);
 
@@ -198,11 +200,12 @@ The MCP server supports a `compact` mode on `extract_blueprint` that strips low-
 - **Curve assets** — float/vector/linear-color channels, key times/values/tangents, interpolation, default values, and extrapolation modes
 - **CurveTables** — simple or rich curve rows with row names and per-row curve data
 
-### MaterialInstances
+### Materials and MaterialInstances
 
-- **Material chain** — parent material path and resolved base material
-- **Parameters** — scalar, vector, texture, runtime virtual texture, font, and static switch values
-- **Effective values** — uses material query APIs, so the JSON reflects the effective parameter state seen by the instance
+- **Materials** — compact classic graph extraction for root property connections, expressions, comments, parameter groups, layer stacks, and authored material settings
+- **MaterialFunctions / Layers / LayerBlends** — compact graph extraction with FunctionInput/FunctionOutput coverage plus family kind metadata
+- **MaterialInstances** — parent material path and resolved base material plus scalar, vector, texture, runtime virtual texture, sparse volume texture, font, static switch, and classic layer-stack overrides
+- **Effective values** — instance extraction uses material query APIs, so the JSON reflects the effective parameter state seen by the instance
 
 ### Animation Assets
 
@@ -254,7 +257,8 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
   +-- UserDefinedEnumExtractor     (entries, display names, values)
   +-- CurveExtractor               (curve channels, keys, extrapolation)
   +-- CurveTableExtractor          (curve table rows)
-  +-- MaterialInstanceExtractor    (effective parameter query APIs)
+  +-- MaterialGraphExtractor       (classic material and material-function graph extraction)
+  +-- MaterialInstanceExtractor    (effective parameter query APIs + layer stack / font / RVT / sparse volume texture)
   +-- AnimAssetExtractor           (AnimSequence, AnimMontage, BlendSpace)
   +-- WidgetTreeExtractor          (widget hierarchy, slots, properties, bindings)
   +-- BlueprintJsonSchema          (pin type serialization, flag bitmasks)
@@ -348,6 +352,8 @@ Then open a new session or restart your client. The tools will appear automatica
 | `extract_user_defined_enum` | Extract a UserDefinedEnum to JSON |
 | `extract_curve` | Extract a Curve asset to JSON |
 | `extract_curvetable` | Extract a CurveTable to JSON |
+| `extract_material` | Extract a compact classic Material graph to JSON |
+| `extract_material_function` | Extract a compact MaterialFunction / MaterialLayer / MaterialLayerBlend graph to JSON |
 | `extract_material_instance` | Extract a MaterialInstance to JSON |
 | `extract_anim_sequence` | Extract an AnimSequence to JSON |
 | `extract_anim_montage` | Extract an AnimMontage to JSON |
@@ -361,11 +367,6 @@ Then open a new session or restart your client. The tools will appear automatica
 | `modify_widget` | Patch properties and/or slot config on one widget by `widget_name` or `widget_path` |
 | `modify_widget_blueprint` | Primary widget authoring tool for structural ops such as replace-tree, patch-widget, insert-child, move, wrap, replace-class, batch, and compile workflows |
 | `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings plus counts |
-
-`modify_widget` notes:
-- Use `widget_path` when practical; it is safer than `widget_name` after structural edits.
-- Use `properties.name`, `properties.newName`, or `properties.new_name` to rename the widget itself.
-- For box slots, `slot.Size.sizeRule` accepts `Automatic` or the shorthand `Auto`.
 | `create_data_asset` | Create a concrete DataAsset asset and optionally initialize editable properties |
 | `modify_data_asset` | Apply a reflected property patch to an existing DataAsset |
 | `create_data_table` | Create a DataTable with a concrete row struct and optional initial rows |
@@ -374,8 +375,13 @@ Then open a new session or restart your client. The tools will appear automatica
 | `modify_curve` | Patch curve channels and upsert or delete individual keys |
 | `create_curve_table` | Create a CurveTable in rich or simple mode with optional initial rows |
 | `modify_curve_table` | Upsert, delete, or replace rows in an existing CurveTable |
+| `create_material` | Create a classic Material asset with optional initial texture and settings |
+| `modify_material` | Apply compact graph and settings operations to a classic Material asset |
+| `create_material_function` | Create a MaterialFunction, MaterialLayer, or MaterialLayerBlend asset |
+| `modify_material_function` | Apply compact graph and settings operations to a MaterialFunction-family asset |
+| `compile_material_asset` | Recompile or refresh a material-family asset without saving it |
 | `create_material_instance` | Create a MaterialInstanceConstant from a parent material/interface |
-| `modify_material_instance` | Reparent a MaterialInstanceConstant or apply scalar/vector/texture/static-switch overrides |
+| `modify_material_instance` | Reparent a MaterialInstanceConstant or apply scalar/vector/texture/static-switch/font/RVT/SVT/layer-stack overrides |
 | `create_user_defined_struct` | Create a UserDefinedStruct from extractor-shaped field payloads |
 | `modify_user_defined_struct` | Replace, patch, rename, remove, or reorder UserDefinedStruct fields |
 | `create_user_defined_enum` | Create a UserDefinedEnum from extractor-shaped entry payloads |
@@ -402,6 +408,11 @@ Then open a new session or restart your client. The tools will appear automatica
 | `import_meshes` | Enqueue a mesh-focused async import job with typed static or skeletal mesh option passthrough |
 | `save_assets` | Explicitly save dirty asset packages after successful write operations |
 
+`modify_widget` notes:
+- Use `widget_path` when practical; it is safer than `widget_name` after structural edits.
+- Use `properties.name`, `properties.newName`, or `properties.new_name` to rename the widget itself.
+- For box slots, `slot.Size.sizeRule` accepts `Automatic` or the shorthand `Auto`.
+
 ### Architecture
 
 ```
@@ -418,8 +429,8 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — The live editor actions are exposed as 58 MCP **tools**. Static guidance lives in 6 resources plus 2 resource templates: `blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://import-capabilities`, `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, and the `blueprint://examples/{family}` / `blueprint://widget-patterns/{pattern}` templates.
-- **Small, distinct surface** — 58 tools with non-overlapping purposes. Extraction tools are read-only; authoring and import tools are explicit write operations with separate save semantics.
+- **Right primitive** — The live editor actions are exposed as 65 MCP **tools**. Static guidance lives in 7 resources plus 2 resource templates: `blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://import-capabilities`, `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, `blueprint://material-graph-guidance`, and the `blueprint://examples/{family}` / `blueprint://widget-patterns/{pattern}` templates.
+- **Small, distinct surface** — 65 tools with non-overlapping purposes. Extraction tools are read-only; authoring and import tools are explicit write operations with separate save semantics.
 - **Description quality** — Tool descriptions stay selection-focused, while reusable workflows and examples live in resources/templates to save context.
 - **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; all write tools and `save_assets` require confirmation.
 - **Explicit save** — Write and import operations mutate assets and mark packages dirty, but they do not save automatically. Call `save_assets` when you want to persist the dirty packages to disk.
@@ -457,7 +468,7 @@ cd MCP
 BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 ```
 
-`test:live` expects a UE editor to already be running with Remote Control enabled. It creates scratch assets under `/Game/__GeneratedTests__/McpLive_*`, imports a texture over a local HTTP fixture server to verify header forwarding, imports a local mesh fixture, saves both assets explicitly, and can also smoke-test committed fixture assets when you provide any of these optional asset-path environment variables:
+`test:live` expects a UE editor to already be running with Remote Control enabled. It creates scratch assets under `/Game/__GeneratedTests__/McpLive_*`, imports a texture over a local HTTP fixture server to verify header forwarding, imports a local mesh fixture, creates scratch material-family assets, saves the imported and authored assets explicitly, and can also smoke-test committed fixture assets when you provide any of these optional asset-path environment variables:
 
 - `BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT`
 - `BLUEPRINT_EXTRACTOR_TEST_WIDGET_BLUEPRINT`
@@ -470,6 +481,8 @@ BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 - `BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_ENUM`
 - `BLUEPRINT_EXTRACTOR_TEST_CURVE`
 - `BLUEPRINT_EXTRACTOR_TEST_CURVE_TABLE`
+- `BLUEPRINT_EXTRACTOR_TEST_MATERIAL`
+- `BLUEPRINT_EXTRACTOR_TEST_MATERIAL_FUNCTION`
 - `BLUEPRINT_EXTRACTOR_TEST_MATERIAL_INSTANCE`
 - `BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE`
 - `BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE`
@@ -513,6 +526,12 @@ npm publish --access public
 ```
 
 ## Changelog
+
+### 1.12.0
+- **Classic material graph support** — added `extract_material`, `create_material`, `modify_material`, `extract_material_function`, `create_material_function`, `modify_material_function`, and `compile_material_asset` for compact UMaterial and MaterialFunction-family authoring.
+- **Shared material graph DSL** — material writes now use stable `expression_guid` selectors, batch-local `temp_id` references, material-property connections such as `MP_BaseColor`, and explicit compile/layout controls.
+- **MaterialInstance parity** — expanded material-instance extraction and authoring with runtime virtual texture, sparse volume texture, font, parameter-metadata, and classic layer-stack support.
+- **Cross-version hardening** — material automation now passes on UE 5.6 and 5.7, including the fixture-target BuildSettings update needed for 5.7 compatibility.
 
 ### 1.11.0
 - **Widget authoring polish** — added `extract_widget_blueprint`, expanded `modify_widget_blueprint` with `insert_child`, `remove_widget`, `move_widget`, `wrap_widget`, `replace_widget_class`, and `batch`, and added `widget_path` support plus `validate_only` to the widget mutation flow.

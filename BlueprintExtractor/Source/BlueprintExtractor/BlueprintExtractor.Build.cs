@@ -40,7 +40,8 @@ public class BlueprintExtractor : ModuleRules
 			"StateTreeModule",
 			"GameplayTags",
 			"UMG",
-			"UMGEditor"
+			"UMGEditor",
+			"SparseVolumeTexture"
 		});
 
 		if (Target.bBuildEditor)

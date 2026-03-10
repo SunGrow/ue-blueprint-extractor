@@ -7,9 +7,9 @@ This package exposes the `blueprint-extractor` server over stdio and talks to a 
 Current surface area includes:
 
 - read-only extraction tools for Blueprints, AI assets, data assets, curves, materials, and animation metadata
-- explicit-save authoring tools for the supported editor-side asset families, including compact widget extraction and incremental widget-structure ops
+- explicit-save authoring tools for the supported editor-side asset families, including compact widget extraction, incremental widget-structure ops, and classic material graph authoring for materials and MaterialFunction-family assets
 - async import and reimport tools with polling for generic assets plus typed texture and mesh helpers
-- static guidance resources and resource templates for authoring conventions, selector rules, example payloads, and widget patterns
+- static guidance resources and resource templates for authoring conventions, selector rules, example payloads, widget patterns, and classic material graph guidance
 
 ## Requirements
 
@@ -57,9 +57,9 @@ For the gated live smoke test:
 BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 ```
 
-The live suite imports a texture over a local HTTP fixture server, verifies request-header forwarding, imports a local mesh fixture, polls both jobs to completion, and saves the returned asset paths.
+The live suite imports a texture over a local HTTP fixture server, verifies request-header forwarding, imports a local mesh fixture, polls both jobs to completion, and also smoke-tests scratch material, material function, and material instance authoring before saving the returned asset paths.
 
-The default unit/stdio suites also cover resource-template registration plus the `extract_widget_blueprint` and `modify_widget_blueprint` structural surfaces.
+The default unit/stdio suites also cover resource-template registration plus the compact widget and material graph surfaces (`extract_widget_blueprint`, `modify_widget_blueprint`, `extract_material`, and `modify_material`).
 
 Repository and full documentation:
 

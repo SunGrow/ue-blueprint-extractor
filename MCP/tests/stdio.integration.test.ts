@@ -78,6 +78,39 @@ describe('stdio integration', () => {
           };
         }
 
+        if (request.functionName === 'ExtractMaterial') {
+          return {
+            body: {
+              ReturnValue: JSON.stringify({
+                success: true,
+                operation: 'extract_material',
+                material: {
+                  assetPath: request.parameters.AssetPath,
+                  expressions: [{
+                    expressionGuid: 'expr-guid-1',
+                    class: '/Script/Engine.MaterialExpressionScalarParameter',
+                  }],
+                },
+              }),
+            },
+          };
+        }
+
+        if (request.functionName === 'ModifyMaterial') {
+          return {
+            body: {
+              ReturnValue: JSON.stringify({
+                success: true,
+                operation: 'modify_material',
+                assetPath: request.parameters.AssetPath,
+                tempIdMap: {
+                  roughness: 'expr-guid-2',
+                },
+              }),
+            },
+          };
+        }
+
         return {
           status: 404,
           body: { error: `Unexpected method ${request.functionName}` },
@@ -107,9 +140,11 @@ describe('stdio integration', () => {
     cleanup.push(() => client.close());
 
     const tools = await client.listTools();
+    const resources = await client.listResources();
     const resourceTemplates = await client.listResourceTemplates();
     const scopes = await client.readResource({ uri: 'blueprint://scopes' });
     const importCapabilities = await client.readResource({ uri: 'blueprint://import-capabilities' });
+    const materialGuidance = await client.readResource({ uri: 'blueprint://material-graph-guidance' });
     const widgetPattern = await client.readResource({ uri: 'blueprint://widget-patterns/toolbar_header' });
     const result = await client.callTool({
       name: 'search_assets',
@@ -125,14 +160,36 @@ describe('stdio integration', () => {
         include_completed: true,
       },
     });
+    const extractMaterial = await client.callTool({
+      name: 'extract_material',
+      arguments: {
+        asset_path: '/Game/Test/M_Test',
+      },
+    });
+    const modifyMaterial = await client.callTool({
+      name: 'modify_material',
+      arguments: {
+        asset_path: '/Game/Test/M_Test',
+        operations: [
+          {
+            operation: 'add_expression',
+            temp_id: 'roughness',
+            expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+          },
+        ],
+      },
+    });
 
+    expect(resources.resources.some((resource) => resource.uri === 'blueprint://material-graph-guidance')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'extract_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_assets')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_material')).toBe(true);
     expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://examples/{family}')).toBe(true);
     expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://widget-patterns/{pattern}')).toBe(true);
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
     expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
+    expect(materialGuidance.contents[0]?.text).toContain('Blueprint Extractor Material Graph Guidance');
     expect(widgetPattern.contents[0]?.text).toContain('Pattern: toolbar_header');
     expect(JSON.parse(getTextContent(result))).toEqual([
       {
@@ -150,13 +207,51 @@ describe('stdio integration', () => {
         },
       ],
     });
-    expect(remoteServer.requests).toHaveLength(2);
+    expect(getTextContent(extractMaterial)).not.toContain('\n');
+    expect(JSON.parse(getTextContent(extractMaterial))).toMatchObject({
+      operation: 'extract_material',
+      material: {
+        assetPath: '/Game/Test/M_Test',
+      },
+    });
+    expect(JSON.parse(getTextContent(modifyMaterial))).toMatchObject({
+      operation: 'modify_material',
+      tempIdMap: {
+        roughness: 'expr-guid-2',
+      },
+    });
+    expect(remoteServer.requests).toHaveLength(4);
     expect(remoteServer.requests[0]?.objectPath).toBe('/Script/Test.OverrideSubsystem');
     expect(remoteServer.requests[1]).toMatchObject({
       objectPath: '/Script/Test.OverrideSubsystem',
       functionName: 'ListImportJobs',
       parameters: {
         bIncludeCompleted: true,
+      },
+    });
+    expect(remoteServer.requests[2]).toMatchObject({
+      objectPath: '/Script/Test.OverrideSubsystem',
+      functionName: 'ExtractMaterial',
+      parameters: {
+        AssetPath: '/Game/Test/M_Test',
+        bVerbose: false,
+      },
+    });
+    expect(remoteServer.requests[3]).toMatchObject({
+      objectPath: '/Script/Test.OverrideSubsystem',
+      functionName: 'ModifyMaterial',
+      parameters: {
+        AssetPath: '/Game/Test/M_Test',
+        PayloadJson: JSON.stringify({
+          operations: [
+            {
+              operation: 'add_expression',
+              temp_id: 'roughness',
+              expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+            },
+          ],
+        }),
+        bValidateOnly: false,
       },
     });
   });

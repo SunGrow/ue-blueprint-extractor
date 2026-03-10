@@ -66,17 +66,21 @@ describe('createBlueprintExtractorServer', () => {
     const tools = await harness.client.listTools();
     const extractBlueprint = tools.tools.find((tool) => tool.name === 'extract_blueprint');
     const extractWidgetBlueprint = tools.tools.find((tool) => tool.name === 'extract_widget_blueprint');
+    const extractMaterial = tools.tools.find((tool) => tool.name === 'extract_material');
     const createBlueprint = tools.tools.find((tool) => tool.name === 'create_blueprint');
     const importAssets = tools.tools.find((tool) => tool.name === 'import_assets');
     const getImportJob = tools.tools.find((tool) => tool.name === 'get_import_job');
     const saveAssets = tools.tools.find((tool) => tool.name === 'save_assets');
 
+    expect(resourceTemplates.resourceTemplates).toHaveLength(2);
+    expect(tools.tools).toHaveLength(65);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
     expect(resourceUris).toContain('blueprint://authoring-conventions');
     expect(resourceUris).toContain('blueprint://selector-conventions');
     expect(resourceUris).toContain('blueprint://widget-best-practices');
+    expect(resourceUris).toContain('blueprint://material-graph-guidance');
     expect(resourceTemplateUris).toContain('blueprint://examples/{family}');
     expect(resourceTemplateUris).toContain('blueprint://widget-patterns/{pattern}');
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
@@ -85,8 +89,15 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'list_import_jobs')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_textures')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_meshes')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'extract_material_function')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'create_material')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_material')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'create_material_function')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_material_function')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'compile_material_asset')).toBe(true);
     expect(extractBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractWidgetBlueprint?.annotations?.readOnlyHint).toBe(true);
+    expect(extractMaterial?.annotations?.readOnlyHint).toBe(true);
     expect(createBlueprint?.annotations?.readOnlyHint).toBe(false);
     expect(importAssets?.annotations?.readOnlyHint).toBe(false);
     expect(getImportJob?.annotations?.readOnlyHint).toBe(true);
@@ -103,20 +114,28 @@ describe('createBlueprintExtractorServer', () => {
     const authoringConventions = await harness.client.readResource({ uri: 'blueprint://authoring-conventions' });
     const selectorConventions = await harness.client.readResource({ uri: 'blueprint://selector-conventions' });
     const widgetBestPractices = await harness.client.readResource({ uri: 'blueprint://widget-best-practices' });
+    const materialGraphGuidance = await harness.client.readResource({ uri: 'blueprint://material-graph-guidance' });
     const widgetExample = await harness.client.readResource({ uri: 'blueprint://examples/widget_blueprint' });
+    const materialExample = await harness.client.readResource({ uri: 'blueprint://examples/material' });
+    const materialFunctionExample = await harness.client.readResource({ uri: 'blueprint://examples/material_function' });
     const widgetPattern = await harness.client.readResource({ uri: 'blueprint://widget-patterns/activatable_window' });
 
     expect(scopes.contents[0]?.mimeType).toBe('text/plain');
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
     expect(writeCapabilities.contents[0]?.text).toContain('Current write-capable families:');
     expect(writeCapabilities.contents[0]?.text).toContain('extract_widget_blueprint');
+    expect(writeCapabilities.contents[0]?.text).toContain('extract_material');
     expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
     expect(importCapabilities.contents[0]?.text).toContain('get_import_job');
     expect(importCapabilities.contents[0]?.text).toContain('mesh_type');
     expect(authoringConventions.contents[0]?.text).toContain('extract_widget_blueprint -> modify_widget_blueprint');
     expect(selectorConventions.contents[0]?.text).toContain('widget_path');
     expect(widgetBestPractices.contents[0]?.text).toContain('CommonActivatableWidget');
+    expect(materialGraphGuidance.contents[0]?.text).toContain('Blueprint Extractor Material Graph Guidance');
+    expect(materialGraphGuidance.contents[0]?.text).toContain('expression_guid');
     expect(widgetExample.contents[0]?.text).toContain('Example structural batch');
+    expect(materialExample.contents[0]?.text).toContain('connect_material_property');
+    expect(materialFunctionExample.contents[0]?.text).toContain('asset_kind=function, layer, or layer_blend');
     expect(widgetPattern.contents[0]?.text).toContain('Pattern: activatable_window');
   });
 
@@ -323,6 +342,173 @@ describe('createBlueprintExtractorServer', () => {
         method: 'CompileWidgetBlueprint',
         params: {
           AssetPath: '/Game/UI/WBP_Window',
+        },
+      },
+    ]);
+  });
+
+  it('routes material graph tools through the new subsystem calls and keeps compact text plus structured content', async () => {
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'ExtractMaterial') {
+        return JSON.stringify({
+          success: true,
+          operation: 'extract_material',
+          material: {
+            assetPath: params.AssetPath,
+            expressions: [{
+              expressionGuid: 'expr-guid-1',
+              class: '/Script/Engine.MaterialExpressionScalarParameter',
+            }],
+            propertyConnections: [{
+              property: 'MP_BaseColor',
+              expressionGuid: 'expr-guid-1',
+            }],
+          },
+        });
+      }
+
+      if (method === 'ModifyMaterial') {
+        return JSON.stringify({
+          success: true,
+          operation: 'modify_material',
+          assetPath: params.AssetPath,
+          tempIdMap: {
+            baseColor: 'expr-guid-1',
+          },
+          diagnostics: [],
+        });
+      }
+
+      if (method === 'CreateMaterialFunction') {
+        return JSON.stringify({
+          success: true,
+          operation: 'create_material_function',
+          assetPath: params.AssetPath,
+          assetKind: params.AssetKind,
+        });
+      }
+
+      if (method === 'CompileMaterialAsset') {
+        return JSON.stringify({
+          success: true,
+          operation: 'compile_material_asset',
+          assetPath: params.AssetPath,
+          compile: {
+            success: true,
+            status: 'UpToDate',
+          },
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const extractResult = await harness.client.callTool({
+      name: 'extract_material',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+        verbose: false,
+      },
+    });
+    const modifyResult = await harness.client.callTool({
+      name: 'modify_material',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+        compile_after: false,
+        operations: [
+          {
+            operation: 'add_expression',
+            temp_id: 'baseColor',
+            expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+          },
+        ],
+      },
+    });
+    const createFunctionResult = await harness.client.callTool({
+      name: 'create_material_function',
+      arguments: {
+        asset_path: '/Game/Materials/MF_Test',
+        asset_kind: 'layer_blend',
+        settings: {
+          description: 'Blend asset',
+        },
+      },
+    });
+    const compileResult = await harness.client.callTool({
+      name: 'compile_material_asset',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+      },
+    });
+
+    expect(getTextContent(extractResult)).not.toContain('\n');
+    expect(JSON.parse(getTextContent(extractResult))).toMatchObject({
+      operation: 'extract_material',
+      material: {
+        assetPath: '/Game/Materials/M_Test',
+      },
+    });
+    expect((extractResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
+      operation: 'extract_material',
+    });
+    expect(JSON.parse(getTextContent(modifyResult))).toMatchObject({
+      operation: 'modify_material',
+      tempIdMap: {
+        baseColor: 'expr-guid-1',
+      },
+    });
+    expect(JSON.parse(getTextContent(createFunctionResult))).toMatchObject({
+      operation: 'create_material_function',
+      assetKind: 'layer_blend',
+    });
+    expect(JSON.parse(getTextContent(compileResult))).toMatchObject({
+      operation: 'compile_material_asset',
+      compile: {
+        success: true,
+      },
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ExtractMaterial',
+        params: {
+          AssetPath: '/Game/Materials/M_Test',
+          bVerbose: false,
+        },
+      },
+      {
+        method: 'ModifyMaterial',
+        params: {
+          AssetPath: '/Game/Materials/M_Test',
+          PayloadJson: JSON.stringify({
+            compile_after: false,
+            operations: [
+              {
+                operation: 'add_expression',
+                temp_id: 'baseColor',
+                expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+              },
+            ],
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'CreateMaterialFunction',
+        params: {
+          AssetPath: '/Game/Materials/MF_Test',
+          AssetKind: 'layer_blend',
+          SettingsJson: JSON.stringify({
+            description: 'Blend asset',
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'CompileMaterialAsset',
+        params: {
+          AssetPath: '/Game/Materials/M_Test',
         },
       },
     ]);

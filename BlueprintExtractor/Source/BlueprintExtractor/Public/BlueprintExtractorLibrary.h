@@ -15,7 +15,9 @@ class UUserDefinedStruct;
 class UUserDefinedEnum;
 class UCurveBase;
 class UCurveTable;
+class UMaterial;
 class UMaterialInstance;
+class UMaterialFunctionInterface;
 class UAnimSequence;
 class UAnimMontage;
 class UBlendSpace;
@@ -91,6 +93,16 @@ public:
 	static TSharedPtr<FJsonObject> ExtractMaterialInstanceToJsonObject(UMaterialInstance* MaterialInstance);
 
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractMaterialToJson(UMaterial* Material, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractMaterialToJsonObject(UMaterial* Material, bool bVerbose = false);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
+	static bool ExtractMaterialFunctionToJson(UMaterialFunctionInterface* MaterialFunction, const FString& OutputPath);
+
+	static TSharedPtr<FJsonObject> ExtractMaterialFunctionToJsonObject(UMaterialFunctionInterface* MaterialFunction, bool bVerbose = false);
+
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
 	static bool ExtractAnimSequenceToJson(UAnimSequence* AnimSequence, const FString& OutputPath);
 
 	static TSharedPtr<FJsonObject> ExtractAnimSequenceToJsonObject(UAnimSequence* AnimSequence);
@@ -113,6 +125,8 @@ private:
 	static TArray<FSoftObjectPath> CollectBlueprintReferences(const UBlueprint* Blueprint);
 	static TArray<FSoftObjectPath> CollectStateTreeReferences(const UStateTree* StateTree);
 	static TArray<FSoftObjectPath> CollectBehaviorTreeReferences(const UBehaviorTree* BehaviorTree);
+	static TArray<FSoftObjectPath> CollectMaterialReferences(const UMaterial* Material);
+	static TArray<FSoftObjectPath> CollectMaterialFunctionReferences(const UMaterialFunctionInterface* MaterialFunction);
 	static TArray<FSoftObjectPath> CollectMaterialInstanceReferences(const UMaterialInstance* MaterialInstance);
 	static TArray<FSoftObjectPath> CollectAnimMontageReferences(const UAnimMontage* AnimMontage);
 	static TArray<FSoftObjectPath> CollectBlendSpaceReferences(const UBlendSpace* BlendSpace);

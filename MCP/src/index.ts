@@ -11,7 +11,7 @@ export type UEClientLike = Pick<UEClient, 'callSubsystem'>;
 export function createBlueprintExtractorServer(client: UEClientLike = new UEClient()) {
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '1.11.0',
+    version: '1.12.0',
   });
 
 // Shared scope enum with detailed descriptions
@@ -92,6 +92,7 @@ server.resource(
         '- DataTable: create_data_table, modify_data_table',
         '- Curve: create_curve, modify_curve',
         '- CurveTable: create_curve_table, modify_curve_table',
+        '- Material graph assets: extract_material, create_material, modify_material, extract_material_function, create_material_function, modify_material_function, compile_material_asset',
         '- MaterialInstance: create_material_instance, modify_material_instance',
         '- UserDefinedStruct: create_user_defined_struct, modify_user_defined_struct',
         '- UserDefinedEnum: create_user_defined_enum, modify_user_defined_enum',
@@ -123,7 +124,8 @@ server.resource(
         '- compile_widget_blueprint validates the asset but still does not save it.',
         '',
         'Explicit deferrals:',
-        '- No arbitrary Blueprint, Material, Niagara, or BehaviorTree graph synthesis.',
+        '- No arbitrary Blueprint, Niagara, or BehaviorTree graph synthesis.',
+        '- Material graph authoring currently targets the classic material ecosystem; there is no first-class Substrate-specific DSL yet.',
         '- No ControlRig, IK controller, or live world editing surfaces.',
         '- Animation authoring is limited to metadata, sections, slots, samples, notifies, sync markers, and curve metadata; raw authored track synthesis is out of scope.',
       ].join('\n'),
@@ -254,6 +256,51 @@ server.resource(
   }),
 );
 
+server.resource(
+  'material-graph-guidance',
+  'blueprint://material-graph-guidance',
+  {
+    description: 'Classic material graph guidance for materials, functions, layers, blends, and instance parity.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Material Graph Guidance',
+        '',
+        'Supported assets:',
+        '- UMaterial',
+        '- UMaterialFunction',
+        '- UMaterialFunctionMaterialLayer',
+        '- UMaterialFunctionMaterialLayerBlend',
+        '- UMaterialInstanceConstant parity via create_material_instance / modify_material_instance',
+        '',
+        'Stable selectors:',
+        '- Expressions use expression_guid.',
+        '- New expressions may be referenced within one batch by temp_id, then read back from tempIdMap.',
+        '- Material root properties use engine enum names such as MP_BaseColor, MP_Normal, and MP_EmissiveColor.',
+        '',
+        'Primary operations:',
+        '- add_expression, duplicate_expression, delete_expression, set_expression_properties, move_expression',
+        '- connect_expressions, disconnect_expression_input',
+        '- connect_material_property, disconnect_material_property',
+        '- add_comment, delete_comment',
+        '- rename_parameter_group, set_material_settings, set_layer_stack',
+        '',
+        'Defaults:',
+        '- Extraction is compact by default; set verbose=true only when you need more authored property detail.',
+        '- Mutations compile after apply unless compile_after=false.',
+        '- Writes do not save packages automatically; call save_assets after successful mutations.',
+        '',
+        'Current limits:',
+        '- No first-class Substrate authoring DSL yet. Substrate nodes still extract as generic expressions.',
+        '- MaterialFunction assets use FunctionInput and FunctionOutput nodes as graph entry/exit points instead of material root-property bindings.',
+      ].join('\n'),
+    }],
+  }),
+);
+
 const exampleResourceBodies: Record<string, string[]> = {
   widget_blueprint: [
     'Family: widget_blueprint',
@@ -290,6 +337,26 @@ const exampleResourceBodies: Record<string, string[]> = {
     '',
     'Example:',
     '{"items":[{"file_path":"C:/Temp/T_Test.png","destination_path":"/Game/Imported","destination_name":"T_Test"}]}',
+  ],
+  material: [
+    'Family: material',
+    '',
+    'Recommended flow:',
+    '1. create_material',
+    '2. modify_material',
+    '3. extract_material',
+    '4. save_assets',
+    '',
+    'Example batch:',
+    '{"settings":{"blend_mode":"BLEND_Opaque","two_sided":false},"operations":[{"operation":"add_expression","temp_id":"tex","class":"/Script/Engine.MaterialExpressionTextureSampleParameter2D","properties":{"ParameterName":"Albedo","Texture":"/Engine/EngineResources/DefaultTexture.DefaultTexture"}},{"operation":"connect_material_property","temp_id":"tex","from_output_name":"RGB","property":"MP_BaseColor"}]}',
+  ],
+  material_function: [
+    'Family: material_function',
+    '',
+    'Use create_material_function with asset_kind=function, layer, or layer_blend.',
+    '',
+    'Example batch:',
+    '{"settings":{"description":"Example function"},"operations":[{"operation":"add_expression","temp_id":"input","class":"/Script/Engine.MaterialExpressionFunctionInput","properties":{"InputName":"Color"}},{"operation":"add_expression","temp_id":"output","class":"/Script/Engine.MaterialExpressionFunctionOutput","properties":{"OutputName":"Result"}},{"operation":"connect_expressions","from_temp_id":"input","to_temp_id":"output","to_input_name":"A"}]}',
   ],
   data_asset: [
     'Family: data_asset',
@@ -943,14 +1010,78 @@ RETURNS: JSON object with effective MaterialInstance parameter values.`,
   },
   async ({ asset_path }) => {
     try {
-      const result = await client.callSubsystem('ExtractMaterialInstance', { AssetPath: asset_path });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+      const parsed = await callSubsystemJson('ExtractMaterialInstance', { AssetPath: asset_path });
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'extract_material',
+  {
+    title: 'Extract Material',
+    description: 'Extract a compact classic material graph snapshot.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Material asset.',
+      ),
+      verbose: z.boolean().default(false).describe(
+        'When true, include a more verbose property snapshot for expressions and comments.',
+      ),
+    },
+    annotations: {
+      title: 'Extract Material',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, verbose }) => {
+    try {
+      const parsed = await callSubsystemJson('ExtractMaterial', {
+        AssetPath: asset_path,
+        bVerbose: verbose,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'extract_material_function',
+  {
+    title: 'Extract Material Function',
+    description: 'Extract a compact graph snapshot for a material function, layer, or layer blend asset.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the MaterialFunction-family asset.',
+      ),
+      verbose: z.boolean().default(false).describe(
+        'When true, include a more verbose property snapshot for expressions and comments.',
+      ),
+    },
+    annotations: {
+      title: 'Extract Material Function',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, verbose }) => {
+    try {
+      const parsed = await callSubsystemJson('ExtractMaterialFunction', {
+        AssetPath: asset_path,
+        bVerbose: verbose,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
     }
   },
 );
@@ -1172,7 +1303,7 @@ server.registerTool(
 USAGE GUIDELINES:
 - Always call this before any extract_* tool if you don't already have the exact asset path.
 - Searches asset names (not full paths) — partial matches work (e.g. "Character" finds "BP_Character").
-- Filter by class to narrow results: "Blueprint" (default), "AnimBlueprint", "WidgetBlueprint", "StateTree", "BehaviorTree", "Blackboard", "DataAsset", "DataTable", "UserDefinedStruct", "UserDefinedEnum", "Curve", "CurveTable", "MaterialInstance", "AnimSequence", "AnimMontage", "BlendSpace", or empty string for all.
+- Filter by class to narrow results: "Blueprint" (default), "AnimBlueprint", "WidgetBlueprint", "StateTree", "BehaviorTree", "Blackboard", "DataAsset", "DataTable", "UserDefinedStruct", "UserDefinedEnum", "Curve", "CurveTable", "Material", "MaterialFunction", "MaterialInstance", "AnimSequence", "AnimMontage", "BlendSpace", or empty string for all.
 
 RETURNS: JSON array of objects with path, name, and class for each matching asset.`,
     inputSchema: {
@@ -1180,7 +1311,7 @@ RETURNS: JSON array of objects with path, name, and class for each matching asse
         'Search term to match against asset names. Partial matches work (e.g. "Player" finds "BP_PlayerCharacter").',
       ),
       class_filter: z.string().default('Blueprint').describe(
-        'Filter by asset class. Common values: "Blueprint", "AnimBlueprint", "WidgetBlueprint", "StateTree", "BehaviorTree", "Blackboard", "DataAsset", "DataTable", "UserDefinedStruct", "UserDefinedEnum", "Curve", "CurveTable", "MaterialInstance", "AnimSequence", "AnimMontage", "BlendSpace", or "" for all asset types.',
+        'Filter by asset class. Common values: "Blueprint", "AnimBlueprint", "WidgetBlueprint", "StateTree", "BehaviorTree", "Blackboard", "DataAsset", "DataTable", "UserDefinedStruct", "UserDefinedEnum", "Curve", "CurveTable", "Material", "MaterialFunction", "MaterialInstance", "AnimSequence", "AnimMontage", "BlendSpace", or "" for all asset types.',
       ),
       max_results: z.number().int().min(1).max(200).default(50).describe(
         'Maximum number of results to return. Lower values keep the response small and the query fast.',
@@ -1355,6 +1486,76 @@ const CurveTableRowSchema = z.object({
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 const StringMapSchema = z.record(z.string(), z.string());
+const MaterialFunctionAssetKindSchema = z.enum(['function', 'layer', 'layer_blend']);
+const MaterialParameterAssociationSchema = z.enum([
+  'GlobalParameter',
+  'LayerParameter',
+  'BlendParameter',
+  'global',
+  'layer',
+  'blend',
+]);
+const MaterialParameterSelectorSchema = z.object({
+  name: z.string(),
+  association: MaterialParameterAssociationSchema.optional(),
+  index: z.number().int().optional(),
+}).passthrough();
+const MaterialColorValueSchema = z.object({
+  r: z.number(),
+  g: z.number(),
+  b: z.number(),
+  a: z.number(),
+});
+const MaterialScalarParameterSchema = MaterialParameterSelectorSchema.extend({
+  value: z.number(),
+});
+const MaterialVectorParameterSchema = MaterialParameterSelectorSchema.extend({
+  value: MaterialColorValueSchema,
+});
+const MaterialTextureParameterSchema = MaterialParameterSelectorSchema.extend({
+  value: z.string().nullable(),
+});
+const MaterialFontParameterSchema = MaterialParameterSelectorSchema.extend({
+  value: z.string().nullable(),
+  fontPage: z.number().int().optional(),
+});
+const MaterialStaticSwitchParameterSchema = MaterialParameterSelectorSchema.extend({
+  value: z.boolean(),
+});
+const MaterialLayerEntrySchema = z.object({
+  layerPath: z.string().nullable().optional(),
+  blendPath: z.string().nullable().optional(),
+  layerGuid: z.string().optional(),
+  name: z.string().optional(),
+  visible: z.boolean().optional(),
+}).passthrough();
+const MaterialLayerStackSchema = z.object({
+  layers: z.array(MaterialLayerEntrySchema),
+}).passthrough();
+const MaterialGraphOperationSchema = z.object({
+  operation: z.enum([
+    'add_expression',
+    'duplicate_expression',
+    'delete_expression',
+    'set_expression_properties',
+    'move_expression',
+    'connect_expressions',
+    'disconnect_expression_input',
+    'connect_material_property',
+    'disconnect_material_property',
+    'add_comment',
+    'delete_comment',
+    'rename_parameter_group',
+    'set_material_settings',
+    'set_layer_stack',
+  ]),
+}).passthrough();
+const MaterialGraphPayloadSchema = z.object({
+  settings: JsonObjectSchema.optional(),
+  compile_after: z.boolean().optional(),
+  layout_after: z.boolean().optional(),
+  operations: z.array(MaterialGraphOperationSchema).default([]),
+}).passthrough();
 
 const ImportItemCommonSchema = z.object({
   file_path: z.string().optional(),
@@ -2276,21 +2477,14 @@ RETURNS: JSON with diagnostics, dirtyPackages, and parentMaterial. The asset is 
   },
   async ({ asset_path, parent_material_path, validate_only }) => {
     try {
-      const result = await client.callSubsystem('CreateMaterialInstance', {
+      const parsed = await callSubsystemJson('CreateMaterialInstance', {
         AssetPath: asset_path,
         ParentMaterialPath: parent_material_path,
         bValidateOnly: validate_only,
       });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
-        structuredContent: parsed,
-      };
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
     }
   },
 );
@@ -2314,34 +2508,29 @@ RETURNS: JSON with validation summary, diagnostics, and dirtyPackages. Changes a
       parentMaterial: z.string().optional().describe(
         'Optional new parent material or material instance path.',
       ),
-      scalarParameters: z.array(z.object({
-        name: z.string(),
-        value: z.number(),
-      })).optional().describe(
+      scalarParameters: z.array(MaterialScalarParameterSchema).optional().describe(
         'Optional scalar override list.',
       ),
-      vectorParameters: z.array(z.object({
-        name: z.string(),
-        value: z.object({
-          r: z.number(),
-          g: z.number(),
-          b: z.number(),
-          a: z.number(),
-        }),
-      })).optional().describe(
+      vectorParameters: z.array(MaterialVectorParameterSchema).optional().describe(
         'Optional vector override list.',
       ),
-      textureParameters: z.array(z.object({
-        name: z.string(),
-        value: z.string().nullable(),
-      })).optional().describe(
+      textureParameters: z.array(MaterialTextureParameterSchema).optional().describe(
         'Optional texture override list. Set value to null to clear an override.',
       ),
-      staticSwitchParameters: z.array(z.object({
-        name: z.string(),
-        value: z.boolean(),
-      })).optional().describe(
+      runtimeVirtualTextureParameters: z.array(MaterialTextureParameterSchema).optional().describe(
+        'Optional runtime virtual texture override list.',
+      ),
+      sparseVolumeTextureParameters: z.array(MaterialTextureParameterSchema).optional().describe(
+        'Optional sparse volume texture override list.',
+      ),
+      fontParameters: z.array(MaterialFontParameterSchema).optional().describe(
+        'Optional font override list. Set value to null to clear an override.',
+      ),
+      staticSwitchParameters: z.array(MaterialStaticSwitchParameterSchema).optional().describe(
         'Optional static switch override list.',
+      ),
+      layerStack: MaterialLayerStackSchema.optional().describe(
+        'Optional full replacement payload for the classic material layer stack override.',
       ),
       validate_only: z.boolean().default(false).describe(
         'When true, validate the payload without mutating the asset.',
@@ -2357,21 +2546,222 @@ RETURNS: JSON with validation summary, diagnostics, and dirtyPackages. Changes a
   },
   async ({ asset_path, validate_only, ...payload }) => {
     try {
-      const result = await client.callSubsystem('ModifyMaterialInstance', {
+      const parsed = await callSubsystemJson('ModifyMaterialInstance', {
         AssetPath: asset_path,
         PayloadJson: JSON.stringify(payload),
         bValidateOnly: validate_only,
       });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
-        structuredContent: parsed,
-      };
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_material',
+  {
+    title: 'Create Material',
+    description: 'Create a classic UMaterial asset with optional initial texture and settings.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new Material asset.',
+      ),
+      initial_texture_path: z.string().optional().describe(
+        'Optional texture path for the factory’s initial texture slot.',
+      ),
+      settings: JsonObjectSchema.optional().describe(
+        'Optional material settings payload such as material_domain, blend_mode, shading_model, two_sided, or usage_flags.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the create payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create Material',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, initial_texture_path, settings, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateMaterial', {
+        AssetPath: asset_path,
+        InitialTexturePath: initial_texture_path ?? '',
+        SettingsJson: JSON.stringify(settings ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_material',
+  {
+    title: 'Modify Material',
+    description: 'Apply compact graph and settings operations to a classic UMaterial asset.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Material asset.',
+      ),
+      settings: JsonObjectSchema.optional().describe(
+        'Optional top-level material settings payload applied before operations.',
+      ),
+      compile_after: z.boolean().optional().describe(
+        'Override the default compile-after-mutate behavior.',
+      ),
+      layout_after: z.boolean().optional().describe(
+        'When true, run the editor layout pass after mutations.',
+      ),
+      operations: z.array(MaterialGraphOperationSchema).default([]).describe(
+        'Ordered material graph operations.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Material',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, validate_only, ...payload }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyMaterial', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload satisfies z.infer<typeof MaterialGraphPayloadSchema>),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_material_function',
+  {
+    title: 'Create Material Function',
+    description: 'Create a material function, material layer, or material layer blend asset.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new MaterialFunction-family asset.',
+      ),
+      asset_kind: MaterialFunctionAssetKindSchema.default('function').describe(
+        'Choose function, layer, or layer_blend.',
+      ),
+      settings: JsonObjectSchema.optional().describe(
+        'Optional function settings such as description, expose_to_library, preview_blend_mode, or library_categories.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the create payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create Material Function',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, asset_kind, settings, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateMaterialFunction', {
+        AssetPath: asset_path,
+        AssetKind: asset_kind,
+        SettingsJson: JSON.stringify(settings ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_material_function',
+  {
+    title: 'Modify Material Function',
+    description: 'Apply compact graph and settings operations to a material function, layer, or layer blend asset.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the MaterialFunction-family asset.',
+      ),
+      settings: JsonObjectSchema.optional().describe(
+        'Optional top-level function settings applied before operations.',
+      ),
+      compile_after: z.boolean().optional().describe(
+        'Override the default compile-after-mutate behavior.',
+      ),
+      layout_after: z.boolean().optional().describe(
+        'When true, run the editor layout pass after mutations.',
+      ),
+      operations: z.array(MaterialGraphOperationSchema).default([]).describe(
+        'Ordered material graph operations.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Material Function',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, validate_only, ...payload }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyMaterialFunction', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify(payload satisfies z.infer<typeof MaterialGraphPayloadSchema>),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'compile_material_asset',
+  {
+    title: 'Compile Material Asset',
+    description: 'Recompile or refresh a material, material function-family asset, or material instance without saving it.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the material-family asset.',
+      ),
+    },
+    annotations: {
+      title: 'Compile Material Asset',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const parsed = await callSubsystemJson('CompileMaterialAsset', {
+        AssetPath: asset_path,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
     }
   },
 );

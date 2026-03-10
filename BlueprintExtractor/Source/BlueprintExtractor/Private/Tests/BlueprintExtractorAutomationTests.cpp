@@ -27,6 +27,7 @@ namespace BlueprintExtractorAutomation
 
 static constexpr TCHAR ScratchRoot[] = TEXT("/Game/__GeneratedTests__");
 static constexpr TCHAR DefaultMaterialPath[] = TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial");
+static constexpr TCHAR DefaultTexturePath[] = TEXT("/Engine/EngineResources/DefaultTexture.DefaultTexture");
 static constexpr TCHAR EngineSkeletonPath[] = TEXT("/Engine/EngineMeshes/SkeletalCube_Skeleton.SkeletalCube_Skeleton");
 static constexpr TCHAR EnginePreviewMeshPath[] = TEXT("/Engine/EngineMeshes/SkeletalCube.SkeletalCube");
 static constexpr TCHAR StateTreeSchemaPath[] = TEXT("/Script/GameplayStateTreeModule.StateTreeComponentSchema");
@@ -120,12 +121,20 @@ static TSharedPtr<FJsonObject> ExpectSuccessfulResult(FAutomationTestBase& Test,
 
 	FString Error;
 	const bool bHasError = Parsed->TryGetStringField(TEXT("error"), Error) && !Error.IsEmpty();
+	if (bHasError)
+	{
+		Test.AddInfo(FString::Printf(TEXT("%s returned error payload: %s"), *Context, *RawJson));
+	}
 	Test.TestFalse(*FString::Printf(TEXT("%s has no error payload"), *Context), bHasError);
 
 	bool bSuccess = true;
 	if (Parsed->HasTypedField<EJson::Boolean>(TEXT("success")))
 	{
 		bSuccess = Parsed->GetBoolField(TEXT("success"));
+	}
+	if (!bSuccess)
+	{
+		Test.AddInfo(FString::Printf(TEXT("%s returned failure payload: %s"), *Context, *RawJson));
 	}
 	Test.TestTrue(*FString::Printf(TEXT("%s succeeded"), *Context), bSuccess);
 	return Parsed;
@@ -247,6 +256,30 @@ static bool TryGetObjectFieldCopy(const TSharedPtr<FJsonObject>& Parsed,
 	return false;
 }
 
+static TSharedPtr<FJsonObject> FindArrayObjectByStringField(const TSharedPtr<FJsonObject>& Parsed,
+                                                            const TCHAR* ArrayField,
+                                                            const TCHAR* ValueField,
+                                                            const FString& ExpectedValue)
+{
+	const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+	if (!Parsed.IsValid() || !Parsed->TryGetArrayField(ArrayField, Values) || !Values)
+	{
+		return nullptr;
+	}
+
+	for (const TSharedPtr<FJsonValue>& Value : *Values)
+	{
+		const TSharedPtr<FJsonObject> ValueObject = Value.IsValid() ? Value->AsObject() : nullptr;
+		FString CandidateValue;
+		if (ValueObject.IsValid() && ValueObject->TryGetStringField(ValueField, CandidateValue) && CandidateValue == ExpectedValue)
+		{
+			return ValueObject;
+		}
+	}
+
+	return nullptr;
+}
+
 static TSharedPtr<FJsonObject> FindWidgetNodeByPath(const TSharedPtr<FJsonObject>& Node,
                                                     const FString& TargetPath,
                                                     const FString& ParentPath = FString())
@@ -348,6 +381,42 @@ static bool RunValidateOnlyCoverage(FAutomationTestBase& Test)
 			DefaultMaterialPath,
 			true),
 		TEXT("CreateMaterialInstance validate_only"));
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->CreateMaterial(
+			MakeUniqueAssetPath(TEXT("M_Validate")),
+			DefaultTexturePath,
+			TEXT(R"json({"twoSided":true,"blendMode":"BLEND_Opaque"})json"),
+			true),
+		TEXT("CreateMaterial validate_only"));
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->CreateMaterialFunction(
+			MakeUniqueAssetPath(TEXT("MF_Validate")),
+			TEXT("function"),
+			TEXT(R"json({"description":"Validate function"})json"),
+			true),
+		TEXT("CreateMaterialFunction validate_only"));
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->CreateMaterialFunction(
+			MakeUniqueAssetPath(TEXT("MFL_Validate")),
+			TEXT("layer"),
+			TEXT("{}"),
+			true),
+		TEXT("CreateMaterialLayer validate_only"));
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->CreateMaterialFunction(
+			MakeUniqueAssetPath(TEXT("MFLB_Validate")),
+			TEXT("layer_blend"),
+			TEXT("{}"),
+			true),
+		TEXT("CreateMaterialLayerBlend validate_only"));
 
 	ExpectValidateOnlyResult(
 		Test,
@@ -808,6 +877,270 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 		TEXT("Duplicate CreateBlueprint"));
 	Test.TestTrue(TEXT("Duplicate CreateBlueprint is rejected"), IsFailureResult(DuplicateBlueprintResult));
 
+	return true;
+}
+
+static bool RunMaterialCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString MaterialAssetPath = MakeUniqueAssetPath(TEXT("M_GraphSmoke"));
+	const FString MaterialFunctionAssetPath = MakeUniqueAssetPath(TEXT("MF_GraphSmoke"));
+	const FString MaterialLayerAssetPath = MakeUniqueAssetPath(TEXT("MFL_GraphSmoke"));
+	const FString MaterialLayerBlendAssetPath = MakeUniqueAssetPath(TEXT("MFLB_GraphSmoke"));
+	const FString MaterialInstanceAssetPath = MakeUniqueAssetPath(TEXT("MI_GraphSmoke"));
+
+	const FString MaterialObjectPath = MakeObjectPath(MaterialAssetPath);
+	const FString MaterialFunctionObjectPath = MakeObjectPath(MaterialFunctionAssetPath);
+	const FString MaterialLayerObjectPath = MakeObjectPath(MaterialLayerAssetPath);
+	const FString MaterialLayerBlendObjectPath = MakeObjectPath(MaterialLayerBlendAssetPath);
+	const FString MaterialInstanceObjectPath = MakeObjectPath(MaterialInstanceAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateMaterial(
+			MaterialAssetPath,
+			DefaultTexturePath,
+			TEXT(R"json({"twoSided":true,"blendMode":"BLEND_Opaque","materialDomain":"MD_Surface"})json"),
+			false),
+		TEXT("CreateMaterial"));
+
+	const FString MaterialPayload = TEXT(R"json({
+		"compileAfter":true,
+		"layoutAfter":true,
+		"operations":[
+			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionVectorParameter","tempId":"baseColor","editorX":-420,"editorY":-80,"properties":{"ParameterName":"BaseColorTint","Group":"Surface","DefaultValue":{"r":0.25,"g":0.5,"b":0.75,"a":1.0}}},
+			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionScalarParameter","tempId":"roughness","editorX":-420,"editorY":120,"properties":{"ParameterName":"SurfaceRoughness","Group":"Surface","DefaultValue":0.35}},
+			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionAdd","tempId":"unusedAdd","editorX":-120,"editorY":220},
+			{"operation":"connect_material_property","fromTempId":"baseColor","materialProperty":"MP_BaseColor"},
+			{"operation":"connect_material_property","fromTempId":"roughness","materialProperty":"MP_Roughness"},
+			{"operation":"connect_expressions","fromTempId":"roughness","toTempId":"unusedAdd","toInputName":"A"},
+			{"operation":"disconnect_expression_input","tempId":"unusedAdd","inputName":"A"},
+			{"operation":"move_expression","tempId":"unusedAdd","editorX":-40,"editorY":260},
+			{"operation":"set_expression_properties","tempId":"roughness","properties":{"DefaultValue":0.45}},
+			{"operation":"rename_parameter_group","oldGroupName":"Surface","newGroupName":"Shading"},
+			{"operation":"add_comment","tempId":"note","editorX":-520,"editorY":-220,"properties":{"Text":"Material smoke"}},
+			{"operation":"duplicate_expression","sourceTempId":"roughness","tempId":"roughnessCopy","editorX":-420,"editorY":260},
+			{"operation":"delete_expression","tempId":"roughnessCopy"},
+			{"operation":"delete_comment","tempId":"note"},
+			{"operation":"set_material_settings","settings":{"twoSided":true,"opacityMaskClipValue":0.33,"usageFlags":["MATUSAGE_StaticMesh"]}}
+		]
+	})json");
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ModifyMaterial(MaterialObjectPath, MaterialPayload, true),
+		TEXT("ModifyMaterial validate_only"));
+
+	const TSharedPtr<FJsonObject> ModifyMaterialResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyMaterial(MaterialObjectPath, MaterialPayload, false),
+		TEXT("ModifyMaterial"));
+	if (ModifyMaterialResult.IsValid())
+	{
+		TSharedPtr<FJsonObject> TempIdMap;
+		Test.TestTrue(TEXT("ModifyMaterial returns created expression tempId map"), TryGetObjectFieldCopy(ModifyMaterialResult, TEXT("tempIdMap"), TempIdMap) && TempIdMap.IsValid());
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileMaterialAsset(MaterialObjectPath),
+		TEXT("CompileMaterialAsset material"));
+
+	const TSharedPtr<FJsonObject> ExtractMaterialResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractMaterial(MaterialObjectPath, false),
+		TEXT("ExtractMaterial"));
+	if (!ExtractMaterialResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> MaterialJson;
+	Test.TestTrue(TEXT("ExtractMaterial returns a material object"), TryGetObjectFieldCopy(ExtractMaterialResult, TEXT("material"), MaterialJson) && MaterialJson.IsValid());
+	if (!MaterialJson.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(TEXT("ExtractMaterial preserves the material path"), MaterialJson->GetStringField(TEXT("assetPath")), MaterialObjectPath);
+	Test.TestEqual(TEXT("ExtractMaterial reports shading model"), MaterialJson->GetStringField(TEXT("shadingModel")), FString(TEXT("DefaultLit")));
+	Test.TestTrue(TEXT("ExtractMaterial reports used shading models"), MaterialJson->GetStringField(TEXT("usedShadingModels")).Contains(TEXT("DefaultLit")));
+	Test.TestNotNull(
+		TEXT("ExtractMaterial reports BaseColor property connection"),
+		FindArrayObjectByStringField(MaterialJson, TEXT("propertyConnections"), TEXT("property"), TEXT("MP_BaseColor")).Get());
+	Test.TestNotNull(
+		TEXT("ExtractMaterial reports renamed parameter group"),
+		FindArrayObjectByStringField(MaterialJson, TEXT("parameterGroups"), TEXT("groupName"), TEXT("Shading")).Get());
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateMaterialInstance(
+			MaterialInstanceAssetPath,
+			MaterialObjectPath,
+			false),
+		TEXT("CreateMaterialInstance from generated material"));
+
+	const FString MaterialInstancePayload = TEXT(R"json({
+		"scalarParameters":[{"name":"SurfaceRoughness","value":0.6}],
+		"vectorParameters":[{"name":"BaseColorTint","value":{"r":0.9,"g":0.2,"b":0.1,"a":1.0}}]
+	})json");
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ModifyMaterialInstance(MaterialInstanceObjectPath, MaterialInstancePayload, true),
+		TEXT("ModifyMaterialInstance validate_only material graph"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyMaterialInstance(MaterialInstanceObjectPath, MaterialInstancePayload, false),
+		TEXT("ModifyMaterialInstance material graph"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileMaterialAsset(MaterialInstanceObjectPath),
+		TEXT("CompileMaterialAsset material instance"));
+
+	const TSharedPtr<FJsonObject> ExtractMaterialInstanceResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractMaterialInstance(MaterialInstanceObjectPath),
+		TEXT("ExtractMaterialInstance graph"));
+	if (!ExtractMaterialInstanceResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> MaterialInstanceJson;
+	Test.TestTrue(TEXT("ExtractMaterialInstance returns a materialInstance object"), TryGetObjectFieldCopy(ExtractMaterialInstanceResult, TEXT("materialInstance"), MaterialInstanceJson) && MaterialInstanceJson.IsValid());
+	if (MaterialInstanceJson.IsValid())
+	{
+		Test.TestNotNull(
+			TEXT("ExtractMaterialInstance exposes vector parameter override"),
+			FindArrayObjectByStringField(MaterialInstanceJson, TEXT("vectorParameters"), TEXT("name"), TEXT("BaseColorTint")).Get());
+		Test.TestNotNull(
+			TEXT("ExtractMaterialInstance exposes scalar parameter override"),
+			FindArrayObjectByStringField(MaterialInstanceJson, TEXT("scalarParameters"), TEXT("name"), TEXT("SurfaceRoughness")).Get());
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateMaterialFunction(
+			MaterialFunctionAssetPath,
+			TEXT("function"),
+			TEXT("{}"),
+			false),
+		TEXT("CreateMaterialFunction"));
+
+	const FString MaterialFunctionPayload = TEXT(R"json({
+		"compileAfter":true,
+		"layoutAfter":true,
+		"operations":[
+			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionFunctionInput","tempId":"inputColor","editorX":-320,"editorY":0,"properties":{"InputName":"InputColor","InputType":"FunctionInput_Vector3"}},
+			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionFunctionOutput","tempId":"resultOutput","editorX":40,"editorY":0,"properties":{"OutputName":"Result"}},
+			{"operation":"connect_expressions","fromTempId":"inputColor","toTempId":"resultOutput"}
+		]
+	})json");
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ModifyMaterialFunction(MaterialFunctionObjectPath, MaterialFunctionPayload, true),
+		TEXT("ModifyMaterialFunction validate_only"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyMaterialFunction(MaterialFunctionObjectPath, MaterialFunctionPayload, false),
+		TEXT("ModifyMaterialFunction"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileMaterialAsset(MaterialFunctionObjectPath),
+		TEXT("CompileMaterialAsset material function"));
+
+	const TSharedPtr<FJsonObject> ExtractMaterialFunctionResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractMaterialFunction(MaterialFunctionObjectPath, false),
+		TEXT("ExtractMaterialFunction"));
+	if (!ExtractMaterialFunctionResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> MaterialFunctionJson;
+	Test.TestTrue(TEXT("ExtractMaterialFunction returns a materialFunction object"), TryGetObjectFieldCopy(ExtractMaterialFunctionResult, TEXT("materialFunction"), MaterialFunctionJson) && MaterialFunctionJson.IsValid());
+	if (MaterialFunctionJson.IsValid())
+	{
+		Test.TestEqual(TEXT("Material function extract reports the correct kind"), MaterialFunctionJson->GetStringField(TEXT("assetKind")), FString(TEXT("function")));
+
+		const TArray<TSharedPtr<FJsonValue>>* FunctionInputs = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* FunctionOutputs = nullptr;
+		Test.TestTrue(TEXT("Material function extract lists function inputs"), MaterialFunctionJson->TryGetArrayField(TEXT("functionInputs"), FunctionInputs) && FunctionInputs && FunctionInputs->Num() == 1);
+		Test.TestTrue(TEXT("Material function extract lists function outputs"), MaterialFunctionJson->TryGetArrayField(TEXT("functionOutputs"), FunctionOutputs) && FunctionOutputs && FunctionOutputs->Num() == 1);
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateMaterialFunction(
+			MaterialLayerAssetPath,
+			TEXT("layer"),
+			TEXT("{}"),
+			false),
+		TEXT("CreateMaterialFunction layer"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateMaterialFunction(
+			MaterialLayerBlendAssetPath,
+			TEXT("layer_blend"),
+			TEXT("{}"),
+			false),
+		TEXT("CreateMaterialFunction layer_blend"));
+
+	const TSharedPtr<FJsonObject> ExtractLayerResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractMaterialFunction(MaterialLayerObjectPath, false),
+		TEXT("ExtractMaterialLayer"));
+	if (ExtractLayerResult.IsValid())
+	{
+		TSharedPtr<FJsonObject> LayerJson;
+		Test.TestTrue(TEXT("ExtractMaterialLayer returns a materialFunction object"), TryGetObjectFieldCopy(ExtractLayerResult, TEXT("materialFunction"), LayerJson) && LayerJson.IsValid());
+		if (LayerJson.IsValid())
+		{
+			Test.TestEqual(TEXT("Material layer extract reports the correct kind"), LayerJson->GetStringField(TEXT("assetKind")), FString(TEXT("layer")));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> ExtractLayerBlendResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractMaterialFunction(MaterialLayerBlendObjectPath, false),
+		TEXT("ExtractMaterialLayerBlend"));
+	if (ExtractLayerBlendResult.IsValid())
+	{
+		TSharedPtr<FJsonObject> LayerBlendJson;
+		Test.TestTrue(TEXT("ExtractMaterialLayerBlend returns a materialFunction object"), TryGetObjectFieldCopy(ExtractLayerBlendResult, TEXT("materialFunction"), LayerBlendJson) && LayerBlendJson.IsValid());
+		if (LayerBlendJson.IsValid())
+		{
+			Test.TestEqual(TEXT("Material layer blend extract reports the correct kind"), LayerBlendJson->GetStringField(TEXT("assetKind")), FString(TEXT("layer_blend")));
+		}
+	}
+
+	const TArray<FString> AssetsToSave = {
+		MaterialObjectPath,
+		MaterialFunctionObjectPath,
+		MaterialLayerObjectPath,
+		MaterialLayerBlendObjectPath,
+		MaterialInstanceObjectPath,
+	};
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray(AssetsToSave)),
+		TEXT("SaveAssets material coverage"));
+
+	Test.TestTrue(TEXT("Material .uasset file exists after SaveAssets"), FPaths::FileExists(MakePackageFilename(MaterialAssetPath)));
 	return true;
 }
 
@@ -1395,6 +1728,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("RoundTrip"), [this]()
 		{
 			TestTrue(TEXT("Round-trip coverage completes"), RunRoundTripCoverage(*this));
+		});
+
+		It(TEXT("MaterialGraphRoundTrip"), [this]()
+		{
+			TestTrue(TEXT("Material graph coverage completes"), RunMaterialCoverage(*this));
 		});
 
 		It(TEXT("ImportJobs"), [this]()

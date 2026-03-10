@@ -28,6 +28,15 @@ type FixtureSmokeCase = {
   args: Record<string, unknown>;
 };
 
+function toObjectPath(assetPath: string): string {
+  const assetName = assetPath.split('/').at(-1);
+  if (!assetName) {
+    throw new Error(`Could not derive asset name from ${assetPath}`);
+  }
+
+  return `${assetPath}.${assetName}`;
+}
+
 const fixtureSmokeCases: FixtureSmokeCase[] = [
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT',
@@ -90,6 +99,16 @@ const fixtureSmokeCases: FixtureSmokeCase[] = [
     args: {},
   },
   {
+    envVar: 'BLUEPRINT_EXTRACTOR_TEST_MATERIAL',
+    tool: 'extract_material',
+    args: {},
+  },
+  {
+    envVar: 'BLUEPRINT_EXTRACTOR_TEST_MATERIAL_FUNCTION',
+    tool: 'extract_material_function',
+    args: {},
+  },
+  {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE',
     tool: 'extract_anim_sequence',
     args: {},
@@ -131,10 +150,20 @@ describeLive('live UE e2e', () => {
   const cleanup: Array<() => Promise<void>> = [];
   const runId = Date.now();
   const scratchRoot = `/Game/__GeneratedTests__/McpLive_${runId}`;
+  const blueprintValidatePath = `${scratchRoot}/BP_LiveSmokeValidate`;
   const blueprintPath = `${scratchRoot}/BP_LiveSmoke`;
+  const blueprintObjectPath = toObjectPath(blueprintPath);
   const liveImportRoot = `${scratchRoot}/LiveImports`;
+  const materialRoot = `${scratchRoot}/Materials`;
   const textureObjectPath = `${liveImportRoot}/T_LiveTexture.T_LiveTexture`;
   const meshObjectPath = `${liveImportRoot}/SM_LiveMesh.SM_LiveMesh`;
+  const materialPath = `${materialRoot}/M_LiveSmoke`;
+  const materialObjectPath = toObjectPath(materialPath);
+  const materialFunctionPath = `${materialRoot}/MF_LiveSmoke`;
+  const materialFunctionObjectPath = toObjectPath(materialFunctionPath);
+  const materialInstancePath = `${materialRoot}/MI_LiveSmoke`;
+  const materialInstanceObjectPath = toObjectPath(materialInstancePath);
+  const defaultTexturePath = '/Engine/EngineResources/DefaultTexture.DefaultTexture';
 
   afterEach(async () => {
     while (cleanup.length > 0) {
@@ -184,7 +213,7 @@ describeLive('live UE e2e', () => {
     const validateCreate = await client.callTool({
       name: 'create_blueprint',
       arguments: {
-        asset_path: blueprintPath,
+        asset_path: blueprintValidatePath,
         parent_class_path: '/Script/Engine.Actor',
         validate_only: true,
       },
@@ -203,7 +232,7 @@ describeLive('live UE e2e', () => {
     const extractBlueprint = await client.callTool({
       name: 'extract_blueprint',
       arguments: {
-        asset_path: blueprintPath,
+        asset_path: blueprintObjectPath,
         scope: 'Variables',
       },
     });
@@ -341,6 +370,227 @@ describeLive('live UE e2e', () => {
       name: 'save_assets',
       arguments: {
         asset_paths: [textureObjectPath, meshObjectPath],
+      },
+    });
+    expect(saveAssets.isError).toBeFalsy();
+    expect(JSON.parse(getTextContent(saveAssets))).toMatchObject({
+      saved: true,
+    });
+  });
+
+  it('creates, modifies, extracts, compiles, and saves scratch material-family assets', async () => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [serverEntry],
+      env: {
+        ...process.env,
+      },
+      stderr: 'pipe',
+    });
+
+    const client = new Client({
+      name: 'blueprint-extractor-live-material-tests',
+      version: '1.0.0',
+    });
+
+    await client.connect(transport);
+    cleanup.push(() => client.close());
+
+    const createMaterial = await client.callTool({
+      name: 'create_material',
+      arguments: {
+        asset_path: materialPath,
+        initial_texture_path: defaultTexturePath,
+        settings: {
+          two_sided: true,
+          blend_mode: 'BLEND_Opaque',
+          material_domain: 'MD_Surface',
+        },
+      },
+    });
+    expect(createMaterial.isError).toBeFalsy();
+
+    const modifyMaterial = await client.callTool({
+      name: 'modify_material',
+      arguments: {
+        asset_path: materialObjectPath,
+        compile_after: true,
+        layout_after: true,
+        operations: [
+          {
+            operation: 'add_expression',
+            temp_id: 'baseColor',
+            expression_class: '/Script/Engine.MaterialExpressionVectorParameter',
+            editor_x: -360,
+            editor_y: -120,
+            properties: {
+              ParameterName: 'BaseColorTint',
+              Group: 'Surface',
+              DefaultValue: { r: 0.2, g: 0.4, b: 0.8, a: 1.0 },
+            },
+          },
+          {
+            operation: 'add_expression',
+            temp_id: 'roughness',
+            expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+            editor_x: -360,
+            editor_y: 120,
+            properties: {
+              ParameterName: 'SurfaceRoughness',
+              Group: 'Surface',
+              DefaultValue: 0.35,
+            },
+          },
+          {
+            operation: 'connect_material_property',
+            from_temp_id: 'baseColor',
+            material_property: 'MP_BaseColor',
+          },
+          {
+            operation: 'connect_material_property',
+            from_temp_id: 'roughness',
+            material_property: 'MP_Roughness',
+          },
+          {
+            operation: 'rename_parameter_group',
+            old_group_name: 'Surface',
+            new_group_name: 'Shading',
+          },
+        ],
+      },
+    });
+    expect(modifyMaterial.isError).toBeFalsy();
+    expect(JSON.parse(getTextContent(modifyMaterial))).toMatchObject({
+      success: true,
+      operation: 'modify_material',
+    });
+
+    const extractMaterial = await client.callTool({
+      name: 'extract_material',
+      arguments: {
+        asset_path: materialObjectPath,
+      },
+    });
+    expect(extractMaterial.isError).toBeFalsy();
+    expect(JSON.parse(getTextContent(extractMaterial))).toMatchObject({
+      material: {
+        assetPath: materialObjectPath,
+      },
+    });
+
+    const createMaterialFunction = await client.callTool({
+      name: 'create_material_function',
+      arguments: {
+        asset_path: materialFunctionPath,
+        asset_kind: 'function',
+        settings: {
+          description: 'Live smoke material function',
+        },
+      },
+    });
+    expect(createMaterialFunction.isError).toBeFalsy();
+
+    const modifyMaterialFunction = await client.callTool({
+      name: 'modify_material_function',
+      arguments: {
+        asset_path: materialFunctionObjectPath,
+        compile_after: true,
+        operations: [
+          {
+            operation: 'add_expression',
+            temp_id: 'inputColor',
+            expression_class: '/Script/Engine.MaterialExpressionFunctionInput',
+            properties: {
+              InputName: 'InputColor',
+              InputType: 'FunctionInput_Vector3',
+            },
+          },
+          {
+            operation: 'add_expression',
+            temp_id: 'resultOutput',
+            expression_class: '/Script/Engine.MaterialExpressionFunctionOutput',
+            properties: {
+              OutputName: 'Result',
+            },
+          },
+          {
+            operation: 'connect_expressions',
+            from_temp_id: 'inputColor',
+            to_temp_id: 'resultOutput',
+          },
+        ],
+      },
+    });
+    expect(modifyMaterialFunction.isError).toBeFalsy();
+
+    const extractMaterialFunction = await client.callTool({
+      name: 'extract_material_function',
+      arguments: {
+        asset_path: materialFunctionObjectPath,
+      },
+    });
+    expect(extractMaterialFunction.isError).toBeFalsy();
+    expect(JSON.parse(getTextContent(extractMaterialFunction))).toMatchObject({
+      materialFunction: {
+        assetKind: 'function',
+      },
+    });
+
+    const createMaterialInstance = await client.callTool({
+      name: 'create_material_instance',
+      arguments: {
+        asset_path: materialInstancePath,
+        parent_material_path: materialObjectPath,
+      },
+    });
+    expect(createMaterialInstance.isError).toBeFalsy();
+
+    const modifyMaterialInstance = await client.callTool({
+      name: 'modify_material_instance',
+      arguments: {
+        asset_path: materialInstanceObjectPath,
+        scalarParameters: [
+          { name: 'SurfaceRoughness', value: 0.6 },
+        ],
+        vectorParameters: [
+          { name: 'BaseColorTint', value: { r: 0.9, g: 0.2, b: 0.1, a: 1.0 } },
+        ],
+      },
+    });
+    expect(modifyMaterialInstance.isError).toBeFalsy();
+
+    const compileMaterial = await client.callTool({
+      name: 'compile_material_asset',
+      arguments: {
+        asset_path: materialObjectPath,
+      },
+    });
+    expect(compileMaterial.isError).toBeFalsy();
+
+    const compileMaterialFunction = await client.callTool({
+      name: 'compile_material_asset',
+      arguments: {
+        asset_path: materialFunctionObjectPath,
+      },
+    });
+    expect(compileMaterialFunction.isError).toBeFalsy();
+
+    const compileMaterialInstance = await client.callTool({
+      name: 'compile_material_asset',
+      arguments: {
+        asset_path: materialInstanceObjectPath,
+      },
+    });
+    expect(compileMaterialInstance.isError).toBeFalsy();
+
+    const saveAssets = await client.callTool({
+      name: 'save_assets',
+      arguments: {
+        asset_paths: [
+          materialPath,
+          materialFunctionPath,
+          materialInstancePath,
+        ],
       },
     });
     expect(saveAssets.isError).toBeFalsy();
