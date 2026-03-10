@@ -1,6 +1,7 @@
 #include "Builders/WidgetTreeBuilder.h"
 
 #include "Authoring/AssetMutationHelpers.h"
+#include "Extractors/WidgetTreeExtractor.h"
 #include "PropertySerializer.h"
 
 #include "WidgetBlueprint.h"
@@ -150,6 +151,325 @@ static TSharedPtr<FJsonObject> MakeCompileResult(const bool bSuccess,
 	return Result;
 }
 
+struct FWidgetJsonNodeLocation
+{
+	TSharedPtr<FJsonObject> Node;
+	TSharedPtr<FJsonObject> Parent;
+	int32 ChildIndex = INDEX_NONE;
+	FString Path;
+};
+
+static FString JoinWidgetPath(const FString& ParentPath, const FString& WidgetName)
+{
+	return ParentPath.IsEmpty() ? WidgetName : ParentPath + TEXT("/") + WidgetName;
+}
+
+static FString NormalizeWidgetIdentifier(const FString& Identifier)
+{
+	FString Normalized = Identifier;
+	Normalized.TrimStartAndEndInline();
+	Normalized.ReplaceInline(TEXT(">"), TEXT("/"));
+	while (Normalized.StartsWith(TEXT("/")))
+	{
+		Normalized.RightChopInline(1, EAllowShrinking::No);
+	}
+	while (Normalized.EndsWith(TEXT("/")))
+	{
+		Normalized.LeftChopInline(1, EAllowShrinking::No);
+	}
+	return Normalized;
+}
+
+static bool IsWidgetPathIdentifier(const FString& Identifier)
+{
+	return NormalizeWidgetIdentifier(Identifier).Contains(TEXT("/"));
+}
+
+static TArray<TSharedPtr<FJsonValue>>& GetMutableChildrenArray(const TSharedPtr<FJsonObject>& ParentNode, const bool bCreateIfMissing)
+{
+	if (!ParentNode.IsValid())
+	{
+		static TArray<TSharedPtr<FJsonValue>> EmptyArray;
+		return EmptyArray;
+	}
+
+	TSharedPtr<FJsonValue>* ExistingField = ParentNode->Values.Find(TEXT("children"));
+	if (!ExistingField || !ExistingField->IsValid() || (*ExistingField)->Type != EJson::Array)
+	{
+		if (bCreateIfMissing)
+		{
+			ParentNode->SetArrayField(TEXT("children"), {});
+			ExistingField = ParentNode->Values.Find(TEXT("children"));
+		}
+		else
+		{
+			static TArray<TSharedPtr<FJsonValue>> EmptyArray;
+			return EmptyArray;
+		}
+	}
+
+	check(ExistingField && ExistingField->IsValid());
+	return const_cast<TArray<TSharedPtr<FJsonValue>>&>((*ExistingField)->AsArray());
+}
+
+static bool FindWidgetJsonNodeRecursive(const TSharedPtr<FJsonObject>& Node,
+                                        const FString& CurrentPath,
+                                        const FString& NormalizedIdentifier,
+                                        const bool bMatchPath,
+                                        const TSharedPtr<FJsonObject>& Parent,
+                                        const int32 ChildIndex,
+                                        FWidgetJsonNodeLocation& OutLocation)
+{
+	if (!Node.IsValid())
+	{
+		return false;
+	}
+
+	FString NodeName;
+	Node->TryGetStringField(TEXT("name"), NodeName);
+	const FString NodePath = JoinWidgetPath(CurrentPath, NodeName);
+	const bool bMatches = bMatchPath
+		? NodePath.Equals(NormalizedIdentifier, ESearchCase::CaseSensitive)
+		: NodeName.Equals(NormalizedIdentifier, ESearchCase::CaseSensitive);
+	if (bMatches)
+	{
+		OutLocation.Node = Node;
+		OutLocation.Parent = Parent;
+		OutLocation.ChildIndex = ChildIndex;
+		OutLocation.Path = NodePath;
+		return true;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+	if (!Node->TryGetArrayField(TEXT("children"), Children) || !Children)
+	{
+		return false;
+	}
+
+	for (int32 Index = 0; Index < Children->Num(); ++Index)
+	{
+		const TSharedPtr<FJsonObject> ChildNode = (*Children)[Index].IsValid() ? (*Children)[Index]->AsObject() : nullptr;
+		if (FindWidgetJsonNodeRecursive(ChildNode, NodePath, NormalizedIdentifier, bMatchPath, Node, Index, OutLocation))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool FindWidgetJsonNode(const TSharedPtr<FJsonObject>& RootNode,
+                               const FString& Identifier,
+                               FWidgetJsonNodeLocation& OutLocation)
+{
+	const FString NormalizedIdentifier = NormalizeWidgetIdentifier(Identifier);
+	if (NormalizedIdentifier.IsEmpty())
+	{
+		return false;
+	}
+
+	const bool bMatchPath = IsWidgetPathIdentifier(NormalizedIdentifier);
+	return FindWidgetJsonNodeRecursive(RootNode, FString(), NormalizedIdentifier, bMatchPath, nullptr, INDEX_NONE, OutLocation);
+}
+
+static bool TryGetStringFieldAnyCase(const TSharedPtr<FJsonObject>& JsonObject,
+                                     const TArray<FString>& CandidateFields,
+                                     FString& OutValue)
+{
+	if (!JsonObject.IsValid())
+	{
+		return false;
+	}
+
+	for (const FString& Candidate : CandidateFields)
+	{
+		if (JsonObject->TryGetStringField(Candidate, OutValue) && !OutValue.IsEmpty())
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool TryGetObjectField(const TSharedPtr<FJsonObject>& JsonObject,
+                              const TCHAR* FieldName,
+                              TSharedPtr<FJsonObject>& OutObject)
+{
+	if (!JsonObject.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* ExistingObject = nullptr;
+	if (JsonObject->TryGetObjectField(FStringView(FieldName), ExistingObject) && ExistingObject && ExistingObject->IsValid())
+	{
+		OutObject = *ExistingObject;
+		return true;
+	}
+
+	return false;
+}
+
+static FString GetWidgetIdentifierFromPayload(const TSharedPtr<FJsonObject>& PayloadJson,
+                                              const TArray<FString>& NameFields,
+                                              const TArray<FString>& PathFields)
+{
+	FString Identifier;
+	if (TryGetStringFieldAnyCase(PayloadJson, PathFields, Identifier))
+	{
+		return Identifier;
+	}
+
+	if (TryGetStringFieldAnyCase(PayloadJson, NameFields, Identifier))
+	{
+		return Identifier;
+	}
+
+	return FString();
+}
+
+static UClass* ResolveWidgetClassByName(const FString& ClassName)
+{
+	if (ClassName.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	UClass* Resolved = nullptr;
+
+	const bool bIsFullPath = ClassName.StartsWith(TEXT("/"));
+	if (bIsFullPath)
+	{
+		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *ClassName);
+		if (Resolved && Resolved->IsChildOf(UWidget::StaticClass()))
+		{
+			return Resolved;
+		}
+		return nullptr;
+	}
+
+	const FString UPrefixedName = TEXT("U") + ClassName;
+	Resolved = FindObject<UClass>(static_cast<UObject*>(nullptr), *UPrefixedName);
+	if (!Resolved)
+	{
+		Resolved = FindObject<UClass>(static_cast<UObject*>(nullptr), *ClassName);
+	}
+	if (!Resolved)
+	{
+		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/UMG.U") + ClassName));
+	}
+	if (!Resolved)
+	{
+		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/CommonUI.U") + ClassName));
+	}
+	if (!Resolved)
+	{
+		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/UMG.") + ClassName));
+	}
+	if (!Resolved)
+	{
+		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/CommonUI.") + ClassName));
+	}
+
+	if (Resolved && !Resolved->IsChildOf(UWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+
+	return Resolved;
+}
+
+static bool IsPanelWidgetClassName(const FString& ClassName)
+{
+	const UClass* WidgetClass = ResolveWidgetClassByName(ClassName);
+	return WidgetClass && WidgetClass->IsChildOf(UPanelWidget::StaticClass());
+}
+
+static void AnnotateWidgetPaths(const TSharedPtr<FJsonObject>& Node, const FString& ParentPath = FString())
+{
+	if (!Node.IsValid())
+	{
+		return;
+	}
+
+	FString NodeName;
+	Node->TryGetStringField(TEXT("name"), NodeName);
+	const FString WidgetPath = JoinWidgetPath(ParentPath, NodeName);
+	Node->SetStringField(TEXT("widgetPath"), WidgetPath);
+
+	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+	if (!Node->TryGetArrayField(TEXT("children"), Children) || !Children)
+	{
+		return;
+	}
+
+	for (const TSharedPtr<FJsonValue>& ChildValue : *Children)
+	{
+		if (ChildValue.IsValid())
+		{
+			AnnotateWidgetPaths(ChildValue->AsObject(), WidgetPath);
+		}
+	}
+}
+
+static TSharedPtr<FJsonObject> BuildWidgetCompileSnapshot(const UWidgetBlueprint* WidgetBP)
+{
+	const TSharedPtr<FJsonObject> Compile = MakeShared<FJsonObject>();
+	if (!WidgetBP)
+	{
+		Compile->SetBoolField(TEXT("success"), false);
+		Compile->SetStringField(TEXT("status"), TEXT("Missing"));
+		Compile->SetBoolField(TEXT("dirty"), false);
+		Compile->SetBoolField(TEXT("hasGeneratedClass"), false);
+		return Compile;
+	}
+
+	const bool bDirty = WidgetBP->GetOutermost() && WidgetBP->GetOutermost()->IsDirty();
+	const bool bHasGeneratedClass = WidgetBP->GeneratedClass != nullptr;
+	const EBlueprintStatus Status = WidgetBP->Status;
+	Compile->SetBoolField(TEXT("success"), Status != BS_Error && bHasGeneratedClass);
+	Compile->SetStringField(TEXT("status"), GetBlueprintStatusString(Status));
+	Compile->SetBoolField(TEXT("dirty"), bDirty);
+	Compile->SetBoolField(TEXT("hasGeneratedClass"), bHasGeneratedClass);
+	Compile->SetBoolField(TEXT("needsCompile"), bDirty || Status == BS_Dirty || !bHasGeneratedClass);
+	return Compile;
+}
+
+static TArray<TSharedPtr<FJsonValue>> ExtractWidgetAnimationSummaries(const UWidgetBlueprint* WidgetBP)
+{
+	TArray<TSharedPtr<FJsonValue>> AnimationValues;
+	if (!WidgetBP)
+	{
+		return AnimationValues;
+	}
+
+	for (UWidgetAnimation* Animation : WidgetBP->Animations)
+	{
+		if (!Animation)
+		{
+			continue;
+		}
+
+		const TSharedPtr<FJsonObject> AnimationObject = MakeShared<FJsonObject>();
+		AnimationObject->SetStringField(TEXT("name"), Animation->GetName());
+
+		TArray<TSharedPtr<FJsonValue>> BindingValues;
+		for (const FWidgetAnimationBinding& Binding : Animation->AnimationBindings)
+		{
+			const TSharedPtr<FJsonObject> BindingObject = MakeShared<FJsonObject>();
+			BindingObject->SetStringField(TEXT("widgetName"), Binding.WidgetName.ToString());
+			BindingObject->SetStringField(TEXT("animationGuid"), Binding.AnimationGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
+			BindingValues.Add(MakeShared<FJsonValueObject>(BindingObject));
+		}
+
+		AnimationObject->SetArrayField(TEXT("bindings"), BindingValues);
+		AnimationValues.Add(MakeShared<FJsonValueObject>(AnimationObject));
+	}
+
+	return AnimationValues;
+}
+
 static void SyncWidgetVariableGuids(UWidgetBlueprint* WidgetBP)
 {
 #if WITH_EDITORONLY_DATA
@@ -290,6 +610,43 @@ static void SyncGeneratedWidgetVariables(UWidgetBlueprint* WidgetBP)
 #endif
 }
 
+static void PruneStaleWidgetReferences(UWidgetBlueprint* WidgetBP)
+{
+#if WITH_EDITORONLY_DATA
+	if (!WidgetBP)
+	{
+		return;
+	}
+
+	TSet<FName> ValidWidgetNames;
+	WidgetBP->ForEachSourceWidget([&ValidWidgetNames](UWidget* Widget)
+	{
+		if (Widget)
+		{
+			ValidWidgetNames.Add(Widget->GetFName());
+		}
+	});
+
+	WidgetBP->Bindings.RemoveAll([&ValidWidgetNames](const FDelegateEditorBinding& Binding)
+	{
+		return !ValidWidgetNames.Contains(FName(*Binding.ObjectName));
+	});
+
+	for (UWidgetAnimation* WidgetAnimation : WidgetBP->Animations)
+	{
+		if (!WidgetAnimation)
+		{
+			continue;
+		}
+
+		WidgetAnimation->AnimationBindings.RemoveAll([&ValidWidgetNames](const FWidgetAnimationBinding& Binding)
+		{
+			return !ValidWidgetNames.Contains(Binding.WidgetName);
+		});
+	}
+#endif
+}
+
 static TSharedPtr<FJsonObject> CloneJsonObject(const TSharedPtr<FJsonObject>& Source)
 {
 	if (!Source.IsValid())
@@ -396,6 +753,73 @@ static TSharedPtr<FJsonObject> NormalizeWidgetPropertiesJson(const TSharedPtr<FJ
 	}
 
 	return NormalizedProperties;
+}
+
+static void MergeJsonObjectFields(const TSharedPtr<FJsonObject>& Target,
+                                  const TSharedPtr<FJsonObject>& Patch)
+{
+	if (!Target.IsValid() || !Patch.IsValid())
+	{
+		return;
+	}
+
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Patch->Values)
+	{
+		Target->SetField(Pair.Key, Pair.Value);
+	}
+}
+
+static TSharedPtr<FJsonObject> EnsureObjectField(const TSharedPtr<FJsonObject>& Parent, const TCHAR* FieldName)
+{
+	if (!Parent.IsValid())
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FJsonObject> ExistingObject;
+	if (TryGetObjectField(Parent, FieldName, ExistingObject) && ExistingObject.IsValid())
+	{
+		return ExistingObject;
+	}
+
+	ExistingObject = MakeShared<FJsonObject>();
+	Parent->SetObjectField(FieldName, ExistingObject);
+	return ExistingObject;
+}
+
+static bool ApplySnapshotWidgetPatch(const TSharedPtr<FJsonObject>& WidgetNode,
+                                     const TSharedPtr<FJsonObject>& PropertiesJson,
+                                     const TSharedPtr<FJsonObject>& SlotJson,
+                                     TArray<FString>& OutErrors)
+{
+	if (!WidgetNode.IsValid())
+	{
+		OutErrors.Add(TEXT("Patch operation requires a valid widget node"));
+		return false;
+	}
+
+	FString RenameRequest;
+	const TSharedPtr<FJsonObject> EffectiveProperties = NormalizeWidgetPropertiesJson(PropertiesJson, &RenameRequest);
+	if (!RenameRequest.IsEmpty())
+	{
+		OutErrors.Add(TEXT("Batch widget patches do not support rename fields; use patch_widget directly instead."));
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> EffectiveSlot = NormalizeSlotJson(SlotJson);
+	if (EffectiveProperties.IsValid() && EffectiveProperties->Values.Num() > 0)
+	{
+		const TSharedPtr<FJsonObject> TargetProperties = EnsureObjectField(WidgetNode, TEXT("properties"));
+		MergeJsonObjectFields(TargetProperties, EffectiveProperties);
+	}
+
+	if (EffectiveSlot.IsValid() && EffectiveSlot->Values.Num() > 0)
+	{
+		const TSharedPtr<FJsonObject> TargetSlot = EnsureObjectField(WidgetNode, TEXT("slot"));
+		MergeJsonObjectFields(TargetSlot, EffectiveSlot);
+	}
+
+	return true;
 }
 
 static FName SanitizeWidgetObjectName(const FString& RequestedName, const FName CurrentName)
@@ -651,6 +1075,92 @@ private:
 	TArray<FWidgetBlueprintEditor*> Editors;
 };
 
+static FString BuildWidgetPathFromLiveWidget(const UWidget* Widget)
+{
+	TArray<FString> Segments;
+	const UWidget* CurrentWidget = Widget;
+	while (CurrentWidget)
+	{
+		Segments.Insert(CurrentWidget->GetName(), 0);
+		const UPanelWidget* Parent = CurrentWidget->GetParent();
+		CurrentWidget = Parent;
+	}
+
+	return FString::Join(Segments, TEXT("/"));
+}
+
+static UWidget* FindWidgetByIdentifier(UWidgetBlueprint* WidgetBP,
+                                       const FString& Identifier,
+                                       FString* OutWidgetPath = nullptr)
+{
+	if (!WidgetBP || !WidgetBP->WidgetTree)
+	{
+		return nullptr;
+	}
+
+	const FString NormalizedIdentifier = NormalizeWidgetIdentifier(Identifier);
+	if (NormalizedIdentifier.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	if (!IsWidgetPathIdentifier(NormalizedIdentifier))
+	{
+		UWidget* Widget = WidgetBP->WidgetTree->FindWidget(FName(*NormalizedIdentifier));
+		if (Widget && OutWidgetPath)
+		{
+			*OutWidgetPath = BuildWidgetPathFromLiveWidget(Widget);
+		}
+		return Widget;
+	}
+
+	TArray<FString> Segments;
+	NormalizedIdentifier.ParseIntoArray(Segments, TEXT("/"), true);
+	if (Segments.Num() == 0)
+	{
+		return nullptr;
+	}
+
+	UWidget* CurrentWidget = WidgetBP->WidgetTree->RootWidget;
+	if (!CurrentWidget || CurrentWidget->GetName() != Segments[0])
+	{
+		return nullptr;
+	}
+
+	for (int32 Index = 1; Index < Segments.Num(); ++Index)
+	{
+		const UPanelWidget* ParentPanel = Cast<UPanelWidget>(CurrentWidget);
+		if (!ParentPanel)
+		{
+			return nullptr;
+		}
+
+		UWidget* NextWidget = nullptr;
+		for (int32 ChildIndex = 0; ChildIndex < ParentPanel->GetChildrenCount(); ++ChildIndex)
+		{
+			UWidget* ChildWidget = ParentPanel->GetChildAt(ChildIndex);
+			if (ChildWidget && ChildWidget->GetName() == Segments[Index])
+			{
+				NextWidget = ChildWidget;
+				break;
+			}
+		}
+
+		if (!NextWidget)
+		{
+			return nullptr;
+		}
+
+		CurrentWidget = NextWidget;
+	}
+
+	if (OutWidgetPath)
+	{
+		*OutWidgetPath = NormalizedIdentifier;
+	}
+	return CurrentWidget;
+}
+
 } // namespace WidgetTreeBuilderInternal
 
 // ---------------------------------------------------------------------------
@@ -779,7 +1289,50 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 }
 
 // ---------------------------------------------------------------------------
-// 2. BuildWidgetTree
+// 2. ExtractWidgetBlueprint
+// ---------------------------------------------------------------------------
+
+TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBlueprint* WidgetBP)
+{
+	using namespace WidgetTreeBuilderInternal;
+
+	if (!ensureMsgf(WidgetBP, TEXT("WidgetTreeBuilder::ExtractWidgetBlueprint: null WidgetBP")))
+	{
+		return MakeErrorResult(TEXT("WidgetBlueprint is null"));
+	}
+
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("operation"), TEXT("extract_widget_blueprint"));
+	Result->SetStringField(TEXT("assetPath"), WidgetBP->GetPathName());
+	Result->SetStringField(TEXT("assetClass"), TEXT("WidgetBlueprint"));
+	Result->SetStringField(TEXT("parentClass"), WidgetBP->ParentClass ? WidgetBP->ParentClass->GetName() : FString());
+	Result->SetStringField(TEXT("parentClassPath"), WidgetBP->ParentClass ? WidgetBP->ParentClass->GetPathName() : FString());
+
+	if (const TSharedPtr<FJsonObject> WidgetTreeJson = FWidgetTreeExtractor::Extract(WidgetBP))
+	{
+		TSharedPtr<FJsonObject> RootWidgetJson;
+		if (TryGetObjectField(WidgetTreeJson, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid())
+		{
+			AnnotateWidgetPaths(RootWidgetJson);
+			Result->SetObjectField(TEXT("rootWidget"), RootWidgetJson);
+		}
+
+		TSharedPtr<FJsonObject> BindingsJson;
+		if (TryGetObjectField(WidgetTreeJson, TEXT("bindings"), BindingsJson) && BindingsJson.IsValid())
+		{
+			Result->SetObjectField(TEXT("bindings"), BindingsJson);
+		}
+	}
+
+	Result->SetArrayField(TEXT("animations"), ExtractWidgetAnimationSummaries(WidgetBP));
+	Result->SetObjectField(TEXT("compile"), BuildWidgetCompileSnapshot(WidgetBP));
+
+	return Result;
+}
+
+// ---------------------------------------------------------------------------
+// 3. BuildWidgetTree
 // ---------------------------------------------------------------------------
 
 TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* WidgetBP,
@@ -868,6 +1421,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 	WidgetTree->RootWidget = RootWidget;
 	SyncWidgetVariableGuids(WidgetBP);
 	SyncGeneratedWidgetVariables(WidgetBP);
+	PruneStaleWidgetReferences(WidgetBP);
 
 	// Count total widgets
 	TArray<UWidget*> FinalWidgets;
@@ -885,7 +1439,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 }
 
 // ---------------------------------------------------------------------------
-// 3. ModifyWidget
+// 4. ModifyWidget
 // ---------------------------------------------------------------------------
 
 TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* WidgetBP,
@@ -918,7 +1472,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 		return Context.BuildResult(false);
 	}
 
-	UWidget* Widget = WidgetTree->FindWidget(FName(*WidgetName));
+	UWidget* Widget = FindWidgetByIdentifier(WidgetBP, WidgetName);
 	if (!Widget)
 	{
 		Context.AddError(TEXT("widget_not_found"),
@@ -1018,12 +1572,459 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 	const bool bSuccess = OutErrors.Num() == 0;
 	const TSharedPtr<FJsonObject> Result = BuildMutationResult(Context, bSuccess, OutErrors);
 	Result->SetStringField(TEXT("widgetName"), Widget->GetName());
+	Result->SetStringField(TEXT("widgetPath"), BuildWidgetPathFromLiveWidget(Widget));
 	Result->SetStringField(TEXT("widgetClass"), Widget->GetClass()->GetName());
 	return Result;
 }
 
 // ---------------------------------------------------------------------------
-// 4. CompileWidgetBlueprint
+// 5. ModifyWidgetBlueprintStructure
+// ---------------------------------------------------------------------------
+
+TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidgetBlueprint* WidgetBP,
+                                                                           const FString& Operation,
+                                                                           const TSharedPtr<FJsonObject>& PayloadJson,
+                                                                           const bool bValidateOnly)
+{
+	using namespace WidgetTreeBuilderInternal;
+
+	FAssetMutationContext Context(TEXT("modify_widget_blueprint"), WidgetBP ? WidgetBP->GetPathName() : FString(), TEXT("WidgetBlueprint"), bValidateOnly);
+	if (!ensureMsgf(WidgetBP, TEXT("WidgetTreeBuilder::ModifyWidgetBlueprintStructure: null WidgetBP")))
+	{
+		Context.AddError(TEXT("null_widget_blueprint"), TEXT("WidgetBlueprint is null"));
+		return Context.BuildResult(false);
+	}
+
+	if (Operation.IsEmpty())
+	{
+		Context.AddError(TEXT("empty_operation"), TEXT("WidgetBlueprint structural operation is required"), WidgetBP->GetPathName());
+		return Context.BuildResult(false);
+	}
+
+	const TSharedPtr<FJsonObject> WidgetTreeJson = FWidgetTreeExtractor::Extract(WidgetBP);
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	if (!WidgetTreeJson.IsValid() || !TryGetObjectField(WidgetTreeJson, TEXT("rootWidget"), RootWidgetJson) || !RootWidgetJson.IsValid())
+	{
+		Context.AddError(TEXT("empty_widget_tree"), TEXT("WidgetBlueprint has no root widget to mutate"), WidgetBP->GetPathName());
+		return Context.BuildResult(false);
+	}
+
+	const auto FailWithErrors = [&Context](const FString& Summary, const TArray<FString>& Errors)
+	{
+		Context.SetValidationSummary(false, Summary, Errors);
+		return BuildMutationResult(Context, false, Errors);
+	};
+
+	const auto ApplyInsertChild = [&RootWidgetJson](const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors)
+	{
+		const FString ParentIdentifier = GetWidgetIdentifierFromPayload(
+			OperationJson,
+			{TEXT("parent_widget_name"), TEXT("parentWidgetName")},
+			{TEXT("parent_widget_path"), TEXT("parentWidgetPath")});
+		if (ParentIdentifier.IsEmpty())
+		{
+			OutErrors.Add(TEXT("insert_child requires parent_widget_name or parent_widget_path"));
+			return false;
+		}
+
+		TSharedPtr<FJsonObject> ChildWidgetJson;
+		if (!OperationJson.IsValid() || !TryGetObjectField(OperationJson, TEXT("child_widget"), ChildWidgetJson) || !ChildWidgetJson.IsValid())
+		{
+			OutErrors.Add(TEXT("insert_child requires a child_widget object"));
+			return false;
+		}
+
+		FWidgetJsonNodeLocation ParentLocation;
+		if (!FindWidgetJsonNode(RootWidgetJson, ParentIdentifier, ParentLocation) || !ParentLocation.Node.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("Parent widget not found: %s"), *ParentIdentifier));
+			return false;
+		}
+
+		FString ParentClass;
+		ParentLocation.Node->TryGetStringField(TEXT("class"), ParentClass);
+		if (!IsPanelWidgetClassName(ParentClass))
+		{
+			OutErrors.Add(FString::Printf(TEXT("Widget '%s' is not a panel widget and cannot accept children"), *ParentIdentifier));
+			return false;
+		}
+
+		int32 InsertIndex = INDEX_NONE;
+		if (OperationJson->HasTypedField<EJson::Number>(TEXT("index")))
+		{
+			InsertIndex = static_cast<int32>(OperationJson->GetNumberField(TEXT("index")));
+		}
+
+		TArray<TSharedPtr<FJsonValue>>& Children = GetMutableChildrenArray(ParentLocation.Node, true);
+		const int32 ResolvedIndex = InsertIndex == INDEX_NONE ? Children.Num() : FMath::Clamp(InsertIndex, 0, Children.Num());
+		Children.Insert(MakeShared<FJsonValueObject>(ChildWidgetJson), ResolvedIndex);
+		return true;
+	};
+
+	const auto ApplyRemoveWidget = [&RootWidgetJson](const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors)
+	{
+		const FString WidgetIdentifier = GetWidgetIdentifierFromPayload(
+			OperationJson,
+			{TEXT("widget_name"), TEXT("widgetName")},
+			{TEXT("widget_path"), TEXT("widgetPath")});
+		if (WidgetIdentifier.IsEmpty())
+		{
+			OutErrors.Add(TEXT("remove_widget requires widget_name or widget_path"));
+			return false;
+		}
+
+		FWidgetJsonNodeLocation TargetLocation;
+		if (!FindWidgetJsonNode(RootWidgetJson, WidgetIdentifier, TargetLocation) || !TargetLocation.Node.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("Widget not found: %s"), *WidgetIdentifier));
+			return false;
+		}
+
+		if (!TargetLocation.Parent.IsValid() || TargetLocation.ChildIndex == INDEX_NONE)
+		{
+			OutErrors.Add(TEXT("remove_widget cannot remove the root widget; use replace_tree instead"));
+			return false;
+		}
+
+		TArray<TSharedPtr<FJsonValue>>& Siblings = GetMutableChildrenArray(TargetLocation.Parent, false);
+		if (!Siblings.IsValidIndex(TargetLocation.ChildIndex))
+		{
+			OutErrors.Add(TEXT("remove_widget could not resolve the target index"));
+			return false;
+		}
+
+		Siblings.RemoveAt(TargetLocation.ChildIndex);
+		return true;
+	};
+
+	const auto ApplyMoveWidget = [&RootWidgetJson](const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors)
+	{
+		const FString WidgetIdentifier = GetWidgetIdentifierFromPayload(
+			OperationJson,
+			{TEXT("widget_name"), TEXT("widgetName")},
+			{TEXT("widget_path"), TEXT("widgetPath")});
+		if (WidgetIdentifier.IsEmpty())
+		{
+			OutErrors.Add(TEXT("move_widget requires widget_name or widget_path"));
+			return false;
+		}
+
+		const FString NewParentIdentifier = GetWidgetIdentifierFromPayload(
+			OperationJson,
+			{TEXT("new_parent_widget_name"), TEXT("newParentWidgetName")},
+			{TEXT("new_parent_widget_path"), TEXT("newParentWidgetPath")});
+
+		FWidgetJsonNodeLocation TargetLocation;
+		if (!FindWidgetJsonNode(RootWidgetJson, WidgetIdentifier, TargetLocation) || !TargetLocation.Node.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("Widget not found: %s"), *WidgetIdentifier));
+			return false;
+		}
+		if (!TargetLocation.Parent.IsValid() || TargetLocation.ChildIndex == INDEX_NONE)
+		{
+			OutErrors.Add(TEXT("move_widget cannot move the root widget"));
+			return false;
+		}
+
+		FWidgetJsonNodeLocation DestinationLocation;
+		if (!NewParentIdentifier.IsEmpty())
+		{
+			if (!FindWidgetJsonNode(RootWidgetJson, NewParentIdentifier, DestinationLocation) || !DestinationLocation.Node.IsValid())
+			{
+				OutErrors.Add(FString::Printf(TEXT("Destination parent not found: %s"), *NewParentIdentifier));
+				return false;
+			}
+		}
+		else
+		{
+			DestinationLocation.Node = TargetLocation.Parent;
+			DestinationLocation.Parent = TargetLocation.Parent;
+			DestinationLocation.ChildIndex = TargetLocation.ChildIndex;
+		}
+
+		FString DestinationParentClass;
+		DestinationLocation.Node->TryGetStringField(TEXT("class"), DestinationParentClass);
+		if (!IsPanelWidgetClassName(DestinationParentClass))
+		{
+			OutErrors.Add(TEXT("move_widget destination must be a panel widget"));
+			return false;
+		}
+
+		TArray<TSharedPtr<FJsonValue>>& SourceSiblings = GetMutableChildrenArray(TargetLocation.Parent, false);
+		if (!SourceSiblings.IsValidIndex(TargetLocation.ChildIndex))
+		{
+			OutErrors.Add(TEXT("move_widget could not resolve the source index"));
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject> MovedNode = SourceSiblings[TargetLocation.ChildIndex]->AsObject();
+		SourceSiblings.RemoveAt(TargetLocation.ChildIndex);
+
+		const bool bSameParent = DestinationLocation.Node == TargetLocation.Parent;
+		TArray<TSharedPtr<FJsonValue>>& DestinationChildren = GetMutableChildrenArray(DestinationLocation.Node, true);
+		int32 InsertIndex = DestinationChildren.Num();
+		if (OperationJson->HasTypedField<EJson::Number>(TEXT("index")))
+		{
+			InsertIndex = static_cast<int32>(OperationJson->GetNumberField(TEXT("index")));
+		}
+		if (bSameParent && InsertIndex > TargetLocation.ChildIndex)
+		{
+			InsertIndex -= 1;
+		}
+		InsertIndex = FMath::Clamp(InsertIndex, 0, DestinationChildren.Num());
+
+		if (!bSameParent)
+		{
+			TSharedPtr<FJsonObject> SlotOverride;
+			if (TryGetObjectField(OperationJson, TEXT("slot"), SlotOverride) && SlotOverride.IsValid())
+			{
+				MovedNode->SetObjectField(TEXT("slot"), NormalizeSlotJson(SlotOverride));
+			}
+			else
+			{
+				MovedNode->RemoveField(TEXT("slot"));
+			}
+		}
+
+		DestinationChildren.Insert(MakeShared<FJsonValueObject>(MovedNode), InsertIndex);
+		return true;
+	};
+
+	const auto ApplyWrapWidget = [&RootWidgetJson](const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors)
+	{
+		const FString WidgetIdentifier = GetWidgetIdentifierFromPayload(
+			OperationJson,
+			{TEXT("widget_name"), TEXT("widgetName")},
+			{TEXT("widget_path"), TEXT("widgetPath")});
+		if (WidgetIdentifier.IsEmpty())
+		{
+			OutErrors.Add(TEXT("wrap_widget requires widget_name or widget_path"));
+			return false;
+		}
+
+		TSharedPtr<FJsonObject> WrapperWidgetJson;
+		if (!OperationJson.IsValid() || !TryGetObjectField(OperationJson, TEXT("wrapper_widget"), WrapperWidgetJson) || !WrapperWidgetJson.IsValid())
+		{
+			OutErrors.Add(TEXT("wrap_widget requires a wrapper_widget object"));
+			return false;
+		}
+
+		FString WrapperClass;
+		WrapperWidgetJson->TryGetStringField(TEXT("class"), WrapperClass);
+		if (!IsPanelWidgetClassName(WrapperClass))
+		{
+			OutErrors.Add(TEXT("wrap_widget requires a panel widget wrapper"));
+			return false;
+		}
+
+		FWidgetJsonNodeLocation TargetLocation;
+		if (!FindWidgetJsonNode(RootWidgetJson, WidgetIdentifier, TargetLocation) || !TargetLocation.Node.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("Widget not found: %s"), *WidgetIdentifier));
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject> WrappedNode = TargetLocation.Node;
+		const TSharedPtr<FJsonObject> WrapperClone = CloneJsonObject(WrapperWidgetJson);
+		if (!WrapperClone.IsValid())
+		{
+			OutErrors.Add(TEXT("wrap_widget failed to clone wrapper_widget"));
+			return false;
+		}
+
+		if (!WrapperClone->HasField(TEXT("slot")) && WrappedNode->HasField(TEXT("slot")))
+		{
+			TSharedPtr<FJsonObject> ExistingSlot;
+			if (TryGetObjectField(WrappedNode, TEXT("slot"), ExistingSlot) && ExistingSlot.IsValid())
+			{
+				WrapperClone->SetObjectField(TEXT("slot"), CloneJsonObject(ExistingSlot));
+			}
+		}
+
+		WrappedNode->RemoveField(TEXT("slot"));
+		TArray<TSharedPtr<FJsonValue>>& WrapperChildren = GetMutableChildrenArray(WrapperClone, true);
+		WrapperChildren.Insert(MakeShared<FJsonValueObject>(WrappedNode), 0);
+
+		if (!TargetLocation.Parent.IsValid() || TargetLocation.ChildIndex == INDEX_NONE)
+		{
+			RootWidgetJson = WrapperClone;
+			return true;
+		}
+
+		TArray<TSharedPtr<FJsonValue>>& Siblings = GetMutableChildrenArray(TargetLocation.Parent, false);
+		if (!Siblings.IsValidIndex(TargetLocation.ChildIndex))
+		{
+			OutErrors.Add(TEXT("wrap_widget could not resolve the target index"));
+			return false;
+		}
+
+		Siblings[TargetLocation.ChildIndex] = MakeShared<FJsonValueObject>(WrapperClone);
+		return true;
+	};
+
+	const auto ApplyReplaceWidgetClass = [&RootWidgetJson](const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors)
+	{
+		const FString WidgetIdentifier = GetWidgetIdentifierFromPayload(
+			OperationJson,
+			{TEXT("widget_name"), TEXT("widgetName")},
+			{TEXT("widget_path"), TEXT("widgetPath")});
+		if (WidgetIdentifier.IsEmpty())
+		{
+			OutErrors.Add(TEXT("replace_widget_class requires widget_name or widget_path"));
+			return false;
+		}
+
+		FString ReplacementClass;
+		if (!TryGetStringFieldAnyCase(OperationJson, {TEXT("replacement_class"), TEXT("replacementClass")}, ReplacementClass))
+		{
+			OutErrors.Add(TEXT("replace_widget_class requires replacement_class"));
+			return false;
+		}
+
+		const UClass* ReplacementWidgetClass = ResolveWidgetClassByName(ReplacementClass);
+		if (!ReplacementWidgetClass)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Could not resolve replacement widget class: %s"), *ReplacementClass));
+			return false;
+		}
+		if (ReplacementWidgetClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			OutErrors.Add(FString::Printf(TEXT("Replacement widget class '%s' is abstract"), *ReplacementClass));
+			return false;
+		}
+
+		FWidgetJsonNodeLocation TargetLocation;
+		if (!FindWidgetJsonNode(RootWidgetJson, WidgetIdentifier, TargetLocation) || !TargetLocation.Node.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("Widget not found: %s"), *WidgetIdentifier));
+			return false;
+		}
+
+		const bool bPreserveProperties = !OperationJson->HasTypedField<EJson::Boolean>(TEXT("preserve_properties"))
+			|| OperationJson->GetBoolField(TEXT("preserve_properties"));
+
+		TargetLocation.Node->SetStringField(TEXT("class"), ReplacementClass);
+		if (!bPreserveProperties)
+		{
+			TargetLocation.Node->RemoveField(TEXT("properties"));
+		}
+
+		TSharedPtr<FJsonObject> PropertiesPatch;
+		if (TryGetObjectField(OperationJson, TEXT("properties"), PropertiesPatch) && PropertiesPatch.IsValid())
+		{
+			const TSharedPtr<FJsonObject> TargetProperties = EnsureObjectField(TargetLocation.Node, TEXT("properties"));
+			MergeJsonObjectFields(TargetProperties, PropertiesPatch);
+		}
+
+		return true;
+	};
+
+	TFunction<bool(const FString&, const TSharedPtr<FJsonObject>&, TArray<FString>&)> ApplyOperation;
+	ApplyOperation = [&](const FString& RequestedOperation, const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors) -> bool
+	{
+		if (RequestedOperation == TEXT("insert_child"))
+		{
+			return ApplyInsertChild(OperationJson, OutErrors);
+		}
+		if (RequestedOperation == TEXT("remove_widget"))
+		{
+			return ApplyRemoveWidget(OperationJson, OutErrors);
+		}
+		if (RequestedOperation == TEXT("move_widget"))
+		{
+			return ApplyMoveWidget(OperationJson, OutErrors);
+		}
+		if (RequestedOperation == TEXT("wrap_widget"))
+		{
+			return ApplyWrapWidget(OperationJson, OutErrors);
+		}
+		if (RequestedOperation == TEXT("replace_widget_class"))
+		{
+			return ApplyReplaceWidgetClass(OperationJson, OutErrors);
+		}
+		if (RequestedOperation == TEXT("patch_widget"))
+		{
+			const FString WidgetIdentifier = GetWidgetIdentifierFromPayload(
+				OperationJson,
+				{TEXT("widget_name"), TEXT("widgetName")},
+				{TEXT("widget_path"), TEXT("widgetPath")});
+			if (WidgetIdentifier.IsEmpty())
+			{
+				OutErrors.Add(TEXT("patch_widget requires widget_name or widget_path"));
+				return false;
+			}
+
+			FWidgetJsonNodeLocation TargetLocation;
+			if (!FindWidgetJsonNode(RootWidgetJson, WidgetIdentifier, TargetLocation) || !TargetLocation.Node.IsValid())
+			{
+				OutErrors.Add(FString::Printf(TEXT("Widget not found: %s"), *WidgetIdentifier));
+				return false;
+			}
+
+			TSharedPtr<FJsonObject> PropertiesPatch = MakeShared<FJsonObject>();
+			TSharedPtr<FJsonObject> SlotPatch = MakeShared<FJsonObject>();
+			TryGetObjectField(OperationJson, TEXT("properties"), PropertiesPatch);
+			TryGetObjectField(OperationJson, TEXT("slot"), SlotPatch);
+			return ApplySnapshotWidgetPatch(TargetLocation.Node, PropertiesPatch, SlotPatch, OutErrors);
+		}
+		if (RequestedOperation == TEXT("batch"))
+		{
+			const TArray<TSharedPtr<FJsonValue>>* OperationsArray = nullptr;
+			if (!OperationJson->TryGetArrayField(TEXT("operations"), OperationsArray) || !OperationsArray)
+			{
+				OutErrors.Add(TEXT("batch requires an operations array"));
+				return false;
+			}
+
+			for (const TSharedPtr<FJsonValue>& OperationValue : *OperationsArray)
+			{
+				const TSharedPtr<FJsonObject> BatchOperation = OperationValue.IsValid() ? OperationValue->AsObject() : nullptr;
+				FString BatchOperationName;
+				if (!BatchOperation.IsValid() || !BatchOperation->TryGetStringField(TEXT("operation"), BatchOperationName))
+				{
+					OutErrors.Add(TEXT("Each batch operation requires an operation field"));
+					return false;
+				}
+
+				if (BatchOperationName == TEXT("batch") || BatchOperationName == TEXT("compile") || BatchOperationName == TEXT("replace_tree"))
+				{
+					OutErrors.Add(FString::Printf(TEXT("Unsupported nested widget batch operation: %s"), *BatchOperationName));
+					return false;
+				}
+
+				if (!ApplyOperation(BatchOperationName, BatchOperation, OutErrors))
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		OutErrors.Add(FString::Printf(TEXT("Unsupported WidgetBlueprint structure operation: %s"), *RequestedOperation));
+		return false;
+	};
+
+	TArray<FString> ValidationErrors;
+	if (!ApplyOperation(Operation, PayloadJson, ValidationErrors))
+	{
+		return FailWithErrors(TEXT("WidgetBlueprint structural mutation payload failed validation."), ValidationErrors);
+	}
+
+	const TSharedPtr<FJsonObject> BuildResult = BuildWidgetTree(WidgetBP, RootWidgetJson, bValidateOnly);
+	if (!BuildResult.IsValid())
+	{
+		Context.AddError(TEXT("build_failed"), TEXT("Widget tree rebuild failed after structural mutation"), WidgetBP->GetPathName());
+		return Context.BuildResult(false);
+	}
+
+	BuildResult->SetStringField(TEXT("operation"), TEXT("modify_widget_blueprint"));
+	BuildResult->SetStringField(TEXT("widgetOperation"), Operation);
+	return BuildResult;
+}
+
+// ---------------------------------------------------------------------------
+// 6. CompileWidgetBlueprint
 // ---------------------------------------------------------------------------
 
 TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBlueprint* WidgetBP)
@@ -1217,6 +2218,14 @@ UWidget* FWidgetTreeBuilder::CreateWidgetFromJson(UWidgetTree* WidgetTree,
 		}
 	}
 
+	{
+		FString DisplayLabel;
+		if (WidgetJson->TryGetStringField(TEXT("displayLabel"), DisplayLabel) && !DisplayLabel.IsEmpty())
+		{
+			Widget->SetDisplayLabel(DisplayLabel);
+		}
+	}
+
 	// Add to parent if present
 	if (Parent)
 	{
@@ -1297,63 +2306,7 @@ UWidget* FWidgetTreeBuilder::CreateWidgetFromJson(UWidgetTree* WidgetTree,
 
 UClass* FWidgetTreeBuilder::ResolveWidgetClass(const FString& ClassName)
 {
-	if (ClassName.IsEmpty())
-	{
-		return nullptr;
-	}
-
-	UClass* Resolved = nullptr;
-
-	// If it starts with "/", treat as a full path
-	const bool bIsFullPath = ClassName.StartsWith(TEXT("/"));
-	if (bIsFullPath)
-	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *ClassName);
-		if (Resolved && Resolved->IsChildOf(UWidget::StaticClass()))
-		{
-			return Resolved;
-		}
-		return nullptr;
-	}
-
-	// Try: FindFirstObject with "U" prefix
-	const FString UPrefixedName = TEXT("U") + ClassName;
-	Resolved = FindObject<UClass>(static_cast<UObject*>(nullptr), *UPrefixedName);
-
-	// Try: FindFirstObject with original name
-	if (!Resolved)
-	{
-		Resolved = FindObject<UClass>(static_cast<UObject*>(nullptr), *ClassName);
-	}
-
-	// Try: StaticLoadClass in UMG with "U" prefix
-	if (!Resolved)
-	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr,
-			*(TEXT("/Script/UMG.U") + ClassName));
-	}
-
-	// Try: StaticLoadClass in CommonUI with "U" prefix
-	if (!Resolved)
-	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr,
-			*(TEXT("/Script/CommonUI.U") + ClassName));
-	}
-
-	// Try: StaticLoadClass in UMG without "U" prefix
-	if (!Resolved)
-	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr,
-			*(TEXT("/Script/UMG.") + ClassName));
-	}
-
-	// Verify it is a widget class
-	if (Resolved && !Resolved->IsChildOf(UWidget::StaticClass()))
-	{
-		return nullptr;
-	}
-
-	return Resolved;
+	return WidgetTreeBuilderInternal::ResolveWidgetClassByName(ClassName);
 }
 
 // ---------------------------------------------------------------------------

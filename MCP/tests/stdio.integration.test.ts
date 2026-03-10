@@ -107,8 +107,10 @@ describe('stdio integration', () => {
     cleanup.push(() => client.close());
 
     const tools = await client.listTools();
+    const resourceTemplates = await client.listResourceTemplates();
     const scopes = await client.readResource({ uri: 'blueprint://scopes' });
     const importCapabilities = await client.readResource({ uri: 'blueprint://import-capabilities' });
+    const widgetPattern = await client.readResource({ uri: 'blueprint://widget-patterns/toolbar_header' });
     const result = await client.callTool({
       name: 'search_assets',
       arguments: {
@@ -125,9 +127,13 @@ describe('stdio integration', () => {
     });
 
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'extract_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_assets')).toBe(true);
+    expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://examples/{family}')).toBe(true);
+    expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://widget-patterns/{pattern}')).toBe(true);
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
     expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
+    expect(widgetPattern.contents[0]?.text).toContain('Pattern: toolbar_header');
     expect(JSON.parse(getTextContent(result))).toEqual([
       {
         path: '/Game/Test/BP_Player',

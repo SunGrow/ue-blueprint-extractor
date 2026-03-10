@@ -47,7 +47,7 @@ ue-blueprint-extractor/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── src/
-│   │   ├── index.ts                 # MCP tool definitions (57 tools + 3 resources)
+│   │   ├── index.ts                 # MCP tool definitions (58 tools + 6 resources + 2 resource templates)
 │   │   ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
 │   │   ├── ue-client.ts             # UE Remote Control HTTP client
 │   │   └── types.ts                 # Shared TypeScript types
@@ -356,12 +356,14 @@ Then open a new session or restart your client. The tools will appear automatica
 | `search_assets` | Search assets by name and class filter |
 | `list_assets` | List assets under a package path |
 | `create_widget_blueprint` | Create a new WidgetBlueprint asset with a specified parent class |
+| `extract_widget_blueprint` | Extract a compact widget-authoring snapshot with widget tree, bindings, animations, and compile status |
 | `build_widget_tree` | Build/replace the entire widget hierarchy of a WidgetBlueprint from a JSON tree |
-| `modify_widget` | Patch properties and/or slot config on an existing widget by name |
-| `modify_widget_blueprint` | High-level widget alias for replace-tree, patch-widget, and validate/compile workflows |
+| `modify_widget` | Patch properties and/or slot config on one widget by `widget_name` or `widget_path` |
+| `modify_widget_blueprint` | Primary widget authoring tool for structural ops such as replace-tree, patch-widget, insert-child, move, wrap, replace-class, batch, and compile workflows |
 | `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings plus counts |
 
 `modify_widget` notes:
+- Use `widget_path` when practical; it is safer than `widget_name` after structural edits.
 - Use `properties.name`, `properties.newName`, or `properties.new_name` to rename the widget itself.
 - For box slots, `slot.Size.sizeRule` accepts `Automatic` or the shorthand `Auto`.
 | `create_data_asset` | Create a concrete DataAsset asset and optionally initialize editable properties |
@@ -416,9 +418,9 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — All 57 endpoints are **tools** (model-controlled, on-demand computation), not resources, because each requires parameters and queries a live UE editor. `blueprint://scopes`, `blueprint://write-capabilities`, and `blueprint://import-capabilities` provide static capability references.
-- **Small, distinct surface** — 57 tools with non-overlapping purposes. Extraction tools are read-only; authoring and import tools are explicit write operations with separate save semantics.
-- **Description quality** — Each tool includes usage guidelines, scope size estimates, and workflow hints (e.g., "use `search_assets` first") to maximize selection accuracy.
+- **Right primitive** — The live editor actions are exposed as 58 MCP **tools**. Static guidance lives in 6 resources plus 2 resource templates: `blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://import-capabilities`, `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, and the `blueprint://examples/{family}` / `blueprint://widget-patterns/{pattern}` templates.
+- **Small, distinct surface** — 58 tools with non-overlapping purposes. Extraction tools are read-only; authoring and import tools are explicit write operations with separate save semantics.
+- **Description quality** — Tool descriptions stay selection-focused, while reusable workflows and examples live in resources/templates to save context.
 - **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; all write tools and `save_assets` require confirmation.
 - **Explicit save** — Write and import operations mutate assets and mark packages dirty, but they do not save automatically. Call `save_assets` when you want to persist the dirty packages to disk.
 - **Bounded authoring** — The write surface covers reflected properties, declarative trees, schema assets, animation metadata, and Blueprint members; arbitrary graph/controller/world synthesis is still intentionally deferred.
@@ -496,6 +498,8 @@ Both scripts:
 - build the `BlueprintExtractorFixtureEditor` target
 - execute `Automation RunTests BlueprintExtractor` headlessly with `UnrealEditor-Cmd`
 
+The repository also includes `.github/workflows/ci.yml` and `.github/workflows/nightly.yml`. The UE lanes assume self-hosted Windows runners labeled `ue-5.6`, `ue-5.7`, and `ue-live`, plus repository variables for engine roots and live Remote Control endpoints.
+
 Mutable automation output is expected under `/Game/__GeneratedTests__`. The fixture project should remain read-only apart from generated build/cache folders and the synced plugin copy.
 
 ## Publishing (Maintainers)
@@ -509,6 +513,12 @@ npm publish --access public
 ```
 
 ## Changelog
+
+### 1.11.0
+- **Widget authoring polish** — added `extract_widget_blueprint`, expanded `modify_widget_blueprint` with `insert_child`, `remove_widget`, `move_widget`, `wrap_widget`, `replace_widget_class`, and `batch`, and added `widget_path` support plus `validate_only` to the widget mutation flow.
+- **MCP guidance split** — moved reusable authoring guidance into `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, plus the `blueprint://examples/{family}` and `blueprint://widget-patterns/{pattern}` templates.
+- **Compact success responses** — widget/save/import authoring responses now default to compact JSON text with full parsed data in `structuredContent`.
+- **Broader canary coverage** — automation and MCP tests now cover compact widget extraction, structural widget mutations, resource templates, and a CommonUI parent canary.
 
 ### 1.10.0
 - **Async import tools** — added `import_assets`, `reimport_assets`, `get_import_job`, `list_import_jobs`, `import_textures`, and `import_meshes`.

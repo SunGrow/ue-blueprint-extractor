@@ -1,0 +1,143 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-contract:
+    name: mcp-contract (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - '18'
+          - 'lts/*'
+    defaults:
+      run:
+        working-directory: MCP
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: MCP/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: MCP unit contract suite
+        run: npm run test:unit
+
+      - name: MCP stdio suite
+        run: npm run test:stdio
+
+      - name: MCP tarball startup smoke
+        run: npm run test:pack-smoke
+
+      - name: MCP publish dry-run
+        run: npm publish --dry-run
+
+  ue-automation-5_6:
+    name: ue-automation-5_6
+    runs-on:
+      - self-hosted
+      - Windows
+      - ue-5.6
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: UE 5.6 authoring automation
+        shell: pwsh
+        run: >
+          ./scripts/test-ue.ps1
+          -EngineRoot "${{ vars.UE_5_6_ROOT }}"
+          -AutomationFilter "BlueprintExtractor.Authoring"
+
+      - name: UE 5.6 BuildPlugin packaging gate
+        shell: pwsh
+        run: >
+          ./scripts/test-ue.ps1
+          -EngineRoot "${{ vars.UE_5_6_ROOT }}"
+          -BuildPlugin
+          -AutomationFilter "BlueprintExtractor.Authoring.CommonUIWidgetRoundTrip"
+
+  ue-automation-5_7:
+    name: ue-automation-5_7
+    runs-on:
+      - self-hosted
+      - Windows
+      - ue-5.7
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: UE 5.7 authoring automation
+        shell: pwsh
+        run: >
+          ./scripts/test-ue.ps1
+          -EngineRoot "${{ vars.UE_5_7_ROOT }}"
+          -AutomationFilter "BlueprintExtractor.Authoring"
+
+      - name: UE 5.7 BuildPlugin packaging gate
+        shell: pwsh
+        run: >
+          ./scripts/test-ue.ps1
+          -EngineRoot "${{ vars.UE_5_7_ROOT }}"
+          -BuildPlugin
+          -AutomationFilter "BlueprintExtractor.Authoring.CommonUIWidgetRoundTrip"
+
+  live-mcp-e2e:
+    name: live-mcp-e2e
+    runs-on:
+      - self-hosted
+      - Windows
+      - ue-live
+    timeout-minutes: 45
+    needs:
+      - mcp-contract
+    env:
+      BLUEPRINT_EXTRACTOR_LIVE_E2E: '1'
+      UE_REMOTE_CONTROL_HOST: ${{ vars.UE_REMOTE_CONTROL_HOST }}
+      UE_REMOTE_CONTROL_PORT: ${{ vars.UE_REMOTE_CONTROL_PORT }}
+      UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH: ${{ vars.UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH }}
+      BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT }}
+      BLUEPRINT_EXTRACTOR_TEST_WIDGET_BLUEPRINT: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_WIDGET_BLUEPRINT }}
+      BLUEPRINT_EXTRACTOR_TEST_STATE_TREE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_STATE_TREE }}
+      BLUEPRINT_EXTRACTOR_TEST_BEHAVIOR_TREE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_BEHAVIOR_TREE }}
+      BLUEPRINT_EXTRACTOR_TEST_BLACKBOARD: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_BLACKBOARD }}
+      BLUEPRINT_EXTRACTOR_TEST_DATA_ASSET: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_DATA_ASSET }}
+      BLUEPRINT_EXTRACTOR_TEST_DATA_TABLE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_DATA_TABLE }}
+      BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_STRUCT: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_STRUCT }}
+      BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_ENUM: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_ENUM }}
+      BLUEPRINT_EXTRACTOR_TEST_CURVE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_CURVE }}
+      BLUEPRINT_EXTRACTOR_TEST_CURVE_TABLE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_CURVE_TABLE }}
+      BLUEPRINT_EXTRACTOR_TEST_MATERIAL_INSTANCE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_MATERIAL_INSTANCE }}
+      BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE }}
+      BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE }}
+      BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+          cache-dependency-path: MCP/package-lock.json
+
+      - name: npm ci
+        working-directory: MCP
+        run: npm ci
+
+      - name: Live MCP suite
+        shell: pwsh
+        run: ./scripts/test-mcp.ps1 -Live -PackSmoke -PublishDryRun

@@ -60,9 +60,12 @@ describe('createBlueprintExtractorServer', () => {
     cleanups.push(harness.close);
 
     const resources = await harness.client.listResources();
+    const resourceTemplates = await harness.client.listResourceTemplates();
     const resourceUris = resources.resources.map((resource) => resource.uri);
+    const resourceTemplateUris = resourceTemplates.resourceTemplates.map((template) => template.uriTemplate);
     const tools = await harness.client.listTools();
     const extractBlueprint = tools.tools.find((tool) => tool.name === 'extract_blueprint');
+    const extractWidgetBlueprint = tools.tools.find((tool) => tool.name === 'extract_widget_blueprint');
     const createBlueprint = tools.tools.find((tool) => tool.name === 'create_blueprint');
     const importAssets = tools.tools.find((tool) => tool.name === 'import_assets');
     const getImportJob = tools.tools.find((tool) => tool.name === 'get_import_job');
@@ -71,12 +74,19 @@ describe('createBlueprintExtractorServer', () => {
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
+    expect(resourceUris).toContain('blueprint://authoring-conventions');
+    expect(resourceUris).toContain('blueprint://selector-conventions');
+    expect(resourceUris).toContain('blueprint://widget-best-practices');
+    expect(resourceTemplateUris).toContain('blueprint://examples/{family}');
+    expect(resourceTemplateUris).toContain('blueprint://widget-patterns/{pattern}');
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'reimport_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'list_import_jobs')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_textures')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_meshes')).toBe(true);
     expect(extractBlueprint?.annotations?.readOnlyHint).toBe(true);
+    expect(extractWidgetBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(createBlueprint?.annotations?.readOnlyHint).toBe(false);
     expect(importAssets?.annotations?.readOnlyHint).toBe(false);
     expect(getImportJob?.annotations?.readOnlyHint).toBe(true);
@@ -90,14 +100,24 @@ describe('createBlueprintExtractorServer', () => {
     const scopes = await harness.client.readResource({ uri: 'blueprint://scopes' });
     const writeCapabilities = await harness.client.readResource({ uri: 'blueprint://write-capabilities' });
     const importCapabilities = await harness.client.readResource({ uri: 'blueprint://import-capabilities' });
+    const authoringConventions = await harness.client.readResource({ uri: 'blueprint://authoring-conventions' });
+    const selectorConventions = await harness.client.readResource({ uri: 'blueprint://selector-conventions' });
+    const widgetBestPractices = await harness.client.readResource({ uri: 'blueprint://widget-best-practices' });
+    const widgetExample = await harness.client.readResource({ uri: 'blueprint://examples/widget_blueprint' });
+    const widgetPattern = await harness.client.readResource({ uri: 'blueprint://widget-patterns/activatable_window' });
 
     expect(scopes.contents[0]?.mimeType).toBe('text/plain');
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
     expect(writeCapabilities.contents[0]?.text).toContain('Current write-capable families:');
-    expect(writeCapabilities.contents[0]?.text).toContain('save_assets');
+    expect(writeCapabilities.contents[0]?.text).toContain('extract_widget_blueprint');
     expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
     expect(importCapabilities.contents[0]?.text).toContain('get_import_job');
     expect(importCapabilities.contents[0]?.text).toContain('mesh_type');
+    expect(authoringConventions.contents[0]?.text).toContain('extract_widget_blueprint -> modify_widget_blueprint');
+    expect(selectorConventions.contents[0]?.text).toContain('widget_path');
+    expect(widgetBestPractices.contents[0]?.text).toContain('CommonActivatableWidget');
+    expect(widgetExample.contents[0]?.text).toContain('Example structural batch');
+    expect(widgetPattern.contents[0]?.text).toContain('Pattern: activatable_window');
   });
 
   it('serializes arguments to subsystem calls and returns parsed JSON', async () => {
@@ -171,6 +191,178 @@ describe('createBlueprintExtractorServer', () => {
         method: 'ImportTextures',
         params: {
           PayloadJson: JSON.stringify(payload),
+          bValidateOnly: true,
+        },
+      },
+    ]);
+  });
+
+  it('routes compact widget extraction and structural widget mutations through the new subsystem calls', async () => {
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'ExtractWidgetBlueprint') {
+        return JSON.stringify({
+          success: true,
+          operation: 'extract_widget_blueprint',
+          assetPath: params.AssetPath,
+          rootWidget: {
+            class: 'VerticalBox',
+            name: 'WindowRoot',
+            widgetPath: 'WindowRoot',
+          },
+          compile: {
+            success: true,
+            status: 'UpToDate',
+          },
+        });
+      }
+
+      if (method === 'ModifyWidgetBlueprintStructure') {
+        return JSON.stringify({
+          success: true,
+          operation: 'modify_widget_blueprint',
+          widgetOperation: params.Operation,
+          assetPath: params.AssetPath,
+        });
+      }
+
+      if (method === 'CompileWidgetBlueprint') {
+        return JSON.stringify({
+          success: true,
+          operation: 'compile_widget_blueprint',
+          compile: {
+            success: true,
+            status: 'UpToDate',
+          },
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const extractResult = await harness.client.callTool({
+      name: 'extract_widget_blueprint',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+      },
+    });
+    const modifyResult = await harness.client.callTool({
+      name: 'modify_widget_blueprint',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        operation: 'batch',
+        operations: [
+          {
+            operation: 'insert_child',
+            parent_widget_path: 'WindowRoot/ContentRoot',
+            child_widget: {
+              class: 'TextBlock',
+              name: 'BodyText',
+              is_variable: true,
+            },
+          },
+          {
+            operation: 'replace_widget_class',
+            widget_path: 'WindowRoot/TitleBar/PrimaryButton',
+            replacement_class: 'Button',
+          },
+        ],
+        compile_after: true,
+      },
+    });
+
+    expect(JSON.parse(getTextContent(extractResult))).toMatchObject({
+      operation: 'extract_widget_blueprint',
+      rootWidget: {
+        widgetPath: 'WindowRoot',
+      },
+    });
+    expect(JSON.parse(getTextContent(modifyResult))).toMatchObject({
+      operation: 'modify_widget_blueprint',
+      widgetOperation: 'batch',
+      compile: {
+        success: true,
+        status: 'UpToDate',
+      },
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ExtractWidgetBlueprint',
+        params: {
+          AssetPath: '/Game/UI/WBP_Window',
+        },
+      },
+      {
+        method: 'ModifyWidgetBlueprintStructure',
+        params: {
+          AssetPath: '/Game/UI/WBP_Window',
+          Operation: 'batch',
+          PayloadJson: JSON.stringify({
+            operations: [
+              {
+                operation: 'insert_child',
+                parent_widget_path: 'WindowRoot/ContentRoot',
+                child_widget: {
+                  class: 'TextBlock',
+                  name: 'BodyText',
+                  is_variable: true,
+                },
+              },
+              {
+                operation: 'replace_widget_class',
+                widget_path: 'WindowRoot/TitleBar/PrimaryButton',
+                replacement_class: 'Button',
+              },
+            ],
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'CompileWidgetBlueprint',
+        params: {
+          AssetPath: '/Game/UI/WBP_Window',
+        },
+      },
+    ]);
+  });
+
+  it('passes widget_path selectors and validate_only through modify_widget', async () => {
+    const fakeClient = new FakeUEClient(() => JSON.stringify({
+      success: true,
+      operation: 'modify_widget',
+      widgetName: 'TitleText',
+      widgetPath: 'WindowRoot/TitleBar/TitleText',
+      validateOnly: true,
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'modify_widget',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        widget_path: 'WindowRoot/TitleBar/TitleText',
+        properties: {
+          Text: 'Window',
+        },
+        validate_only: true,
+      },
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      widgetPath: 'WindowRoot/TitleBar/TitleText',
+      validateOnly: true,
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ModifyWidget',
+        params: {
+          AssetPath: '/Game/UI/WBP_Window',
+          WidgetName: 'WindowRoot/TitleBar/TitleText',
+          PropertiesJson: JSON.stringify({ Text: 'Window' }),
+          SlotJson: JSON.stringify({}),
           bValidateOnly: true,
         },
       },

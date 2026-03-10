@@ -7,8 +7,9 @@ This package exposes the `blueprint-extractor` server over stdio and talks to a 
 Current surface area includes:
 
 - read-only extraction tools for Blueprints, AI assets, data assets, curves, materials, and animation metadata
-- explicit-save authoring tools for the supported editor-side asset families
+- explicit-save authoring tools for the supported editor-side asset families, including compact widget extraction and incremental widget-structure ops
 - async import and reimport tools with polling for generic assets plus typed texture and mesh helpers
+- static guidance resources and resource templates for authoring conventions, selector rules, example payloads, and widget patterns
 
 ## Requirements
 
@@ -46,6 +47,8 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y b
 npm install
 npm run build
 npm test
+npm run test:pack-smoke
+npm publish --dry-run
 ```
 
 For the gated live smoke test:
@@ -55,6 +58,8 @@ BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 ```
 
 The live suite imports a texture over a local HTTP fixture server, verifies request-header forwarding, imports a local mesh fixture, polls both jobs to completion, and saves the returned asset paths.
+
+The default unit/stdio suites also cover resource-template registration plus the `extract_widget_blueprint` and `modify_widget_blueprint` structural surfaces.
 
 Repository and full documentation:
 

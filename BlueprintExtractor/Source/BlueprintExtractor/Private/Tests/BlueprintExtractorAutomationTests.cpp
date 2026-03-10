@@ -228,6 +228,60 @@ static bool JsonArrayContainsString(const TSharedPtr<FJsonObject>& Parsed,
 	return false;
 }
 
+static bool TryGetObjectFieldCopy(const TSharedPtr<FJsonObject>& Parsed,
+                                  const TCHAR* FieldName,
+                                  TSharedPtr<FJsonObject>& OutObject)
+{
+	if (!Parsed.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* FieldObject = nullptr;
+	if (Parsed->TryGetObjectField(FieldName, FieldObject) && FieldObject && FieldObject->IsValid())
+	{
+		OutObject = *FieldObject;
+		return true;
+	}
+
+	return false;
+}
+
+static TSharedPtr<FJsonObject> FindWidgetNodeByPath(const TSharedPtr<FJsonObject>& Node,
+                                                    const FString& TargetPath,
+                                                    const FString& ParentPath = FString())
+{
+	if (!Node.IsValid())
+	{
+		return nullptr;
+	}
+
+	FString NodeName;
+	Node->TryGetStringField(TEXT("name"), NodeName);
+	const FString NodePath = ParentPath.IsEmpty() ? NodeName : ParentPath + TEXT("/") + NodeName;
+	if (NodePath == TargetPath)
+	{
+		return Node;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+	if (!Node->TryGetArrayField(TEXT("children"), Children) || !Children)
+	{
+		return nullptr;
+	}
+
+	for (const TSharedPtr<FJsonValue>& ChildValue : *Children)
+	{
+		const TSharedPtr<FJsonObject> ChildObject = ChildValue.IsValid() ? ChildValue->AsObject() : nullptr;
+		if (const TSharedPtr<FJsonObject> Found = FindWidgetNodeByPath(ChildObject, TargetPath, NodePath))
+		{
+			return Found;
+		}
+	}
+
+	return nullptr;
+}
+
 static UBlueprintExtractorSubsystem* GetSubsystem(FAutomationTestBase& Test)
 {
 	Test.TestNotNull(TEXT("GEditor is available"), GEditor);
@@ -1130,6 +1184,182 @@ static bool RunWidgetSlotAliasCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureOps"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for structure ops"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"HorizontalBox","name":"HeaderRow","is_variable":true,"children":[{"class":"TextBlock","name":"TitleText","is_variable":true,"properties":{"Text":"Window"}},{"class":"Border","name":"ActionHost","is_variable":true}]},{"class":"VerticalBox","name":"ContentRoot","is_variable":true,"children":[{"class":"TextBlock","name":"BodyText","is_variable":true,"properties":{"Text":"Body"}}]}]})json"),
+			false),
+		TEXT("BuildWidgetTree for structure ops"));
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("batch"),
+			TEXT(R"json({"operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/HeaderRow","child_widget":{"class":"Button","name":"HelpButton","is_variable":true}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}},{"operation":"move_widget","widget_path":"WindowRoot/HeaderRow/ActionHost","new_parent_widget_path":"WindowRoot/ContentRoot","index":0},{"operation":"patch_widget","widget_path":"WindowRoot/HeaderRow/TitleText","properties":{"Text":"Window Title"}}]})json"),
+			true),
+		TEXT("ModifyWidgetBlueprintStructure validate_only batch"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("batch"),
+			TEXT(R"json({"operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/HeaderRow","child_widget":{"class":"Button","name":"HelpButton","is_variable":true}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}},{"operation":"move_widget","widget_path":"WindowRoot/HeaderRow/ActionHost","new_parent_widget_path":"WindowRoot/ContentRoot","index":0},{"operation":"patch_widget","widget_path":"WindowRoot/HeaderRow/TitleText","properties":{"Text":"Window Title"}}]})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure batch"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("replace_widget_class"),
+			TEXT(R"json({"widget_path":"WindowRoot/ContentRoot/ActionHost","replacement_class":"SizeBox","preserve_properties":false})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure replace_widget_class"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("remove_widget"),
+			TEXT(R"json({"widget_path":"WindowRoot/HeaderRow/HelpButton"})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure remove_widget"));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath),
+		TEXT("ExtractWidgetBlueprint after structure ops"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(
+		TEXT("ExtractWidgetBlueprint reports the expected operation"),
+		ExtractResult->GetStringField(TEXT("operation")),
+		FString(TEXT("extract_widget_blueprint")));
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	Test.TestTrue(TEXT("ExtractWidgetBlueprint returns a rootWidget"), TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid());
+	if (!RootWidgetJson.IsValid())
+	{
+		return false;
+	}
+
+	FString RootWidgetPath;
+	Test.TestTrue(TEXT("Root widget exposes widgetPath"), RootWidgetJson->TryGetStringField(TEXT("widgetPath"), RootWidgetPath));
+	Test.TestEqual(TEXT("Root widgetPath is annotated"), RootWidgetPath, FString(TEXT("WindowRoot")));
+
+	const TSharedPtr<FJsonObject> ActionHostNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot/ActionHost"));
+	Test.TestNotNull(TEXT("Moved ActionHost exists under ContentRoot"), ActionHostNode.Get());
+	if (ActionHostNode.IsValid())
+	{
+		FString WidgetClass;
+		ActionHostNode->TryGetStringField(TEXT("class"), WidgetClass);
+		Test.TestEqual(TEXT("replace_widget_class updates the class"), WidgetClass, FString(TEXT("SizeBox")));
+	}
+
+	const TSharedPtr<FJsonObject> BodyTextNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot/BodyFrame/BodyText"));
+	Test.TestNotNull(TEXT("wrap_widget preserves the child inside the wrapper"), BodyTextNode.Get());
+
+	const TSharedPtr<FJsonObject> RemovedHelpButton = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/HeaderRow/HelpButton"));
+	Test.TestNull(TEXT("remove_widget removes the HelpButton"), RemovedHelpButton.Get());
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after structure ops"));
+
+	return true;
+}
+
+static bool RunCommonUIWidgetCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_CommonUIRoundTrip"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("CommonActivatableWidget")),
+		TEXT("CreateWidgetBlueprint for CommonUI"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"HorizontalBox","name":"HeaderRow","is_variable":true,"children":[{"class":"TextBlock","name":"TitleText","is_variable":true,"properties":{"Text":"Common Window"}},{"class":"Button","name":"CloseButton","is_variable":true}]},{"class":"NamedSlot","name":"ContentSlot","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree for CommonUI"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("insert_child"),
+			TEXT(R"json({"parent_widget_path":"WindowRoot/HeaderRow","index":1,"child_widget":{"class":"Button","name":"SecondaryButton","is_variable":true}})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure insert_child for CommonUI"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint for CommonUI"));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath),
+		TEXT("ExtractWidgetBlueprint for CommonUI"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(
+		TEXT("CommonUI extract reports the expected parentClass"),
+		ExtractResult->GetStringField(TEXT("parentClass")),
+		FString(TEXT("CommonActivatableWidget")));
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	Test.TestTrue(TEXT("CommonUI extract returns a rootWidget"), TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid());
+	if (!RootWidgetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> SecondaryButtonNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/HeaderRow/SecondaryButton"));
+	Test.TestNotNull(TEXT("CommonUI structural insert is reflected in extract_widget_blueprint"), SecondaryButtonNode.Get());
+	return true;
+}
+
 } // namespace BlueprintExtractorAutomation
 
 BEGIN_DEFINE_SPEC(
@@ -1185,6 +1415,16 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("WidgetSlotAliases"), [this]()
 		{
 			TestTrue(TEXT("Widget slot alias coverage completes"), RunWidgetSlotAliasCoverage(*this));
+		});
+
+		It(TEXT("WidgetStructureOps"), [this]()
+		{
+			TestTrue(TEXT("Widget structure coverage completes"), RunWidgetStructureCoverage(*this));
+		});
+
+		It(TEXT("CommonUIWidgetRoundTrip"), [this]()
+		{
+			TestTrue(TEXT("CommonUI widget coverage completes"), RunCommonUIWidgetCoverage(*this));
 		});
 	});
 }

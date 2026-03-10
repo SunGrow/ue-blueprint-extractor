@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$Install,
-    [switch]$Live
+    [switch]$Live,
+    [switch]$PackSmoke,
+    [switch]$PublishDryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +36,14 @@ try {
     }
     else {
         Invoke-Step -Label 'npm test' -FilePath 'npm' -Arguments @('test')
+    }
+
+    if ($PackSmoke) {
+        Invoke-Step -Label 'npm run test:pack-smoke' -FilePath 'npm' -Arguments @('run', 'test:pack-smoke')
+    }
+
+    if ($PublishDryRun) {
+        Invoke-Step -Label 'npm publish --dry-run' -FilePath 'npm' -Arguments @('publish', '--dry-run')
     }
 }
 finally {

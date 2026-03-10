@@ -161,10 +161,15 @@ describeLive('live UE e2e', () => {
     cleanup.push(() => client.close());
 
     const tools = await client.listTools();
+    const resourceTemplates = await client.listResourceTemplates();
     const importCapabilities = await client.readResource({ uri: 'blueprint://import-capabilities' });
+    const widgetBestPractices = await client.readResource({ uri: 'blueprint://widget-best-practices' });
 
     expect(tools.tools.some((tool) => tool.name === 'import_assets')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'extract_widget_blueprint')).toBe(true);
+    expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://widget-patterns/{pattern}')).toBe(true);
     expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
+    expect(widgetBestPractices.contents[0]?.text).toContain('CommonActivatableWidget');
 
     const searchAssets = await client.callTool({
       name: 'search_assets',
@@ -339,6 +344,8 @@ describeLive('live UE e2e', () => {
       },
     });
     expect(saveAssets.isError).toBeFalsy();
-    expect(getTextContent(saveAssets)).toContain('"saved": true');
+    expect(JSON.parse(getTextContent(saveAssets))).toMatchObject({
+      saved: true,
+    });
   });
 });

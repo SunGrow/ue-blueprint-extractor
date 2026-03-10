@@ -18,14 +18,18 @@ Optional flags:
 
 - `-Install`: run `npm install` in `MCP/` before the test pass.
 - `-Live`: run the gated live MCP smoke suite (`npm run test:live`) instead of the default unit + stdio pass.
+- `-PackSmoke`: run `npm run test:pack-smoke` after the main MCP suite.
+- `-PublishDryRun`: run `npm publish --dry-run` after the main MCP suite.
 - Optional fixture extraction smoke paths for `-Live`:
   `BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT`, `BLUEPRINT_EXTRACTOR_TEST_WIDGET_BLUEPRINT`, `BLUEPRINT_EXTRACTOR_TEST_STATE_TREE`, `BLUEPRINT_EXTRACTOR_TEST_BEHAVIOR_TREE`, `BLUEPRINT_EXTRACTOR_TEST_BLACKBOARD`, `BLUEPRINT_EXTRACTOR_TEST_DATA_ASSET`, `BLUEPRINT_EXTRACTOR_TEST_DATA_TABLE`, `BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_STRUCT`, `BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_ENUM`, `BLUEPRINT_EXTRACTOR_TEST_CURVE`, `BLUEPRINT_EXTRACTOR_TEST_CURVE_TABLE`, `BLUEPRINT_EXTRACTOR_TEST_MATERIAL_INSTANCE`, `BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE`, `BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE`, `BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE`.
 
 The default MCP run executes:
 
 - `tests/server-contract.test.ts`: in-memory contract checks against the exported `createBlueprintExtractorServer(...)`.
+  Covers static resources, resource templates, compact widget extraction, widget-path mutation routing, and structured error behavior.
 - `tests/ue-client.test.ts`: HTTP-layer `UEClient` coverage with a local mock Remote Control server.
 - `tests/stdio.integration.test.ts`: real stdio server smoke test against the built `dist/index.js`.
+- `tests/pack-smoke.mjs`: `npm pack` plus `npx blueprint-extractor-mcp` startup smoke from the produced tarball.
 - `tests/live.e2e.test.ts`: gated end-to-end import and extraction smoke against a real editor. It imports a texture through a local HTTP fixture server, verifies header forwarding, imports a local mesh fixture, polls job status, and explicitly saves the imported assets.
 
 Live MCP smoke requires a running editor with the plugin loaded. Set:
@@ -66,18 +70,25 @@ The UE runner:
 4. builds `BlueprintExtractorFixtureEditor`,
 5. runs headless editor automation via `UnrealEditor-Cmd`.
 
-The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__` and explicit-save semantics.
+The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, structural widget mutations, and a CommonUI parent canary.
 
 ## CI Shape
 
 Recommended CI split:
 
 - PR gate:
-  - `pwsh ./scripts/test-mcp.ps1`
+  - `pwsh ./scripts/test-mcp.ps1 -PackSmoke -PublishDryRun`
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT>`
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -BuildPlugin -SkipBuildProject`
 - Nightly or release:
   - repeat the PR gate on UE 5.6 and 5.7
   - add the live MCP smoke pass with `BLUEPRINT_EXTRACTOR_LIVE_E2E=1`
+
+The repository now includes:
+
+- `.github/workflows/ci.yml` for PR and push gates
+- `.github/workflows/nightly.yml` for scheduled or manual nightly runs
+
+The UE workflow lanes assume self-hosted Windows runners labeled `ue-5.6`, `ue-5.7`, and `ue-live`, plus repository variables such as `UE_5_6_ROOT`, `UE_5_7_ROOT`, `UE_REMOTE_CONTROL_HOST`, and `UE_REMOTE_CONTROL_PORT`.
 
 Do not run `install-mcp.*`, `install-codex-mcp.*`, `claude mcp add`, or `codex mcp add` in shared CI. Those flows mutate user-global client configuration and should stay manual or isolated-config only.

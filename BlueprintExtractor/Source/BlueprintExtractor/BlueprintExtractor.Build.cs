@@ -5,6 +5,7 @@ public class BlueprintExtractor : ModuleRules
 	public BlueprintExtractor(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+		ShortName = "BPE";
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

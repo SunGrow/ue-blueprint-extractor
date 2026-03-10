@@ -1,6 +1,6 @@
 {
   "name": "blueprint-extractor-mcp",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "MCP server for the Unreal Engine BlueprintExtractor plugin over Remote Control",
   "type": "module",
   "main": "dist/index.js",
@@ -42,6 +42,7 @@
     "test:unit": "vitest run tests/ue-client.test.ts tests/server-contract.test.ts",
     "test:stdio": "npm run build && vitest run tests/stdio.integration.test.ts",
     "test:live": "npm run build && vitest run tests/live.e2e.test.ts",
+    "test:pack-smoke": "node tests/pack-smoke.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

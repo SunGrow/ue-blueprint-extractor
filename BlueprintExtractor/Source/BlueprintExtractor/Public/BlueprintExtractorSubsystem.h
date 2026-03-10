@@ -108,6 +108,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CreateWidgetBlueprint(const FString& AssetPath, const FString& ParentClass);
 
+	/** Extracts a compact authoring snapshot for a WidgetBlueprint. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractWidgetBlueprint(const FString& AssetPath);
+
 	/** Builds/replaces the entire widget hierarchy from JSON. Returns JSON with widget count and errors. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString BuildWidgetTree(const FString& AssetPath,
@@ -121,6 +125,13 @@ public:
 	                     const FString& PropertiesJson,
 	                     const FString& SlotJson,
 	                     const bool bValidateOnly = false);
+
+	/** Applies a structural widget-tree mutation using a compact JSON payload. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyWidgetBlueprintStructure(const FString& AssetPath,
+	                                       const FString& Operation,
+	                                       const FString& PayloadJson,
+	                                       const bool bValidateOnly = false);
 
 	/** Compiles a WidgetBlueprint. Returns JSON array of errors/warnings. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")

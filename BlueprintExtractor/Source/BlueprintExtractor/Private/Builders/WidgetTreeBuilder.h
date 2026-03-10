@@ -11,6 +11,9 @@ class UPanelSlot;
 
 struct FWidgetTreeBuilder
 {
+	/** Extracts a compact widget-authoring snapshot for a WidgetBlueprint. */
+	static TSharedPtr<FJsonObject> ExtractWidgetBlueprint(UWidgetBlueprint* WidgetBP);
+
 	/** Creates a new WidgetBlueprint asset at the given path with the specified parent class. */
 	static TSharedPtr<FJsonObject> CreateWidgetBlueprint(const FString& AssetPath,
 	                                                     const FString& ParentClassName);
@@ -26,6 +29,12 @@ struct FWidgetTreeBuilder
 	                                            const TSharedPtr<FJsonObject>& PropertiesJson,
 	                                            const TSharedPtr<FJsonObject>& SlotJson,
 	                                            bool bValidateOnly = false);
+
+	/** Applies one structural widget-tree mutation using an extracted JSON snapshot as the working model. */
+	static TSharedPtr<FJsonObject> ModifyWidgetBlueprintStructure(UWidgetBlueprint* WidgetBP,
+	                                                              const FString& Operation,
+	                                                              const TSharedPtr<FJsonObject>& PayloadJson,
+	                                                              bool bValidateOnly = false);
 
 	/** Triggers blueprint compile and returns errors/warnings. */
 	static TSharedPtr<FJsonObject> CompileWidgetBlueprint(UWidgetBlueprint* WidgetBP);

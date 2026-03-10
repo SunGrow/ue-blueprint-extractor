@@ -25,12 +25,24 @@ function Invoke-Step {
     param(
         [string]$Label,
         [string]$FilePath,
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [int]$Retries = 1,
+        [int]$RetryDelaySeconds = 3
     )
 
-    Write-Host "==> $Label"
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
+    for ($Attempt = 1; $Attempt -le $Retries; $Attempt++) {
+        Write-Host "==> $Label"
+        & $FilePath @Arguments
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+
+        if ($Attempt -lt $Retries) {
+            Write-Warning "$Label failed with exit code $LASTEXITCODE (attempt $Attempt of $Retries). Retrying in $RetryDelaySeconds seconds..."
+            Start-Sleep -Seconds $RetryDelaySeconds
+            continue
+        }
+
         throw "$Label failed with exit code $LASTEXITCODE"
     }
 }
@@ -127,6 +139,9 @@ Sync-Directory `
     )
 
 if ($BuildPlugin) {
+    if (Test-Path -LiteralPath $BuildPluginOutput) {
+        Remove-Item -LiteralPath $BuildPluginOutput -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $BuildPluginOutput | Out-Null
     Invoke-Step `
         -Label 'RunUAT BuildPlugin' `
@@ -136,7 +151,9 @@ if ($BuildPlugin) {
             "-Plugin=$PluginDescriptor",
             "-Package=$BuildPluginOutput",
             '-Rocket'
-        )
+        ) `
+        -Retries 3 `
+        -RetryDelaySeconds 5
 }
 
 if (-not $SkipBuildProject) {

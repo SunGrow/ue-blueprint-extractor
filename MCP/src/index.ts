@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { UEClient } from './ue-client.js';
@@ -11,7 +11,7 @@ export type UEClientLike = Pick<UEClient, 'callSubsystem'>;
 export function createBlueprintExtractorServer(client: UEClientLike = new UEClient()) {
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '1.10.0',
+    version: '1.11.0',
   });
 
 // Shared scope enum with detailed descriptions
@@ -116,8 +116,10 @@ server.resource(
         '- Blueprint members: selectors by variableName, componentName, and functionName; operations replace_variables, patch_variable, replace_components, patch_component, replace_function_stubs, patch_class_defaults, compile.',
         '',
         'WidgetBlueprint guidance:',
-        '- build_widget_tree is still a full-tree replace operation.',
-        '- modify_widget_blueprint is the higher-level alias: replace_tree, patch_widget, or compile.',
+        '- build_widget_tree is the destructive bootstrap path for whole-tree replacement.',
+        '- extract_widget_blueprint returns a compact authoring snapshot with widgetPath annotations.',
+        '- modify_widget supports direct widget_name or widget_path patches for one widget.',
+        '- modify_widget_blueprint is the primary structural API: replace_tree, patch_widget, insert_child, remove_widget, move_widget, wrap_widget, replace_widget_class, batch, or compile.',
         '- compile_widget_blueprint validates the asset but still does not save it.',
         '',
         'Explicit deferrals:',
@@ -178,6 +180,284 @@ server.resource(
   }),
 );
 
+server.resource(
+  'authoring-conventions',
+  'blueprint://authoring-conventions',
+  {
+    description: 'Short reference for explicit-save write flows, validate_only behavior, and compact authoring habits.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Authoring Conventions',
+        '',
+        '- Prefer validate_only=true before the first write to a new asset family or payload shape.',
+        '- Writes mutate the live editor but do not save automatically; call save_assets when you want disk persistence.',
+        '- Use the narrowest mutation tool that fits: patch one widget/member first, replace whole trees only when structure is changing broadly.',
+        '- Keep payloads small by sending only changed fields, not full extracted objects, unless the tool explicitly expects a full replacement payload.',
+        '- Re-extract after mutation when you need confirmation; do not assume UE normalized fields exactly as sent.',
+        '- For multi-step widget work, prefer extract_widget_blueprint -> modify_widget_blueprint -> compile_widget_blueprint -> save_assets.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'selector-conventions',
+  'blueprint://selector-conventions',
+  {
+    description: 'Selector naming and addressing conventions across write-capable families.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Selector Conventions',
+        '',
+        '- WidgetBlueprints: use widget_path for nested widgets when practical; use widget_name for flat or unique-tree edits.',
+        '- BehaviorTree: use nodePath.',
+        '- StateTree: use statePath/stateId, editorNodeId, or transitionId.',
+        '- Blueprint members: use variableName, componentName, and functionName.',
+        '- Anim assets: prefer stable notifyId/notifyGuid and sampleIndex selectors over array-position assumptions.',
+        '- When a tool supports both name and path selectors, path is the safer choice after structural edits.',
+        '- Common alias policy: snake_case is the canonical MCP shape; small ergonomic aliases are accepted only where documented.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'widget-best-practices',
+  'blueprint://widget-best-practices',
+  {
+    description: 'UE/CommonUI-focused widget authoring guidance for Claude/Codex-driven Blueprint creation.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Widget Best Practices',
+        '',
+        '- C++ owns widget logic and BindWidget fields; Blueprint owns layout and styling.',
+        '- Use concrete widget classes in trees. Do not instantiate abstract bases such as UserWidget or CommonButtonBase.',
+        '- Prefer CommonActivatableWidget as the root parent for CommonUI screens and windows.',
+        '- Prefer VerticalBox, HorizontalBox, Overlay, Border, SizeBox, ScrollBox, and NamedSlot over CanvasPanel unless absolute positioning is required.',
+        '- Keep styling centralized. Reuse fonts, colors, and button classes instead of repeating large inline property blobs.',
+        '- Prefer event-driven updates and explicit setter functions over heavy property bindings or per-frame tick work.',
+        '- Use TSubclassOf + CreateWidget only for truly dynamic repeated elements. Keep authored static layout in the Widget Blueprint tree.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+const exampleResourceBodies: Record<string, string[]> = {
+  widget_blueprint: [
+    'Family: widget_blueprint',
+    '',
+    'Recommended flow:',
+    '1. create_widget_blueprint',
+    '2. extract_widget_blueprint',
+    '3. modify_widget_blueprint',
+    '4. compile_widget_blueprint',
+    '5. save_assets',
+    '',
+    'Example patch:',
+    '{"operation":"patch_widget","widget_path":"WindowRoot/TitleBar/TitleText","properties":{"Text":"Window"},"compile_after":true}',
+    '',
+    'Example structural batch:',
+    '{"operation":"batch","operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/ContentRoot","child_widget":{"class":"TextBlock","name":"BodyText","is_variable":true,"properties":{"Text":"Hello"}}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}}]}',
+  ],
+  blueprint_members: [
+    'Family: blueprint_members',
+    '',
+    'Use create_blueprint for initial asset creation and modify_blueprint_members for targeted changes.',
+    '',
+    'Example patch:',
+    '{"operation":"patch_variable","variable_name":"Health","payload":{"defaultValue":120.0}}',
+  ],
+  import_assets: [
+    'Family: import_assets',
+    '',
+    'Recommended flow:',
+    '1. import_assets or import_textures/import_meshes',
+    '2. get_import_job until terminal=true',
+    '3. extract imported asset if needed',
+    '4. save_assets',
+    '',
+    'Example:',
+    '{"items":[{"file_path":"C:/Temp/T_Test.png","destination_path":"/Game/Imported","destination_name":"T_Test"}]}',
+  ],
+  data_asset: [
+    'Family: data_asset',
+    '',
+    'Example create:',
+    '{"asset_class_path":"/Script/MyGame.MyDataAsset","properties":{"Count":3}}',
+    '',
+    'Example modify:',
+    '{"properties":{"Count":5}}',
+  ],
+  behavior_tree: [
+    'Family: behavior_tree',
+    '',
+    'Use nodePath selectors for patch_node and patch_attachment operations.',
+    '',
+    'Example:',
+    '{"operation":"patch_node","payload":{"nodePath":"Root/Selector[0]/MoveTo","properties":{"AcceptableRadius":150.0}}}',
+  ],
+};
+
+const widgetPatternBodies: Record<string, string[]> = {
+  activatable_window: [
+    'Pattern: activatable_window',
+    '',
+    'Parent class:',
+    '- CommonActivatableWidget',
+    '',
+    'Recommended hierarchy:',
+    '- VerticalBox WindowRoot',
+    '- HorizontalBox TitleBar',
+    '- NamedSlot or Border ContentRoot',
+    '- Optional HorizontalBox FooterActions',
+    '',
+    'Common BindWidget names:',
+    '- TitleBar, TitleText, CloseButton, ContentRoot',
+    '',
+    'Avoid:',
+    '- Abstract button classes in the tree',
+    '- CanvasPanel-driven desktop layout unless absolute placement is required',
+  ],
+  modal_dialog: [
+    'Pattern: modal_dialog',
+    '',
+    'Parent class:',
+    '- CommonActivatableWidget',
+    '',
+    'Recommended hierarchy:',
+    '- Overlay RootOverlay',
+    '- Border DialogFrame',
+    '- VerticalBox DialogBody',
+    '- HorizontalBox ActionRow',
+    '',
+    'Common BindWidget names:',
+    '- DialogTitle, BodyText, ConfirmButton, CancelButton',
+  ],
+  settings_panel: [
+    'Pattern: settings_panel',
+    '',
+    'Parent class:',
+    '- UserWidget or CommonActivatableWidget',
+    '',
+    'Recommended hierarchy:',
+    '- VerticalBox Root',
+    '- HorizontalBox HeaderRow',
+    '- ScrollBox SettingsList',
+    '- HorizontalBox FooterButtons',
+    '',
+    'Use NamedSlot or dedicated row widgets for extendable content.',
+  ],
+  list_detail: [
+    'Pattern: list_detail',
+    '',
+    'Recommended hierarchy:',
+    '- HorizontalBox Root',
+    '- Border ListPane',
+    '- Border DetailPane',
+    '- ScrollBox/ListView in the list pane',
+    '',
+    'Avoid deep nested CanvasPanel composition for responsive list/detail screens.',
+  ],
+  toolbar_header: [
+    'Pattern: toolbar_header',
+    '',
+    'Recommended hierarchy:',
+    '- HorizontalBox HeaderRow',
+    '- Left aligned title/info cluster',
+    '- Spacer fill',
+    '- Right aligned action buttons',
+    '',
+    'Common BindWidget names:',
+    '- TitleText, SubtitleText, PrimaryButton, SecondaryButton',
+  ],
+};
+
+server.resource(
+  'examples',
+  new ResourceTemplate('blueprint://examples/{family}', {
+    list: async () => ({
+      resources: Object.keys(exampleResourceBodies).map((family) => ({
+        uri: `blueprint://examples/${family}`,
+        name: `Example: ${family}`,
+        mimeType: 'text/plain',
+      })),
+    }),
+  }),
+  {
+    description: 'Short example payloads and recommended flows for common write-capable families.',
+  },
+  async (uri, variables) => {
+    const family = String(variables.family ?? '');
+    const lines = exampleResourceBodies[family];
+    if (!lines) {
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'text/plain',
+          text: `Unknown example family: ${family}`,
+        }],
+      };
+    }
+
+    return {
+      contents: [{
+        uri: uri.href,
+        mimeType: 'text/plain',
+        text: lines.join('\n'),
+      }],
+    };
+  },
+);
+
+server.resource(
+  'widget-patterns',
+  new ResourceTemplate('blueprint://widget-patterns/{pattern}', {
+    list: async () => ({
+      resources: Object.keys(widgetPatternBodies).map((pattern) => ({
+        uri: `blueprint://widget-patterns/${pattern}`,
+        name: `Widget pattern: ${pattern}`,
+        mimeType: 'text/plain',
+      })),
+    }),
+  }),
+  {
+    description: 'LLM-friendly widget composition patterns mapped to concrete UMG/CommonUI structures.',
+  },
+  async (uri, variables) => {
+    const pattern = String(variables.pattern ?? '');
+    const lines = widgetPatternBodies[pattern];
+    if (!lines) {
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: 'text/plain',
+          text: `Unknown widget pattern: ${pattern}`,
+        }],
+      };
+    }
+
+    return {
+      contents: [{
+        uri: uri.href,
+        mimeType: 'text/plain',
+        text: lines.join('\n'),
+      }],
+    };
+  },
+);
+
 async function callSubsystemJson(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const result = await client.callSubsystem(method, params);
   const parsed = JSON.parse(result) as Record<string, unknown>;
@@ -187,9 +467,10 @@ async function callSubsystemJson(method: string, params: Record<string, unknown>
   return parsed;
 }
 
-function jsonToolSuccess(parsed: Record<string, unknown>) {
+function jsonToolSuccess(parsed: Record<string, unknown>, options: { compact?: boolean } = {}) {
+  const compact = options.compact ?? true;
   return {
-    content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
+    content: [{ type: 'text' as const, text: compact ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2) }],
     structuredContent: parsed,
   };
 }
@@ -978,6 +1259,7 @@ RETURNS: JSON array of objects with path, name, and class for each asset (and su
 const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
   class: z.string().describe('Widget class name (e.g. CanvasPanel, TextBlock, CommonButtonBase, VerticalBox)'),
   name: z.string().describe('Widget instance name (used for BindWidget matching)'),
+  display_label: z.string().optional().describe('Optional display label used by the editor for named slots or readable hierarchy labels.'),
   is_variable: z.boolean().default(false).describe('Mark as variable for BindWidget access from C++'),
   slot: z.record(z.string(), z.unknown()).optional().describe('Slot properties (type depends on parent panel)'),
   properties: z.record(z.string(), z.unknown()).optional().describe('Widget UPROPERTY values to set'),
@@ -987,6 +1269,12 @@ const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
 const WidgetBlueprintMutationOperationSchema = z.enum([
   'replace_tree',
   'patch_widget',
+  'insert_child',
+  'remove_widget',
+  'move_widget',
+  'wrap_widget',
+  'replace_widget_class',
+  'batch',
   'compile',
 ]);
 
@@ -1308,12 +1596,7 @@ server.registerTool(
   'create_widget_blueprint',
   {
     title: 'Create Widget Blueprint',
-    description: `Create a new UE5 WidgetBlueprint asset with a specified parent class.
-
-USAGE: Provide the content path where the asset should be created and optionally a parent class.
-Default parent is UserWidget. For CommonUI widgets use CommonActivatableWidget, CommonButtonBase, etc.
-
-RETURNS: JSON with success status, asset path, parent class name, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    description: 'Create a WidgetBlueprint asset with an optional parent class.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path for the new WidgetBlueprint (e.g. /Game/UI/WBP_MyWidget)',
@@ -1332,17 +1615,43 @@ RETURNS: JSON with success status, asset path, parent class name, dirtyPackages,
   },
   async ({ asset_path, parent_class }) => {
     try {
-      const result = await client.callSubsystem('CreateWidgetBlueprint', {
+      const parsed = await callSubsystemJson('CreateWidgetBlueprint', {
         AssetPath: asset_path,
         ParentClass: parent_class,
       });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'extract_widget_blueprint',
+  {
+    title: 'Extract Widget Blueprint',
+    description: 'Read a compact widget-authoring snapshot with widget tree, bindings, animations, and compile status.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint.',
+      ),
+    },
+    annotations: {
+      title: 'Extract Widget Blueprint',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const parsed = await callSubsystemJson('ExtractWidgetBlueprint', {
+        AssetPath: asset_path,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
     }
   },
 );
@@ -1352,20 +1661,16 @@ server.registerTool(
   'build_widget_tree',
   {
     title: 'Build Widget Tree',
-    description: `Build or replace the entire widget hierarchy of an existing WidgetBlueprint from a JSON tree description.
-
-WARNING: This REPLACES the existing widget tree — all current widgets will be removed.
-
-USAGE: Provide the asset path and a root_widget object describing the full tree recursively.
-Each widget node has: class, name, is_variable, slot (optional), properties (optional), children (optional).
-
-RETURNS: JSON with success status, widget count, validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    description: 'Destructively replace the full widget tree of an existing WidgetBlueprint.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to an existing WidgetBlueprint',
       ),
       root_widget: WidgetNodeSchema.describe(
         'Root widget of the tree hierarchy',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the widget tree without changing the asset.',
       ),
     },
     annotations: {
@@ -1376,19 +1681,16 @@ RETURNS: JSON with success status, widget count, validation summary, dirtyPackag
       openWorldHint: false,
     },
   },
-  async ({ asset_path, root_widget }) => {
+  async ({ asset_path, root_widget, validate_only }) => {
     try {
-      const result = await client.callSubsystem('BuildWidgetTree', {
+      const parsed = await callSubsystemJson('BuildWidgetTree', {
         AssetPath: asset_path,
         WidgetTreeJson: JSON.stringify(root_widget),
+        bValidateOnly: validate_only,
       });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
     }
   },
 );
@@ -1398,26 +1700,25 @@ server.registerTool(
   'modify_widget',
   {
     title: 'Modify Widget',
-    description: `Modify properties and/or slot configuration of an existing widget within a WidgetBlueprint.
-
-USAGE: Specify the asset path, widget name, and the properties/slot values to change.
-Only specified properties are modified — others remain unchanged.
-- Set properties.name, properties.newName, or properties.new_name to rename the widget itself.
-- Box slot Size.sizeRule accepts either Automatic or the shorthand Auto.
-
-RETURNS: JSON with success status, widget name, class, validation summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    description: 'Patch one widget by widget_name or widget_path. Rename via properties.name/newName/new_name.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint',
       ),
-      widget_name: z.string().describe(
-        'Name of the widget to modify (as shown in the widget tree)',
+      widget_name: z.string().optional().describe(
+        'Widget name to modify.',
+      ),
+      widget_path: z.string().optional().describe(
+        'Slash-delimited widget_path to modify. Safer than widget_name after structural edits.',
       ),
       properties: z.record(z.string(), z.unknown()).optional().describe(
         'Widget UPROPERTY values to set',
       ),
       slot: z.record(z.string(), z.unknown()).optional().describe(
         'Slot properties to set',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the patch without changing the asset.',
       ),
     },
     annotations: {
@@ -1428,21 +1729,23 @@ RETURNS: JSON with success status, widget name, class, validation summary, dirty
       openWorldHint: false,
     },
   },
-  async ({ asset_path, widget_name, properties, slot }) => {
+  async ({ asset_path, widget_name, widget_path, properties, slot, validate_only }) => {
     try {
-      const result = await client.callSubsystem('ModifyWidget', {
+      const widgetIdentifier = widget_path ?? widget_name;
+      if (!widgetIdentifier) {
+        return jsonToolError(new Error('widget_name or widget_path is required'));
+      }
+
+      const parsed = await callSubsystemJson('ModifyWidget', {
         AssetPath: asset_path,
-        WidgetName: widget_name,
+        WidgetName: widgetIdentifier,
         PropertiesJson: JSON.stringify(properties ?? {}),
         SlotJson: JSON.stringify(slot ?? {}),
+        bValidateOnly: validate_only,
       });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
     }
   },
 );
@@ -1452,11 +1755,7 @@ server.registerTool(
   'compile_widget_blueprint',
   {
     title: 'Compile Widget Blueprint',
-    description: `Compile a WidgetBlueprint and return any errors or warnings.
-
-USAGE: Call after building or modifying a widget tree to verify compilation.
-
-RETURNS: JSON with success status, compile summary, dirtyPackages, and diagnostics. Compilation does not save the asset.`,
+    description: 'Compile a WidgetBlueprint and return compile diagnostics without saving.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint to compile',
@@ -1472,14 +1771,10 @@ RETURNS: JSON with success status, compile summary, dirtyPackages, and diagnosti
   },
   async ({ asset_path }) => {
     try {
-      const result = await client.callSubsystem('CompileWidgetBlueprint', { AssetPath: asset_path });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }] };
+      const parsed = await callSubsystemJson('CompileWidgetBlueprint', { AssetPath: asset_path });
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
     }
   },
 );
@@ -2085,33 +2380,58 @@ server.registerTool(
   'modify_widget_blueprint',
   {
     title: 'Modify Widget Blueprint',
-    description: `High-level WidgetBlueprint mutation tool.
-
-USAGE:
-- operation="replace_tree": provide root_widget to rebuild the full widget tree.
-- operation="patch_widget": provide widget_name and properties and/or slot to patch one widget.
-- operation="compile": compile the asset and return diagnostics without saving.
-- Set compile_after=true on replace_tree or patch_widget to run a compile immediately after mutation.
-
-RETURNS: JSON with mutation result, optional compile summary, dirtyPackages, and diagnostics. Changes are not saved until save_assets is called.`,
+    description: 'Primary widget-authoring tool for compact structural and patch operations.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint',
       ),
       operation: WidgetBlueprintMutationOperationSchema.describe(
-        'WidgetBlueprint mutation mode: replace_tree, patch_widget, or compile.',
+        'WidgetBlueprint mutation mode.',
       ),
       root_widget: WidgetNodeSchema.optional().describe(
         'Required for operation="replace_tree".',
       ),
       widget_name: z.string().optional().describe(
-        'Required for operation="patch_widget".',
+        'Optional widget selector by name.',
+      ),
+      widget_path: z.string().optional().describe(
+        'Optional widget selector by slash-delimited path.',
+      ),
+      parent_widget_name: z.string().optional().describe(
+        'Parent widget selector by name for insert_child.',
+      ),
+      parent_widget_path: z.string().optional().describe(
+        'Parent widget selector by path for insert_child.',
+      ),
+      new_parent_widget_name: z.string().optional().describe(
+        'Destination parent selector by name for move_widget.',
+      ),
+      new_parent_widget_path: z.string().optional().describe(
+        'Destination parent selector by path for move_widget.',
+      ),
+      child_widget: WidgetNodeSchema.optional().describe(
+        'Child widget payload for insert_child.',
+      ),
+      wrapper_widget: WidgetNodeSchema.optional().describe(
+        'Wrapper widget payload for wrap_widget. Must be a panel widget.',
+      ),
+      replacement_class: z.string().optional().describe(
+        'Concrete replacement class for replace_widget_class.',
+      ),
+      preserve_properties: z.boolean().optional().describe(
+        'When false, clear existing widget properties during replace_widget_class.',
+      ),
+      index: z.number().int().min(0).optional().describe(
+        'Optional child insertion or move index.',
       ),
       properties: z.record(z.string(), z.unknown()).optional().describe(
-        'Property patch for operation="patch_widget".',
+        'Property patch for patch_widget or replace_widget_class.',
       ),
       slot: z.record(z.string(), z.unknown()).optional().describe(
-        'Slot patch for operation="patch_widget".',
+        'Slot patch for patch_widget or move_widget.',
+      ),
+      operations: z.array(z.record(z.string(), z.unknown())).optional().describe(
+        'Nested operations for operation="batch".',
       ),
       validate_only: z.boolean().default(false).describe(
         'When true, only validate the requested mutation and return diagnostics without modifying the asset.',
@@ -2128,60 +2448,80 @@ RETURNS: JSON with mutation result, optional compile summary, dirtyPackages, and
       openWorldHint: false,
     },
   },
-  async ({ asset_path, operation, root_widget, widget_name, properties, slot, validate_only, compile_after }) => {
+  async ({
+    asset_path,
+    operation,
+    root_widget,
+    widget_name,
+    widget_path,
+    parent_widget_name,
+    parent_widget_path,
+    new_parent_widget_name,
+    new_parent_widget_path,
+    child_widget,
+    wrapper_widget,
+    replacement_class,
+    preserve_properties,
+    index,
+    properties,
+    slot,
+    operations,
+    validate_only,
+    compile_after,
+  }) => {
     try {
-      let mutation: any;
+      let mutation: Record<string, unknown>;
 
       if (operation === 'replace_tree') {
         if (!root_widget) {
-          return { content: [{ type: 'text' as const, text: 'Error: root_widget is required for operation="replace_tree"' }], isError: true };
+          return jsonToolError(new Error('root_widget is required for operation="replace_tree"'));
         }
-        const result = await client.callSubsystem('BuildWidgetTree', {
+        mutation = await callSubsystemJson('BuildWidgetTree', {
           AssetPath: asset_path,
           WidgetTreeJson: JSON.stringify(root_widget),
           bValidateOnly: validate_only,
         });
-        mutation = JSON.parse(result);
-      } else if (operation === 'patch_widget') {
-        if (!widget_name) {
-          return { content: [{ type: 'text' as const, text: 'Error: widget_name is required for operation="patch_widget"' }], isError: true };
-        }
-        const result = await client.callSubsystem('ModifyWidget', {
+      } else if (operation === 'compile') {
+        mutation = await callSubsystemJson('CompileWidgetBlueprint', {
           AssetPath: asset_path,
-          WidgetName: widget_name,
-          PropertiesJson: JSON.stringify(properties ?? {}),
-          SlotJson: JSON.stringify(slot ?? {}),
+        });
+      } else {
+        const payload: Record<string, unknown> = {};
+        if (widget_name) payload.widget_name = widget_name;
+        if (widget_path) payload.widget_path = widget_path;
+        if (parent_widget_name) payload.parent_widget_name = parent_widget_name;
+        if (parent_widget_path) payload.parent_widget_path = parent_widget_path;
+        if (new_parent_widget_name) payload.new_parent_widget_name = new_parent_widget_name;
+        if (new_parent_widget_path) payload.new_parent_widget_path = new_parent_widget_path;
+        if (child_widget) payload.child_widget = child_widget;
+        if (wrapper_widget) payload.wrapper_widget = wrapper_widget;
+        if (replacement_class) payload.replacement_class = replacement_class;
+        if (typeof preserve_properties === 'boolean') payload.preserve_properties = preserve_properties;
+        if (typeof index === 'number') payload.index = index;
+        if (properties) payload.properties = properties;
+        if (slot) payload.slot = slot;
+        if (operations) payload.operations = operations;
+
+        mutation = await callSubsystemJson('ModifyWidgetBlueprintStructure', {
+          AssetPath: asset_path,
+          Operation: operation,
+          PayloadJson: JSON.stringify(payload),
           bValidateOnly: validate_only,
         });
-        mutation = JSON.parse(result);
-      } else {
-        const result = await client.callSubsystem('CompileWidgetBlueprint', { AssetPath: asset_path });
-        mutation = JSON.parse(result);
       }
 
-      if (mutation.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${mutation.error}` }], isError: true };
-      }
-
-      let compileResult: any = null;
-      if (compile_after && !validate_only && operation !== 'compile' && mutation.success) {
-        const compile = await client.callSubsystem('CompileWidgetBlueprint', { AssetPath: asset_path });
-        compileResult = JSON.parse(compile);
-        if (compileResult.error) {
-          return { content: [{ type: 'text' as const, text: `Error: ${compileResult.error}` }], isError: true };
-        }
+      let compileResult: Record<string, unknown> | null = null;
+      if (compile_after && !validate_only && operation !== 'compile' && mutation.success === true) {
+        compileResult = await callSubsystemJson('CompileWidgetBlueprint', { AssetPath: asset_path });
       }
 
       const structuredContent = compileResult
         ? { ...mutation, compile: compileResult.compile ?? compileResult }
         : mutation;
 
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(structuredContent, null, 2) }],
-        structuredContent,
-      };
+      return jsonToolSuccess(structuredContent);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
     }
   },
 );
@@ -3236,19 +3576,12 @@ RETURNS: JSON with success status, dirtyPackages, changedObjects, diagnostics, a
   },
   async ({ asset_paths }) => {
     try {
-      const result = await client.callSubsystem('SaveAssets', {
+      const parsed = await callSubsystemJson('SaveAssets', {
         AssetPathsJson: JSON.stringify(asset_paths),
       });
-      const parsed = JSON.parse(result);
-      if (parsed.error) {
-        return { content: [{ type: 'text' as const, text: `Error: ${parsed.error}` }], isError: true };
-      }
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(parsed, null, 2) }],
-        structuredContent: parsed,
-      };
+      return jsonToolSuccess(parsed);
     } catch (e) {
-      return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      return jsonToolError(e);
     }
   },
 );
