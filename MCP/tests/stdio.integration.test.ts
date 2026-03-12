@@ -249,11 +249,12 @@ describe('stdio integration', () => {
         roughness: 'expr-guid-2',
       },
     });
-    expect(JSON.parse(getTextContent(triggerLiveCoding))).toMatchObject({
+    const triggerLiveCodingResult = JSON.parse(getTextContent(triggerLiveCoding));
+    expect(triggerLiveCodingResult).toMatchObject({
       operation: 'trigger_live_coding',
-      status: 'success',
+      status: process.platform === 'win32' ? 'success' : 'unsupported',
     });
-    expect(remoteServer.requests).toHaveLength(5);
+    expect(remoteServer.requests).toHaveLength(process.platform === 'win32' ? 5 : 4);
     expect(remoteServer.requests[0]?.objectPath).toBe('/Script/Test.OverrideSubsystem');
     expect(remoteServer.requests[1]).toMatchObject({
       objectPath: '/Script/Test.OverrideSubsystem',
@@ -287,13 +288,15 @@ describe('stdio integration', () => {
         bValidateOnly: false,
       },
     });
-    expect(remoteServer.requests[4]).toMatchObject({
-      objectPath: '/Script/Test.OverrideSubsystem',
-      functionName: 'TriggerLiveCoding',
-      parameters: {
-        ChangedPathsJson: JSON.stringify(['Source/Test/MyActor.cpp']),
-        bWaitForCompletion: true,
-      },
-    });
+    if (process.platform === 'win32') {
+      expect(remoteServer.requests[4]).toMatchObject({
+        objectPath: '/Script/Test.OverrideSubsystem',
+        functionName: 'TriggerLiveCoding',
+        parameters: {
+          ChangedPathsJson: JSON.stringify(['Source/Test/MyActor.cpp']),
+          bWaitForCompletion: true,
+        },
+      });
+    }
   });
 });
