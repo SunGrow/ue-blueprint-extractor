@@ -513,7 +513,7 @@ Both scripts:
 
 - sync `BlueprintExtractor/` into `tests/fixtures/BlueprintExtractorFixture/Plugins/BlueprintExtractor`
 - optionally run `BuildPlugin`
-- build the `BPXFixtureEditor` target
+- reuse a staged `BPXFixtureEditor` build when `-SkipBuildProject` / `--skip-build-project` is paired with an existing `Binaries/<platform>/BPXFixtureEditor.target`, otherwise build the fixture target normally
 - execute `Automation RunTests BlueprintExtractor` headlessly with `UnrealEditor-Cmd`
 
 The repository also includes `.github/workflows/ci.yml` and `.github/workflows/nightly.yml`. The UE lanes assume self-hosted Windows runners labeled `ue-5.6`, `ue-5.7`, and `ue-live`, plus repository variables for engine roots and live Remote Control endpoints.

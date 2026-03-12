@@ -154,6 +154,14 @@ if [[ "$build_plugin" -eq 1 ]]; then
     -Rocket
 fi
 
+project_name="$(basename "$project_path" .uproject)"
+target_marker="$fixture_root/Binaries/$host_platform/${project_name}Editor.target"
+
+if [[ "$skip_build_project" -eq 1 && ! -f "$target_marker" ]]; then
+  echo "warning: --skip-build-project requested but no staged editor build marker was found at $target_marker. Building the fixture editor target instead." >&2
+  skip_build_project=0
+fi
+
 if [[ "$skip_build_project" -eq 0 ]]; then
   run_step "Build fixture editor target" \
     "$build_sh" \

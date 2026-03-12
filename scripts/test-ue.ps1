@@ -5,10 +5,12 @@ param(
     [string]$StageRoot = $env:UE_FIXTURE_STAGE_ROOT,
     [string]$AutomationFilter = 'BlueprintExtractor',
     [switch]$BuildPlugin,
-    [switch]$SkipBuildProject
+[switch]$SkipBuildProject
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'test-ue-lib.ps1')
 
 function Assert-PathExists {
     param(
@@ -156,7 +158,17 @@ if ($BuildPlugin) {
         -RetryDelaySeconds 5
 }
 
-if (-not $SkipBuildProject) {
+$BuildPlan = Get-UEFixtureBuildPlan `
+    -ProjectPath $ResolvedProjectPath `
+    -FixtureRoot $FixtureRoot `
+    -PlatformDir 'Win64' `
+    -SkipBuildProject $SkipBuildProject.IsPresent
+
+if ($BuildPlan.Warning) {
+    Write-Warning $BuildPlan.Warning
+}
+
+if ($BuildPlan.ShouldBuildProject) {
     Invoke-Step `
         -Label 'Build fixture editor target' `
         -FilePath $BuildBat `

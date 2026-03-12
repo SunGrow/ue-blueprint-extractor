@@ -67,7 +67,7 @@ macOS/Linux:
 Useful options:
 
 - `-BuildPlugin` or `--build-plugin`: run `RunUAT BuildPlugin` as a packaging gate before the automation run.
-- `-SkipBuildProject` or `--skip-build-project`: skip the fixture editor target build and only run the editor command.
+- `-SkipBuildProject` or `--skip-build-project`: reuse an existing staged fixture build when `Binaries/<platform>/<ProjectName>Editor.target` is already present. On a fresh stage, the runner falls back to building the fixture editor target.
 - `-AutomationFilter` or `--automation-filter`: override the default `BlueprintExtractor` test filter.
 
 The UE runner:
@@ -87,7 +87,7 @@ Recommended CI split:
 - PR gate:
   - `pwsh ./scripts/test-mcp.ps1 -PackSmoke -PublishDryRun`
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT>`
-  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -BuildPlugin -SkipBuildProject`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -BuildPlugin -AutomationFilter "BlueprintExtractor.Authoring.CommonUIWidgetRoundTrip"`
 - Nightly or release:
   - repeat the PR gate on UE 5.6 and 5.7
   - add the live MCP smoke pass with `BLUEPRINT_EXTRACTOR_LIVE_E2E=1`
