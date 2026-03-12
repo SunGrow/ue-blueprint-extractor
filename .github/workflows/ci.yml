@@ -6,6 +6,17 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_ue_5_6:
+        description: 'Run UE 5.6 self-hosted automation'
+        required: false
+        default: false
+        type: boolean
+      run_ue_5_7:
+        description: 'Run UE 5.7 self-hosted automation'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -50,6 +61,7 @@ jobs:
 
   ue-automation-5_6:
     name: ue-automation-5_6
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ue_5_6) || (github.event_name != 'workflow_dispatch' && vars.UE_5_6_CI_ENABLED == 'true' && vars.UE_5_6_ROOT != '') }}
     runs-on:
       - self-hosted
       - Windows
@@ -75,6 +87,7 @@ jobs:
 
   ue-automation-5_7:
     name: ue-automation-5_7
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ue_5_7) || (github.event_name != 'workflow_dispatch' && vars.UE_5_7_CI_ENABLED == 'true' && vars.UE_5_7_ROOT != '') }}
     runs-on:
       - self-hosted
       - Windows

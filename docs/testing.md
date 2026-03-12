@@ -97,6 +97,18 @@ The repository now includes:
 - `.github/workflows/ci.yml` for PR and push gates
 - `.github/workflows/nightly.yml` for scheduled or manual nightly runs
 
-The UE workflow lanes assume self-hosted Windows runners labeled `ue-5.6`, `ue-5.7`, and `ue-live`, plus repository variables such as `UE_5_6_ROOT`, `UE_5_7_ROOT`, `UE_REMOTE_CONTROL_HOST`, and `UE_REMOTE_CONTROL_PORT`.
+The UE workflow lanes are intentionally opt-in so public pushes do not queue forever when no self-hosted UE runner is online.
+
+- `ci.yml`
+  - MCP gates always run.
+  - UE 5.6 runs on push/PR only when `UE_5_6_CI_ENABLED=true` and `UE_5_6_ROOT` is set.
+  - UE 5.7 runs on push/PR only when `UE_5_7_CI_ENABLED=true` and `UE_5_7_ROOT` is set.
+  - Manual dispatch can force either UE lane with the `run_ue_5_6` / `run_ue_5_7` inputs.
+- `nightly.yml`
+  - scheduled UE jobs are also opt-in through the same repo vars
+  - live MCP runs only when `UE_LIVE_CI_ENABLED=true` and Remote Control vars are set
+  - manual dispatch can force UE or live lanes with workflow inputs
+
+When enabled, the UE lanes assume self-hosted Windows runners labeled `ue-5.6`, `ue-5.7`, and `ue-live`, plus repository variables such as `UE_5_6_ROOT`, `UE_5_7_ROOT`, `UE_REMOTE_CONTROL_HOST`, and `UE_REMOTE_CONTROL_PORT`.
 
 Do not run `install-mcp.*`, `install-codex-mcp.*`, `claude mcp add`, or `codex mcp add` in shared CI. Those flows mutate user-global client configuration and should stay manual or isolated-config only.

@@ -4,6 +4,22 @@ on:
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      run_ue_5_6:
+        description: 'Run UE 5.6 self-hosted automation'
+        required: false
+        default: false
+        type: boolean
+      run_ue_5_7:
+        description: 'Run UE 5.7 self-hosted automation'
+        required: false
+        default: false
+        type: boolean
+      run_live_mcp:
+        description: 'Run live MCP self-hosted automation'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -48,6 +64,7 @@ jobs:
 
   ue-automation-5_6:
     name: ue-automation-5_6
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ue_5_6) || (github.event_name != 'workflow_dispatch' && vars.UE_5_6_CI_ENABLED == 'true' && vars.UE_5_6_ROOT != '') }}
     runs-on:
       - self-hosted
       - Windows
@@ -73,6 +90,7 @@ jobs:
 
   ue-automation-5_7:
     name: ue-automation-5_7
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ue_5_7) || (github.event_name != 'workflow_dispatch' && vars.UE_5_7_CI_ENABLED == 'true' && vars.UE_5_7_ROOT != '') }}
     runs-on:
       - self-hosted
       - Windows
@@ -98,6 +116,7 @@ jobs:
 
   live-mcp-e2e:
     name: live-mcp-e2e
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_live_mcp) || (github.event_name != 'workflow_dispatch' && vars.UE_LIVE_CI_ENABLED == 'true' && vars.UE_REMOTE_CONTROL_HOST != '' && vars.UE_REMOTE_CONTROL_PORT != '') }}
     runs-on:
       - self-hosted
       - Windows
