@@ -1,8 +1,10 @@
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { spawn, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const execFileAsync = promisify(execFile);
 const cwd = process.cwd();
@@ -16,7 +18,7 @@ async function main() {
   try {
     await installTarball(installRoot, tarballPath);
     const entryPoint = await resolvePackagedEntryPoint(installRoot);
-    await smokeStartFromTarball(entryPoint, installRoot);
+    await smokeContractFromTarball(entryPoint, installRoot);
   } finally {
     await rm(installRoot, { recursive: true, force: true });
     await rm(tarballPath, { force: true });
@@ -63,51 +65,50 @@ async function resolvePackagedEntryPoint(installRoot) {
   return entryPoint;
 }
 
-async function smokeStartFromTarball(entryPoint, installRoot) {
-  const child = spawn(process.execPath, [entryPoint], {
+async function smokeContractFromTarball(entryPoint, installRoot) {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [entryPoint],
     cwd: installRoot,
     env: {
       ...process.env,
       UE_REMOTE_CONTROL_HOST: process.env.UE_REMOTE_CONTROL_HOST ?? '127.0.0.1',
       UE_REMOTE_CONTROL_PORT: process.env.UE_REMOTE_CONTROL_PORT ?? '30010',
     },
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
+    stderr: 'pipe',
   });
 
-  let stdout = '';
-  let stderr = '';
-  child.stdout?.setEncoding('utf8');
-  child.stderr?.setEncoding('utf8');
-  child.stdout?.on('data', (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr?.on('data', (chunk) => {
-    stderr += chunk;
+  const client = new Client({
+    name: 'blueprint-extractor-pack-smoke',
+    version: '1.0.0',
   });
 
-  const exitPromise = new Promise((resolveExit) => {
-    child.once('exit', (code, signal) => {
-      resolveExit({ code, signal });
-    });
-  });
-  const errorPromise = new Promise((_, reject) => {
-    child.once('error', reject);
-  });
+  try {
+    await client.connect(transport);
+    const [tools, resources, templates] = await Promise.all([
+      client.listTools(),
+      client.listResources(),
+      client.listResourceTemplates(),
+    ]);
 
-  const startupResult = await Promise.race([
-    errorPromise,
-    exitPromise,
-    wait(10000).then(() => ({ timeout: true })),
-  ]);
+    if (!tools.tools.some((tool) => tool.name === 'extract_blueprint')) {
+      throw new Error('Packaged MCP server did not expose extract_blueprint');
+    }
 
-  if (!('timeout' in startupResult)) {
-    throw new Error(
-      `blueprint-extractor-mcp exited before the startup smoke timeout (code=${startupResult.code}, signal=${startupResult.signal})\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-    );
+    if (!tools.tools.some((tool) => tool.name === 'sync_project_code')) {
+      throw new Error('Packaged MCP server did not expose sync_project_code');
+    }
+
+    if (!resources.resources.some((resource) => resource.uri === 'blueprint://project-automation')) {
+      throw new Error('Packaged MCP server did not expose blueprint://project-automation');
+    }
+
+    if (!templates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://widget-patterns/{pattern}')) {
+      throw new Error('Packaged MCP server did not expose widget pattern templates');
+    }
+  } finally {
+    await Promise.allSettled([client.close(), transport.close()]);
   }
-
-  await terminate(child, exitPromise);
 }
 
 async function runNpm(args, options = {}) {
@@ -126,27 +127,6 @@ function quoteWindowsArg(value) {
 
   return `"${value.replace(/"/g, '\\"')}"`;
 }
-
-async function terminate(child, exitPromise) {
-  child.kill();
-
-  const result = await Promise.race([
-    exitPromise,
-    wait(5000).then(() => ({ timeout: true })),
-  ]);
-
-  if ('timeout' in result) {
-    child.kill('SIGKILL');
-    await exitPromise;
-  }
-}
-
-function wait(ms) {
-  return new Promise((resolveWait) => {
-    setTimeout(resolveWait, ms);
-  });
-}
-
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
