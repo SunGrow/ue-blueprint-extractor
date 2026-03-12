@@ -1,4 +1,5 @@
 #include "PropertySerializer.h"
+#include "Authoring/AuthoringHelpers.h"
 
 #include "JsonObjectConverter.h"
 #include "UObject/UnrealType.h"
@@ -202,6 +203,15 @@ TSharedPtr<FJsonValue> FPropertySerializer::SerializePropertyValue(const FProper
 
 TSharedPtr<FJsonObject> FPropertySerializer::SerializePropertyOverrides(const UObject* Object)
 {
+	return SerializePropertyOverridesAgainstBaseline(
+		Object,
+		Object ? Object->GetClass()->GetDefaultObject() : nullptr);
+}
+
+TSharedPtr<FJsonObject> FPropertySerializer::SerializePropertyOverridesAgainstBaseline(
+	const UObject* Object,
+	const UObject* BaselineObject)
+{
 	TSharedPtr<FJsonObject> Overrides = MakeShared<FJsonObject>();
 
 	if (!Object)
@@ -210,7 +220,10 @@ TSharedPtr<FJsonObject> FPropertySerializer::SerializePropertyOverrides(const UO
 	}
 
 	const UClass* ObjectClass = Object->GetClass();
-	const UObject* CDO = ObjectClass->GetDefaultObject();
+	if (!BaselineObject)
+	{
+		BaselineObject = ObjectClass->GetDefaultObject();
+	}
 
 	for (TFieldIterator<FProperty> PropIt(ObjectClass); PropIt; ++PropIt)
 	{
@@ -221,7 +234,14 @@ TSharedPtr<FJsonObject> FPropertySerializer::SerializePropertyOverrides(const UO
 			continue;
 		}
 
-		if (Property->Identical_InContainer(Object, CDO))
+		if (Property->HasAnyPropertyFlags(CPF_Deprecated | CPF_Transient))
+		{
+			continue;
+		}
+
+		const bool bHasMatchingBaselineClass = BaselineObject
+			&& BaselineObject->GetClass()->IsChildOf(Property->GetOwnerClass());
+		if (bHasMatchingBaselineClass && Property->Identical_InContainer(Object, BaselineObject))
 		{
 			continue;
 		}
@@ -366,7 +386,7 @@ static bool ApplyObjectReference(const FObjectPropertyBase* ObjectProperty,
 		return true;
 	}
 
-	UObject* LoadedObject = StaticLoadObject(ObjectProperty->PropertyClass, nullptr, *PathValue);
+	UObject* LoadedObject = FAuthoringHelpers::ResolveObject(PathValue, ObjectProperty->PropertyClass);
 	if (!LoadedObject)
 	{
 		AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to load object '%s'"),
@@ -781,7 +801,7 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 			return false;
 		}
 
-		UClass* LoadedClass = StaticLoadClass(ClassProperty->MetaClass, nullptr, *PathValue);
+		UClass* LoadedClass = FAuthoringHelpers::ResolveClass(PathValue, ClassProperty->MetaClass);
 		if (!LoadedClass)
 		{
 			AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to load class '%s'"),

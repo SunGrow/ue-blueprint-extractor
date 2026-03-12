@@ -58,6 +58,19 @@ FString NormalizeAssetObjectPath(const FString& AssetPath)
 
 	if (!FPackageName::IsValidLongPackageName(AssetPath))
 	{
+		if (AssetPath.StartsWith(TEXT("/")) && !AssetPath.Contains(TEXT(".")))
+		{
+			int32 LastSlashIndex = INDEX_NONE;
+			if (AssetPath.FindLastChar(TEXT('/'), LastSlashIndex) && LastSlashIndex + 1 < AssetPath.Len())
+			{
+				const FString AssetName = AssetPath.Mid(LastSlashIndex + 1);
+				if (!AssetName.IsEmpty())
+				{
+					return FString::Printf(TEXT("%s.%s"), *AssetPath, *AssetName);
+				}
+			}
+		}
+
 		return AssetPath;
 	}
 
@@ -85,6 +98,16 @@ static FString NormalizeAssetPackagePath(const FString& AssetPath)
 	if (FPackageName::IsValidLongPackageName(AssetPath))
 	{
 		return AssetPath;
+	}
+
+	if (AssetPath.StartsWith(TEXT("/")) && AssetPath.Contains(TEXT(".")))
+	{
+		int32 LastSlashIndex = INDEX_NONE;
+		int32 LastDotIndex = INDEX_NONE;
+		if (AssetPath.FindLastChar(TEXT('/'), LastSlashIndex) && AssetPath.FindLastChar(TEXT('.'), LastDotIndex) && LastDotIndex > LastSlashIndex)
+		{
+			return AssetPath.Left(LastDotIndex);
+		}
 	}
 
 	return FString();

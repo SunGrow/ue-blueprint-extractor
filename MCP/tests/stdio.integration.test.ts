@@ -111,6 +111,18 @@ describe('stdio integration', () => {
           };
         }
 
+        if (request.functionName === 'TriggerLiveCoding') {
+          return {
+            body: {
+              ReturnValue: JSON.stringify({
+                success: true,
+                operation: 'trigger_live_coding',
+                status: 'success',
+              }),
+            },
+          };
+        }
+
         return {
           status: 404,
           body: { error: `Unexpected method ${request.functionName}` },
@@ -145,6 +157,8 @@ describe('stdio integration', () => {
     const scopes = await client.readResource({ uri: 'blueprint://scopes' });
     const importCapabilities = await client.readResource({ uri: 'blueprint://import-capabilities' });
     const materialGuidance = await client.readResource({ uri: 'blueprint://material-graph-guidance' });
+    const fontRoles = await client.readResource({ uri: 'blueprint://font-roles' });
+    const projectAutomation = await client.readResource({ uri: 'blueprint://project-automation' });
     const widgetPattern = await client.readResource({ uri: 'blueprint://widget-patterns/toolbar_header' });
     const result = await client.callTool({
       name: 'search_assets',
@@ -179,17 +193,32 @@ describe('stdio integration', () => {
         ],
       },
     });
+    const triggerLiveCoding = await client.callTool({
+      name: 'trigger_live_coding',
+      arguments: {
+        changed_paths: ['Source/Test/MyActor.cpp'],
+      },
+    });
 
     expect(resources.resources.some((resource) => resource.uri === 'blueprint://material-graph-guidance')).toBe(true);
+    expect(resources.resources.some((resource) => resource.uri === 'blueprint://font-roles')).toBe(true);
+    expect(resources.resources.some((resource) => resource.uri === 'blueprint://project-automation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'extract_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'compile_project_code')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'trigger_live_coding')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
     expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://examples/{family}')).toBe(true);
     expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://widget-patterns/{pattern}')).toBe(true);
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
     expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
     expect(materialGuidance.contents[0]?.text).toContain('Blueprint Extractor Material Graph Guidance');
+    expect(fontRoles.contents[0]?.text).toContain('Blueprint Extractor Font Roles');
+    expect(projectAutomation.contents[0]?.text).toContain('Blueprint Extractor Project Automation');
     expect(widgetPattern.contents[0]?.text).toContain('Pattern: toolbar_header');
     expect(JSON.parse(getTextContent(result))).toEqual([
       {
@@ -220,7 +249,11 @@ describe('stdio integration', () => {
         roughness: 'expr-guid-2',
       },
     });
-    expect(remoteServer.requests).toHaveLength(4);
+    expect(JSON.parse(getTextContent(triggerLiveCoding))).toMatchObject({
+      operation: 'trigger_live_coding',
+      status: 'success',
+    });
+    expect(remoteServer.requests).toHaveLength(5);
     expect(remoteServer.requests[0]?.objectPath).toBe('/Script/Test.OverrideSubsystem');
     expect(remoteServer.requests[1]).toMatchObject({
       objectPath: '/Script/Test.OverrideSubsystem',
@@ -252,6 +285,14 @@ describe('stdio integration', () => {
           ],
         }),
         bValidateOnly: false,
+      },
+    });
+    expect(remoteServer.requests[4]).toMatchObject({
+      objectPath: '/Script/Test.OverrideSubsystem',
+      functionName: 'TriggerLiveCoding',
+      parameters: {
+        ChangedPathsJson: JSON.stringify(['Source/Test/MyActor.cpp']),
+        bWaitForCompletion: true,
       },
     });
   });

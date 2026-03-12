@@ -53,6 +53,11 @@ public class BlueprintExtractor : ModuleRules
 				"BehaviorTreeEditor",
 				"StateTreeEditorModule"
 			});
+
+			if (Target.Platform == UnrealTargetPlatform.Win64)
+			{
+				PrivateDependencyModuleNames.Add("LiveCoding");
+			}
 		}
 	}
 }

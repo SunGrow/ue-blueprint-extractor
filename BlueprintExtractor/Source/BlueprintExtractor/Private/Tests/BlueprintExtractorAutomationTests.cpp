@@ -8,13 +8,18 @@
 #include "EditorFramework/AssetImportData.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture.h"
+#include "Engine/Font.h"
 #include "Editor.h"
 #include "WidgetBlueprint.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/Image.h"
+#include "Components/TextBlock.h"
 #include "Components/Widget.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Fonts/SlateFontInfo.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/EngineVersionComparison.h"
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -35,6 +40,7 @@ static constexpr TCHAR FixtureDataAssetClassPath[] = TEXT("/Script/BlueprintExtr
 static constexpr TCHAR FixtureRowStructPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRow");
 static constexpr TCHAR FixtureBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureBindWidgetParent");
 static constexpr TCHAR FixtureRenameBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRenameBindWidgetParent");
+static constexpr TCHAR FixtureStyledWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureStyledWidgetParent");
 static constexpr TCHAR TextureImportSource[] = TEXT("ImportSources/T_Test.png");
 static constexpr TCHAR TextureImportSourceAlt[] = TEXT("ImportSources/T_Test_Alt.png");
 static constexpr TCHAR MeshImportSource[] = TEXT("ImportSources/SM_Test.obj");
@@ -61,6 +67,29 @@ static FString MakePackageFilename(const FString& AssetPath)
 	return FPackageName::LongPackageNameToFilename(
 		AssetPath,
 		FPackageName::GetAssetPackageExtension());
+}
+
+static FString FindSystemFontFile()
+{
+	const FString WindowsFontsDir = FPaths::Combine(FPlatformMisc::GetEnvironmentVariable(TEXT("WINDIR")), TEXT("Fonts"));
+	const TArray<FString> Candidates = {
+		FPaths::Combine(WindowsFontsDir, TEXT("arial.ttf")),
+		FPaths::Combine(WindowsFontsDir, TEXT("arialbd.ttf")),
+		FPaths::Combine(WindowsFontsDir, TEXT("tahoma.ttf")),
+		FPaths::Combine(WindowsFontsDir, TEXT("tahomabd.ttf")),
+		FPaths::Combine(WindowsFontsDir, TEXT("segoeui.ttf")),
+		FPaths::Combine(WindowsFontsDir, TEXT("seguisb.ttf")),
+	};
+
+	for (const FString& Candidate : Candidates)
+	{
+		if (FPaths::FileExists(Candidate))
+		{
+			return Candidate;
+		}
+	}
+
+	return FString();
 }
 
 static FString SerializeStringArray(const TArray<FString>& Values)
@@ -554,6 +583,7 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 			WidgetObjectPath,
 			TEXT("TitleText"),
 			TEXT(R"json({"RenderOpacity":0.5})json"),
+			TEXT("{}"),
 			TEXT("{}"),
 			false),
 		TEXT("ModifyWidget"));
@@ -1423,6 +1453,7 @@ static bool RunWidgetRenameCoverage(FAutomationTestBase& Test)
 			TEXT("Shortcuticon"),
 			TEXT(R"json({"name":"ShortcutIcon"})json"),
 			TEXT("{}"),
+			TEXT("{}"),
 			false),
 		TEXT("ModifyWidget rename"));
 
@@ -1487,6 +1518,7 @@ static bool RunWidgetSlotAliasCoverage(FAutomationTestBase& Test)
 			TEXT("TitleBarArea"),
 			TEXT("{}"),
 			TEXT(R"json({"Size":{"value":0,"sizeRule":"Auto"}})json"),
+			TEXT("{}"),
 			false),
 		TEXT("ModifyWidget slot alias"));
 
@@ -1513,6 +1545,272 @@ static bool RunWidgetSlotAliasCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
 		TEXT("CompileWidgetBlueprint after slot alias"));
+
+	return true;
+}
+
+static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StyledWindow"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			FixtureStyledWidgetParentClassPath),
+		TEXT("CreateWidgetBlueprint for widget defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","children":[{"class":"Image","name":"TitleBarBg","properties":{"RenderOpacity":0.75}},{"class":"TextBlock","name":"TitleText","properties":{"Text":"Window Title"}}]})json"),
+			false),
+		TEXT("BuildWidgetTree for widget defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidget(
+			WidgetObjectPath,
+			TEXT("TitleBarBg"),
+			TEXT("{}"),
+			TEXT("{}"),
+			TEXT(R"json({"is_variable":true})json"),
+			false),
+		TEXT("ModifyWidget toggles is_variable"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("patch_widget"),
+			TEXT(R"json({"widget_name":"TitleText","is_variable":true})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure patch_widget toggles is_variable"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("patch_class_defaults"),
+			TEXT(R"json({"classDefaults":{"ActiveTitleBarMaterial":"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial","InactiveTitleBarMaterial":"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"}})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure patch_class_defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after widget defaults"));
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Styled widget blueprint exists"), WidgetBP);
+	if (!WidgetBP)
+	{
+		return false;
+	}
+
+	UImage* TitleBarBg = WidgetBP->WidgetTree ? Cast<UImage>(WidgetBP->WidgetTree->FindWidget(TEXT("TitleBarBg"))) : nullptr;
+	UTextBlock* TitleText = WidgetBP->WidgetTree ? Cast<UTextBlock>(WidgetBP->WidgetTree->FindWidget(TEXT("TitleText"))) : nullptr;
+	Test.TestNotNull(TEXT("TitleBarBg exists"), TitleBarBg);
+	Test.TestNotNull(TEXT("TitleText exists"), TitleText);
+	if (TitleBarBg)
+	{
+		Test.TestTrue(TEXT("ModifyWidget sets bIsVariable on existing widgets"), TitleBarBg->bIsVariable);
+		Test.TestEqual(TEXT("patch_class_defaults does not mutate widget template properties"), TitleBarBg->GetRenderOpacity(), 0.75f);
+	}
+	if (TitleText)
+	{
+		Test.TestTrue(TEXT("patch_widget accepts is_variable aliases"), TitleText->bIsVariable);
+	}
+
+	const bool bHasGeneratedTitleBarVariable = WidgetBP->GeneratedVariables.ContainsByPredicate([](const FBPVariableDescription& Variable)
+	{
+		return Variable.VarName == FName(TEXT("TitleBarBg"));
+	});
+	const bool bHasGeneratedTitleTextVariable = WidgetBP->GeneratedVariables.ContainsByPredicate([](const FBPVariableDescription& Variable)
+	{
+		return Variable.VarName == FName(TEXT("TitleText"));
+	});
+	Test.TestFalse(TEXT("Native BindWidget TitleBarBg still avoids generated variables"), bHasGeneratedTitleBarVariable);
+	Test.TestFalse(TEXT("Native BindWidget TitleText still avoids generated variables"), bHasGeneratedTitleTextVariable);
+
+	const UObject* GeneratedDefaults = WidgetBP->GeneratedClass ? WidgetBP->GeneratedClass->GetDefaultObject(false) : nullptr;
+	Test.TestNotNull(TEXT("Generated widget class defaults exist"), GeneratedDefaults);
+	if (GeneratedDefaults)
+	{
+		const FObjectPropertyBase* ActiveMaterialProperty = CastField<FObjectPropertyBase>(GeneratedDefaults->GetClass()->FindPropertyByName(TEXT("ActiveTitleBarMaterial")));
+		const FObjectPropertyBase* InactiveMaterialProperty = CastField<FObjectPropertyBase>(GeneratedDefaults->GetClass()->FindPropertyByName(TEXT("InactiveTitleBarMaterial")));
+		Test.TestNotNull(TEXT("ActiveTitleBarMaterial default property exists"), ActiveMaterialProperty);
+		Test.TestNotNull(TEXT("InactiveTitleBarMaterial default property exists"), InactiveMaterialProperty);
+		if (ActiveMaterialProperty)
+		{
+			const UObject* ActiveMaterial = ActiveMaterialProperty->GetObjectPropertyValue_InContainer(GeneratedDefaults);
+			Test.TestEqual(TEXT("ActiveTitleBarMaterial default patched"), GetPathNameSafe(ActiveMaterial), FString(DefaultMaterialPath));
+		}
+		if (InactiveMaterialProperty)
+		{
+			const UObject* InactiveMaterial = InactiveMaterialProperty->GetObjectPropertyValue_InContainer(GeneratedDefaults);
+			Test.TestEqual(TEXT("InactiveTitleBarMaterial default patched"), GetPathNameSafe(InactiveMaterial), FString(DefaultMaterialPath));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath, true),
+		TEXT("ExtractWidgetBlueprint include_class_defaults"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> ClassDefaultsJson;
+	Test.TestTrue(TEXT("ExtractWidgetBlueprint surfaces classDefaults"), TryGetObjectFieldCopy(ExtractResult, TEXT("classDefaults"), ClassDefaultsJson) && ClassDefaultsJson.IsValid());
+	if (ClassDefaultsJson.IsValid())
+	{
+		FString ActiveDefaultPath;
+		Test.TestTrue(TEXT("classDefaults contains ActiveTitleBarMaterial"), ClassDefaultsJson->TryGetStringField(TEXT("ActiveTitleBarMaterial"), ActiveDefaultPath));
+		if (!ActiveDefaultPath.IsEmpty())
+		{
+			Test.TestEqual(TEXT("classDefaults serializes object references as object paths"), ActiveDefaultPath, FString(DefaultMaterialPath));
+		}
+	}
+
+	return true;
+}
+
+static bool RunWidgetFontCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString FontFilePath = FindSystemFontFile();
+	Test.TestFalse(TEXT("A Windows system font file is available for import coverage"), FontFilePath.IsEmpty());
+	if (FontFilePath.IsEmpty())
+	{
+		return false;
+	}
+
+	const FString FontDestinationPath = MakeUniqueAssetPath(TEXT("Fonts"));
+	const FString FontAssetPath = FontDestinationPath + TEXT("/F_WindowRuntime");
+	const FString FontAssetObjectPath = MakeObjectPath(FontAssetPath);
+	const FString PrimaryFaceName = TEXT("Face_One");
+	const FString SecondaryFaceName = TEXT("Face_Two");
+
+	const FString FontImportPayload = FString::Printf(
+		TEXT(R"json({"items":[{"file_path":"%s","destination_path":"%s","destination_name":"%s","entry_name":"Regular","replace_existing":true}],"font_asset_path":"%s"})json"),
+		*FontFilePath.ReplaceCharWithEscapedChar(),
+		*FontDestinationPath,
+		*PrimaryFaceName,
+		*FontAssetPath);
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ImportFonts(FontImportPayload, true),
+		TEXT("ImportFonts validate_only"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ImportFonts(FontImportPayload, false),
+		TEXT("ImportFonts create runtime font"));
+
+	const FString SecondImportPayload = FString::Printf(
+		TEXT(R"json({"items":[{"file_path":"%s","destination_path":"%s","destination_name":"%s","entry_name":"Regular","replace_existing":true}],"font_asset_path":"%s"})json"),
+		*FontFilePath.ReplaceCharWithEscapedChar(),
+		*FontDestinationPath,
+		*SecondaryFaceName,
+		*FontAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ImportFonts(SecondImportPayload, false),
+		TEXT("ImportFonts updates existing typeface entry deterministically"));
+
+	UFont* RuntimeFont = Cast<UFont>(ResolveAssetByPath(FontAssetObjectPath));
+	Test.TestNotNull(TEXT("Runtime UFont asset exists"), RuntimeFont);
+	if (RuntimeFont)
+	{
+		Test.TestEqual(TEXT("Runtime font uses runtime cache"), static_cast<int32>(RuntimeFont->FontCacheType), static_cast<int32>(EFontCacheType::Runtime));
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5, 7, 0)
+		const FCompositeFont& CompositeFont = RuntimeFont->GetInternalCompositeFont();
+#else
+		const FCompositeFont& CompositeFont = RuntimeFont->CompositeFont;
+#endif
+		Test.TestEqual(TEXT("Repeated entry_name updates keep a single typeface entry"), CompositeFont.DefaultTypeface.Fonts.Num(), 1);
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_Fonts"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for font coverage"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","children":[{"class":"TextBlock","name":"TitleText","is_variable":true,"properties":{"Text":"Window"}},{"class":"Image","name":"IconImage","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree for font coverage"));
+
+	const FString ApplyFontsPayload = FString::Printf(
+		TEXT(R"json({"targets":[{"widget_name":"TitleText","font_asset":"%s","typeface":"Regular","size":28},{"widget_name":"IconImage","font_asset":"%s","typeface":"Regular","size":18},{"widget_path":"WindowRoot/MissingText","font_asset":"%s","typeface":"Regular","size":16}]})json"),
+		*FontAssetPath,
+		*FontAssetPath,
+		*FontAssetPath);
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ApplyWidgetFonts(WidgetObjectPath, ApplyFontsPayload, true),
+		TEXT("ApplyWidgetFonts validate_only"));
+
+	const TSharedPtr<FJsonObject> ApplyFontsResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ApplyWidgetFonts(WidgetObjectPath, ApplyFontsPayload, false),
+		TEXT("ApplyWidgetFonts"));
+	if (!ApplyFontsResult.IsValid())
+	{
+		return false;
+	}
+
+	if (ApplyFontsResult->HasTypedField<EJson::Number>(TEXT("warningCount")))
+	{
+		Test.TestEqual(TEXT("ApplyWidgetFonts reports warnings for unmatched/non-text targets"), static_cast<int32>(ApplyFontsResult->GetNumberField(TEXT("warningCount"))), 2);
+	}
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Font coverage widget blueprint exists"), WidgetBP);
+	if (!WidgetBP)
+	{
+		return false;
+	}
+
+	UTextBlock* TitleText = WidgetBP->WidgetTree ? Cast<UTextBlock>(WidgetBP->WidgetTree->FindWidget(TEXT("TitleText"))) : nullptr;
+	Test.TestNotNull(TEXT("TitleText exists after font application"), TitleText);
+	if (TitleText)
+	{
+		Test.TestEqual(TEXT("TitleText font asset updated"), GetPathNameSafe(TitleText->GetFont().FontObject), FontAssetObjectPath);
+		Test.TestEqual(TEXT("TitleText typeface updated"), TitleText->GetFont().TypefaceFontName, FName(TEXT("Regular")));
+		Test.TestEqual(TEXT("TitleText size updated"), TitleText->GetFont().Size, 28.0f);
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after font application"));
 
 	return true;
 }
@@ -1753,6 +2051,16 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("WidgetSlotAliases"), [this]()
 		{
 			TestTrue(TEXT("Widget slot alias coverage completes"), RunWidgetSlotAliasCoverage(*this));
+		});
+
+		It(TEXT("WidgetVariableAndClassDefaults"), [this]()
+		{
+			TestTrue(TEXT("Widget variable and class-default coverage completes"), RunWidgetVariableAndClassDefaultsCoverage(*this));
+		});
+
+		It(TEXT("WidgetFonts"), [this]()
+		{
+			TestTrue(TEXT("Widget font coverage completes"), RunWidgetFontCoverage(*this));
 		});
 
 		It(TEXT("WidgetStructureOps"), [this]()

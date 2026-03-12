@@ -10,11 +10,67 @@ class FakeUEClient implements UEClientLike {
       method,
       params,
     ) => JSON.stringify({ ok: true, method, params }),
+    private readonly connectionProbe: () => Promise<boolean> | boolean = () => true,
   ) {}
 
   async callSubsystem(method: string, params: Record<string, unknown>): Promise<string> {
     this.calls.push({ method, params });
     return await this.handler(method, params);
+  }
+
+  async checkConnection(): Promise<boolean> {
+    return await this.connectionProbe();
+  }
+}
+
+class FakeProjectController {
+  readonly compileCalls: Array<Record<string, unknown>> = [];
+  readonly waitCalls: Array<Record<string, unknown>> = [];
+  readonly classifyCalls: Array<{ changedPaths: string[]; forceRebuild: boolean }> = [];
+
+  constructor(
+    readonly liveCodingSupported = true,
+    private readonly classifyHandler: (
+      changedPaths: string[],
+      forceRebuild: boolean,
+    ) => { strategy: 'live_coding' | 'build_and_restart'; restartRequired: boolean; reasons: string[] } = (
+      changedPaths,
+      forceRebuild,
+    ) => ({
+      strategy: forceRebuild ? 'build_and_restart' : 'live_coding',
+      restartRequired: forceRebuild,
+      reasons: forceRebuild ? ['force_rebuild'] : [],
+    }),
+    private readonly compileHandler: (request: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown> = () => ({
+      success: true,
+      operation: 'compile_project_code',
+      strategy: 'external_build',
+      exitCode: 0,
+      restartRequired: true,
+      restartReasons: ['external_build_completed'],
+    }),
+    private readonly waitHandler: (request: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown> = () => ({
+      success: true,
+      operation: 'restart_editor',
+      disconnected: true,
+      reconnected: true,
+      diagnostics: [],
+    }),
+  ) {}
+
+  classifyChangedPaths(changedPaths: string[], forceRebuild = false) {
+    this.classifyCalls.push({ changedPaths, forceRebuild });
+    return this.classifyHandler(changedPaths, forceRebuild);
+  }
+
+  async compileProjectCode(request: Record<string, unknown>) {
+    this.compileCalls.push(request);
+    return await this.compileHandler(request);
+  }
+
+  async waitForEditorRestart(_probeConnection: unknown, request: Record<string, unknown> = {}) {
+    this.waitCalls.push(request);
+    return await this.waitHandler(request);
   }
 }
 
@@ -73,7 +129,7 @@ describe('createBlueprintExtractorServer', () => {
     const saveAssets = tools.tools.find((tool) => tool.name === 'save_assets');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(2);
-    expect(tools.tools).toHaveLength(65);
+    expect(tools.tools).toHaveLength(70);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -81,6 +137,8 @@ describe('createBlueprintExtractorServer', () => {
     expect(resourceUris).toContain('blueprint://selector-conventions');
     expect(resourceUris).toContain('blueprint://widget-best-practices');
     expect(resourceUris).toContain('blueprint://material-graph-guidance');
+    expect(resourceUris).toContain('blueprint://font-roles');
+    expect(resourceUris).toContain('blueprint://project-automation');
     expect(resourceTemplateUris).toContain('blueprint://examples/{family}');
     expect(resourceTemplateUris).toContain('blueprint://widget-patterns/{pattern}');
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
@@ -95,6 +153,11 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'create_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compile_material_asset')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'compile_project_code')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'trigger_live_coding')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
     expect(extractBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractWidgetBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractMaterial?.annotations?.readOnlyHint).toBe(true);
@@ -115,9 +178,13 @@ describe('createBlueprintExtractorServer', () => {
     const selectorConventions = await harness.client.readResource({ uri: 'blueprint://selector-conventions' });
     const widgetBestPractices = await harness.client.readResource({ uri: 'blueprint://widget-best-practices' });
     const materialGraphGuidance = await harness.client.readResource({ uri: 'blueprint://material-graph-guidance' });
+    const fontRoles = await harness.client.readResource({ uri: 'blueprint://font-roles' });
+    const projectAutomation = await harness.client.readResource({ uri: 'blueprint://project-automation' });
     const widgetExample = await harness.client.readResource({ uri: 'blueprint://examples/widget_blueprint' });
     const materialExample = await harness.client.readResource({ uri: 'blueprint://examples/material' });
     const materialFunctionExample = await harness.client.readResource({ uri: 'blueprint://examples/material_function' });
+    const windowPolishExample = await harness.client.readResource({ uri: 'blueprint://examples/window_ui_polish' });
+    const projectCodeExample = await harness.client.readResource({ uri: 'blueprint://examples/project_code' });
     const widgetPattern = await harness.client.readResource({ uri: 'blueprint://widget-patterns/activatable_window' });
 
     expect(scopes.contents[0]?.mimeType).toBe('text/plain');
@@ -133,9 +200,13 @@ describe('createBlueprintExtractorServer', () => {
     expect(widgetBestPractices.contents[0]?.text).toContain('CommonActivatableWidget');
     expect(materialGraphGuidance.contents[0]?.text).toContain('Blueprint Extractor Material Graph Guidance');
     expect(materialGraphGuidance.contents[0]?.text).toContain('expression_guid');
+    expect(fontRoles.contents[0]?.text).toContain('Blueprint Extractor Font Roles');
+    expect(projectAutomation.contents[0]?.text).toContain('Blueprint Extractor Project Automation');
     expect(widgetExample.contents[0]?.text).toContain('Example structural batch');
     expect(materialExample.contents[0]?.text).toContain('connect_material_property');
     expect(materialFunctionExample.contents[0]?.text).toContain('asset_kind=function, layer, or layer_blend');
+    expect(windowPolishExample.contents[0]?.text).toContain('modify_widget / modify_widget_blueprint.patch_widget with is_variable');
+    expect(projectCodeExample.contents[0]?.text).toContain('Use explicit changed_paths with sync_project_code');
     expect(widgetPattern.contents[0]?.text).toContain('Pattern: activatable_window');
   });
 
@@ -264,6 +335,7 @@ describe('createBlueprintExtractorServer', () => {
       name: 'extract_widget_blueprint',
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
+        include_class_defaults: true,
       },
     });
     const modifyResult = await harness.client.callTool({
@@ -310,6 +382,7 @@ describe('createBlueprintExtractorServer', () => {
         method: 'ExtractWidgetBlueprint',
         params: {
           AssetPath: '/Game/UI/WBP_Window',
+          bIncludeClassDefaults: true,
         },
       },
       {
@@ -342,6 +415,71 @@ describe('createBlueprintExtractorServer', () => {
         method: 'CompileWidgetBlueprint',
         params: {
           AssetPath: '/Game/UI/WBP_Window',
+        },
+      },
+    ]);
+  });
+
+  it('routes widget variable aliases, widget-path patches, and widget class-default patches through the narrowed widget API', async () => {
+    const fakeClient = new FakeUEClient((method) => JSON.stringify({
+      success: true,
+      operation: method,
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const modifyWidget = await harness.client.callTool({
+      name: 'modify_widget',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        widget_path: 'WindowRoot/TitleBar/TitleBarBg',
+        bIsVariable: true,
+      },
+    });
+    const patchDefaults = await harness.client.callTool({
+      name: 'modify_widget_blueprint',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        operation: 'patch_class_defaults',
+        class_defaults: {
+          ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
+        },
+      },
+    });
+
+    expect(JSON.parse(getTextContent(modifyWidget))).toMatchObject({
+      operation: 'ModifyWidget',
+      success: true,
+    });
+    expect(JSON.parse(getTextContent(patchDefaults))).toMatchObject({
+      operation: 'ModifyWidgetBlueprintStructure',
+      success: true,
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ModifyWidget',
+        params: {
+          AssetPath: '/Game/UI/WBP_Window',
+          WidgetName: 'WindowRoot/TitleBar/TitleBarBg',
+          PropertiesJson: '{}',
+          SlotJson: '{}',
+          WidgetOptionsJson: JSON.stringify({
+            is_variable: true,
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'ModifyWidgetBlueprintStructure',
+        params: {
+          AssetPath: '/Game/UI/WBP_Window',
+          Operation: 'patch_class_defaults',
+          PayloadJson: JSON.stringify({
+            class_defaults: {
+              ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
+            },
+          }),
+          bValidateOnly: false,
         },
       },
     ]);
@@ -549,6 +687,7 @@ describe('createBlueprintExtractorServer', () => {
           WidgetName: 'WindowRoot/TitleBar/TitleText',
           PropertiesJson: JSON.stringify({ Text: 'Window' }),
           SlotJson: JSON.stringify({}),
+          WidgetOptionsJson: JSON.stringify({}),
           bValidateOnly: true,
         },
       },
@@ -631,6 +770,235 @@ describe('createBlueprintExtractorServer', () => {
           bIncludeCompleted: true,
         },
       },
+    ]);
+  });
+
+  it('routes compile_project_code through the host-side project controller', async () => {
+    const fakeController = new FakeProjectController(
+      true,
+      undefined,
+      (request) => ({
+        success: true,
+        operation: 'compile_project_code',
+        strategy: 'external_build',
+        exitCode: 0,
+        target: request.target ?? 'MyGameEditor',
+        projectPath: request.projectPath,
+        engineRoot: request.engineRoot,
+        restartRequired: true,
+        restartReasons: ['external_build_completed'],
+      }),
+    );
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient(), fakeController));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'compile_project_code',
+      arguments: {
+        engine_root: 'C:/Epic/UE_5.7',
+        project_path: 'C:/Projects/MyGame/MyGame.uproject',
+        target: 'MyGameEditor',
+        platform: 'Win64',
+        configuration: 'Development',
+      },
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      operation: 'compile_project_code',
+      target: 'MyGameEditor',
+      engineRoot: 'C:/Epic/UE_5.7',
+      projectPath: 'C:/Projects/MyGame/MyGame.uproject',
+    });
+    expect(fakeController.compileCalls).toEqual([
+      {
+        engineRoot: 'C:/Epic/UE_5.7',
+        projectPath: 'C:/Projects/MyGame/MyGame.uproject',
+        target: 'MyGameEditor',
+        platform: 'Win64',
+        configuration: 'Development',
+        buildTimeoutMs: undefined,
+        includeOutput: false,
+      },
+    ]);
+  });
+
+  it('returns generic live coding failures without falling back to build-and-restart', async () => {
+    const fakeClient = new FakeUEClient((method) => {
+      if (method === 'TriggerLiveCoding') {
+        return JSON.stringify({
+          success: false,
+          operation: 'trigger_live_coding',
+          status: 'failure',
+          compileResult: 'Failure',
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const fakeController = new FakeProjectController();
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'sync_project_code',
+      arguments: {
+        changed_paths: ['Source/MyGame/Private/MyActor.cpp'],
+      },
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      success: false,
+      operation: 'sync_project_code',
+      strategy: 'live_coding',
+      liveCoding: {
+        status: 'failure',
+        compileResult: 'Failure',
+      },
+    });
+    expect(fakeController.compileCalls).toHaveLength(0);
+  });
+
+  it('falls back from precondition live coding failures to build-and-restart and waits for reconnect', async () => {
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'TriggerLiveCoding') {
+        return JSON.stringify({
+          success: false,
+          operation: 'trigger_live_coding',
+          status: 'unsupported',
+          fallbackRecommended: true,
+        });
+      }
+
+      if (method === 'SaveAssets') {
+        return JSON.stringify({
+          success: true,
+          operation: 'save_assets',
+          saved: true,
+          assetPaths: JSON.parse(String(params.AssetPathsJson)),
+        });
+      }
+
+      if (method === 'RestartEditor') {
+        return JSON.stringify({
+          success: true,
+          operation: 'restart_editor',
+          requested: true,
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const fakeController = new FakeProjectController(
+      true,
+      undefined,
+      () => ({
+        success: true,
+        operation: 'compile_project_code',
+        strategy: 'external_build',
+        exitCode: 0,
+        restartRequired: true,
+        restartReasons: ['external_build_completed'],
+      }),
+      () => ({
+        success: true,
+        operation: 'restart_editor',
+        disconnected: true,
+        reconnected: true,
+        diagnostics: [],
+      }),
+    );
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'sync_project_code',
+      arguments: {
+        changed_paths: ['Source/MyGame/Private/MyActor.cpp'],
+        save_asset_paths: ['/Game/UI/WBP_Window'],
+      },
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      success: true,
+      operation: 'sync_project_code',
+      strategy: 'build_and_restart',
+      liveCoding: {
+        status: 'unsupported',
+      },
+      save: {
+        saved: true,
+      },
+      reconnect: {
+        reconnected: true,
+      },
+    });
+    expect(fakeController.compileCalls).toHaveLength(1);
+    expect(fakeController.waitCalls).toEqual([
+      {
+        disconnectTimeoutMs: 60000,
+        reconnectTimeoutMs: 180000,
+      },
+    ]);
+  });
+
+  it('orchestrates apply_window_ui_changes in order and stops on the first failed step', async () => {
+    const fakeClient = new FakeUEClient((method) => {
+      if (method === 'ModifyWidget' || method === 'ModifyWidgetBlueprintStructure' || method === 'ImportFonts') {
+        return JSON.stringify({
+          success: true,
+          operation: method,
+        });
+      }
+
+      if (method === 'ApplyWidgetFonts') {
+        return JSON.stringify({
+          success: false,
+          operation: 'ApplyWidgetFonts',
+          diagnostics: [{ message: 'Missing font asset' }],
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'apply_window_ui_changes',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        variable_widgets: [
+          { widget_path: 'WindowRoot/TitleBar/TitleBarBg', is_variable: true },
+        ],
+        class_defaults: {
+          ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
+        },
+        font_import: {
+          destination_path: '/Game/UI/Fonts',
+          font_asset_path: '/Game/UI/Fonts/F_Window',
+          items: [{ file_path: 'C:/Windows/Fonts/tahoma.ttf', entry_name: 'Regular' }],
+        },
+        font_applications: [
+          {
+            widget_path: 'WindowRoot/TitleBar/TitleText',
+            font_asset: '/Game/UI/Fonts/F_Window.F_Window',
+            typeface: 'Regular',
+            size: 14,
+          },
+        ],
+      },
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      success: false,
+      operation: 'apply_window_ui_changes',
+      stoppedAt: 'apply_widget_fonts',
+    });
+    expect(fakeClient.calls.map((call) => call.method)).toEqual([
+      'ModifyWidget',
+      'ModifyWidgetBlueprintStructure',
+      'ImportFonts',
+      'ApplyWidgetFonts',
     ]);
   });
 

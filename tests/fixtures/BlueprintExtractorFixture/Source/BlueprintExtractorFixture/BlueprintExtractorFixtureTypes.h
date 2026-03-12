@@ -4,6 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Engine/DataAsset.h"
 #include "Engine/DataTable.h"
+#include "Materials/MaterialInterface.h"
 
 #include "BlueprintExtractorFixtureTypes.generated.h"
 
@@ -65,4 +66,24 @@ class BLUEPRINTEXTRACTORFIXTURE_API UBlueprintExtractorFixtureRenameBindWidgetPa
 protected:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UImage> ShortcutIcon = nullptr;
+};
+
+UCLASS(BlueprintType)
+class BLUEPRINTEXTRACTORFIXTURE_API UBlueprintExtractorFixtureStyledWidgetParent : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Fixture")
+	TObjectPtr<UMaterialInterface> ActiveTitleBarMaterial = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Fixture")
+	TObjectPtr<UMaterialInterface> InactiveTitleBarMaterial = nullptr;
+
+protected:
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UImage> TitleBarBg = nullptr;
+
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UTextBlock> TitleText = nullptr;
 };

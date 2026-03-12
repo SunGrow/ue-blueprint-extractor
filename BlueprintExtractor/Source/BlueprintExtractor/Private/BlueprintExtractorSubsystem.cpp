@@ -12,6 +12,7 @@
 #include "Authoring/CurveTableAuthoring.h"
 #include "Authoring/DataAssetAuthoring.h"
 #include "Authoring/DataTableAuthoring.h"
+#include "Authoring/FontAuthoring.h"
 #include "Import/ImportJobManager.h"
 #include "Authoring/MaterialGraphAuthoring.h"
 #include "Authoring/MaterialInstanceAuthoring.h"
@@ -44,6 +45,17 @@
 #include "Serialization/JsonReader.h"
 #include "Builders/WidgetTreeBuilder.h"
 #include "WidgetBlueprint.h"
+#include "Containers/Ticker.h"
+#include "GenericPlatform/GenericPlatformProperties.h"
+#include "Misc/App.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Paths.h"
+#include "Misc/EngineVersionComparison.h"
+#include "UnrealEdMisc.h"
+
+#if PLATFORM_WINDOWS
+#include "ILiveCodingModule.h"
+#endif
 
 static FString MakeErrorJson(const FString& Message)
 {
@@ -706,7 +718,7 @@ FString UBlueprintExtractorSubsystem::CreateWidgetBlueprint(const FString& Asset
 	return SerializeJsonObject(Result);
 }
 
-FString UBlueprintExtractorSubsystem::ExtractWidgetBlueprint(const FString& AssetPath)
+FString UBlueprintExtractorSubsystem::ExtractWidgetBlueprint(const FString& AssetPath, const bool bIncludeClassDefaults)
 {
 	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
 	if (WidgetBP == nullptr)
@@ -714,7 +726,7 @@ FString UBlueprintExtractorSubsystem::ExtractWidgetBlueprint(const FString& Asse
 		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
 	}
 
-	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::ExtractWidgetBlueprint(WidgetBP);
+	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::ExtractWidgetBlueprint(WidgetBP, bIncludeClassDefaults);
 	if (!Result.IsValid())
 	{
 		return MakeErrorJson(TEXT("Failed to extract WidgetBlueprint authoring snapshot"));
@@ -752,10 +764,11 @@ FString UBlueprintExtractorSubsystem::BuildWidgetTree(const FString& AssetPath,
 }
 
 FString UBlueprintExtractorSubsystem::ModifyWidget(const FString& AssetPath,
-                                                    const FString& WidgetName,
-                                                    const FString& PropertiesJson,
-                                                    const FString& SlotJson,
-                                                    const bool bValidateOnly)
+                                                   const FString& WidgetName,
+                                                   const FString& PropertiesJson,
+                                                   const FString& SlotJson,
+                                                   const FString& WidgetOptionsJson,
+                                                   const bool bValidateOnly)
 {
 	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
 	if (WidgetBP == nullptr)
@@ -791,7 +804,27 @@ FString UBlueprintExtractorSubsystem::ModifyWidget(const FString& AssetPath,
 		ParsedSlot = MakeShared<FJsonObject>();
 	}
 
-	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::ModifyWidget(WidgetBP, WidgetName, ParsedProperties, ParsedSlot, bValidateOnly);
+	TSharedPtr<FJsonObject> ParsedWidgetOptions;
+	if (!WidgetOptionsJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(WidgetOptionsJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedWidgetOptions) || !ParsedWidgetOptions.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for WidgetOptionsJson"));
+		}
+	}
+	if (!ParsedWidgetOptions.IsValid())
+	{
+		ParsedWidgetOptions = MakeShared<FJsonObject>();
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::ModifyWidget(
+		WidgetBP,
+		WidgetName,
+		ParsedProperties,
+		ParsedSlot,
+		ParsedWidgetOptions,
+		bValidateOnly);
 	if (!Result.IsValid())
 	{
 		return MakeErrorJson(TEXT("Failed to modify widget"));
@@ -846,6 +879,56 @@ FString UBlueprintExtractorSubsystem::CompileWidgetBlueprint(const FString& Asse
 	if (!Result.IsValid())
 	{
 		return MakeErrorJson(TEXT("Failed to compile WidgetBlueprint"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ImportFonts(const FString& PayloadJson, const bool bValidateOnly)
+{
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FFontAuthoring::ImportFonts(ParsedPayload, bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to import fonts"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ApplyWidgetFonts(const FString& AssetPath,
+                                                       const FString& PayloadJson,
+                                                       const bool bValidateOnly)
+{
+	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetTreeBuilder::ApplyWidgetFonts(WidgetBP, ParsedPayload, bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to apply widget fonts"));
 	}
 
 	return SerializeJsonObject(Result);
@@ -1923,4 +2006,168 @@ FString UBlueprintExtractorSubsystem::ListImportJobs(const bool bIncludeComplete
 {
 	return SerializeJsonObject(
 		GetImportJobManager(ImportJobManager).ListImportJobs(bIncludeCompleted));
+}
+
+FString UBlueprintExtractorSubsystem::GetProjectAutomationContext()
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("operation"), TEXT("get_project_automation_context"));
+	Result->SetStringField(TEXT("projectName"), FApp::GetProjectName());
+	Result->SetStringField(TEXT("projectFilePath"), FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()));
+	Result->SetStringField(TEXT("projectDir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
+
+	const FString EngineDir = FPaths::ConvertRelativePathToFull(FPaths::EngineDir());
+	Result->SetStringField(TEXT("engineDir"), EngineDir);
+	Result->SetStringField(TEXT("engineRoot"), FPaths::GetPath(FPaths::GetPath(EngineDir)));
+	Result->SetStringField(TEXT("editorTarget"), FString::Printf(TEXT("%sEditor"), FApp::GetProjectName()));
+	Result->SetStringField(TEXT("hostPlatform"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()));
+
+	bool bSupportsLiveCoding = false;
+	bool bLiveCodingAvailable = false;
+	bool bLiveCodingEnabled = false;
+	bool bLiveCodingStarted = false;
+	FString LiveCodingError;
+
+#if PLATFORM_WINDOWS
+	bSupportsLiveCoding = true;
+	if (FModuleManager::Get().ModuleExists(TEXT("LiveCoding")))
+	{
+		if (ILiveCodingModule* LiveCodingModule = FModuleManager::LoadModulePtr<ILiveCodingModule>(TEXT("LiveCoding")))
+		{
+			bLiveCodingAvailable = true;
+			bLiveCodingEnabled = LiveCodingModule->IsEnabledForSession();
+			bLiveCodingStarted = LiveCodingModule->HasStarted();
+			if (!LiveCodingModule->CanEnableForSession() && !bLiveCodingEnabled)
+			{
+				LiveCodingError = LiveCodingModule->GetEnableErrorText().ToString();
+			}
+		}
+	}
+#endif
+
+	Result->SetBoolField(TEXT("supportsLiveCoding"), bSupportsLiveCoding);
+	Result->SetBoolField(TEXT("liveCodingAvailable"), bLiveCodingAvailable);
+	Result->SetBoolField(TEXT("liveCodingEnabled"), bLiveCodingEnabled);
+	Result->SetBoolField(TEXT("liveCodingStarted"), bLiveCodingStarted);
+	if (!LiveCodingError.IsEmpty())
+	{
+		Result->SetStringField(TEXT("liveCodingError"), LiveCodingError);
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::TriggerLiveCoding(const bool bEnableForSession, const bool bWaitForCompletion)
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("operation"), TEXT("trigger_live_coding"));
+
+#if PLATFORM_WINDOWS
+	if (!FModuleManager::Get().ModuleExists(TEXT("LiveCoding")))
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetBoolField(TEXT("supported"), true);
+		Result->SetBoolField(TEXT("available"), false);
+		Result->SetStringField(TEXT("compileResult"), TEXT("Unavailable"));
+		Result->SetStringField(TEXT("message"), TEXT("Live Coding module is not available in this editor build."));
+		return SerializeJsonObject(Result);
+	}
+
+	ILiveCodingModule* LiveCodingModule = FModuleManager::LoadModulePtr<ILiveCodingModule>(TEXT("LiveCoding"));
+	if (!LiveCodingModule)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetBoolField(TEXT("supported"), true);
+		Result->SetBoolField(TEXT("available"), false);
+		Result->SetStringField(TEXT("compileResult"), TEXT("Unavailable"));
+		Result->SetStringField(TEXT("message"), TEXT("Failed to load the Live Coding module."));
+		return SerializeJsonObject(Result);
+	}
+
+	Result->SetBoolField(TEXT("supported"), true);
+	Result->SetBoolField(TEXT("available"), true);
+	if (bEnableForSession && !LiveCodingModule->IsEnabledForSession())
+	{
+		if (!LiveCodingModule->CanEnableForSession())
+		{
+			Result->SetBoolField(TEXT("success"), false);
+			Result->SetBoolField(TEXT("enabledForSession"), false);
+			Result->SetStringField(TEXT("compileResult"), TEXT("Unavailable"));
+			Result->SetStringField(TEXT("message"), LiveCodingModule->GetEnableErrorText().ToString());
+			return SerializeJsonObject(Result);
+		}
+
+		LiveCodingModule->EnableForSession(true);
+	}
+
+	ELiveCodingCompileResult CompileResult = ELiveCodingCompileResult::NotStarted;
+	const ELiveCodingCompileFlags CompileFlags = bWaitForCompletion
+		? ELiveCodingCompileFlags::WaitForCompletion
+		: ELiveCodingCompileFlags::None;
+	const bool bCompileRequested = LiveCodingModule->Compile(CompileFlags, &CompileResult);
+
+	const auto CompileResultToString = [](const ELiveCodingCompileResult InResult)
+	{
+		switch (InResult)
+		{
+		case ELiveCodingCompileResult::Success: return TEXT("Success");
+		case ELiveCodingCompileResult::NoChanges: return TEXT("NoChanges");
+		case ELiveCodingCompileResult::InProgress: return TEXT("InProgress");
+		case ELiveCodingCompileResult::CompileStillActive: return TEXT("CompileStillActive");
+		case ELiveCodingCompileResult::NotStarted: return TEXT("NotStarted");
+		case ELiveCodingCompileResult::Failure: return TEXT("Failure");
+		case ELiveCodingCompileResult::Cancelled: return TEXT("Cancelled");
+		default: return TEXT("Unknown");
+		}
+	};
+
+	Result->SetBoolField(TEXT("enabledForSession"), LiveCodingModule->IsEnabledForSession());
+	Result->SetBoolField(TEXT("started"), LiveCodingModule->HasStarted());
+	Result->SetStringField(TEXT("compileResult"), CompileResultToString(CompileResult));
+	Result->SetBoolField(TEXT("success"),
+		bCompileRequested &&
+		(CompileResult == ELiveCodingCompileResult::Success
+			|| CompileResult == ELiveCodingCompileResult::NoChanges
+			|| CompileResult == ELiveCodingCompileResult::InProgress));
+	Result->SetStringField(
+		TEXT("message"),
+		bCompileRequested ? TEXT("Live Coding compile request completed.") : TEXT("Live Coding compile request failed to start."));
+	return SerializeJsonObject(Result);
+#else
+	Result->SetBoolField(TEXT("success"), false);
+	Result->SetBoolField(TEXT("supported"), false);
+	Result->SetBoolField(TEXT("available"), false);
+	Result->SetBoolField(TEXT("enabledForSession"), false);
+	Result->SetStringField(TEXT("compileResult"), TEXT("Unsupported"));
+	Result->SetStringField(TEXT("message"), TEXT("Live Coding automation is only supported on Windows editor builds."));
+	return SerializeJsonObject(Result);
+#endif
+}
+
+FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn, const FString& AdditionalCommandLine)
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("operation"), TEXT("restart_editor"));
+	Result->SetBoolField(TEXT("scheduled"), true);
+	if (!AdditionalCommandLine.IsEmpty())
+	{
+		Result->SetStringField(TEXT("additionalCommandLine"), AdditionalCommandLine);
+	}
+	Result->SetStringField(TEXT("message"), TEXT("Editor restart scheduled."));
+
+	const FString CommandLineCopy = AdditionalCommandLine;
+	FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateLambda([bWarn, CommandLineCopy](float)
+		{
+			const TOptional<FString> RestartCommandLine = CommandLineCopy.IsEmpty()
+				? TOptional<FString>()
+				: TOptional<FString>(CommandLineCopy);
+			FUnrealEdMisc::Get().RestartEditor(bWarn, RestartCommandLine);
+			return false;
+		}),
+		0.0f);
+
+	return SerializeJsonObject(Result);
 }

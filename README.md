@@ -47,7 +47,7 @@ ue-blueprint-extractor/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── src/
-│   │   ├── index.ts                 # MCP tool definitions (65 tools + 7 resources + 2 resource templates)
+│   │   ├── index.ts                 # MCP tool definitions (70 tools + 9 resources + 2 resource templates)
 │   │   ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
 │   │   ├── ue-client.ts             # UE Remote Control HTTP client
 │   │   └── types.ts                 # Shared TypeScript types
@@ -362,11 +362,16 @@ Then open a new session or restart your client. The tools will appear automatica
 | `search_assets` | Search assets by name and class filter |
 | `list_assets` | List assets under a package path |
 | `create_widget_blueprint` | Create a new WidgetBlueprint asset with a specified parent class |
-| `extract_widget_blueprint` | Extract a compact widget-authoring snapshot with widget tree, bindings, animations, and compile status |
+| `extract_widget_blueprint` | Extract a compact widget-authoring snapshot with widget tree, bindings, animations, compile status, and optional class defaults |
 | `build_widget_tree` | Build/replace the entire widget hierarchy of a WidgetBlueprint from a JSON tree |
-| `modify_widget` | Patch properties and/or slot config on one widget by `widget_name` or `widget_path` |
-| `modify_widget_blueprint` | Primary widget authoring tool for structural ops such as replace-tree, patch-widget, insert-child, move, wrap, replace-class, batch, and compile workflows |
+| `modify_widget` | Patch properties, slot config, rename fields, and widget variable flags on one widget by `widget_name` or `widget_path` |
+| `modify_widget_blueprint` | Primary widget authoring tool for structural ops such as replace-tree, patch-widget, patch-class-defaults, insert-child, move, wrap, replace-class, batch, and compile workflows |
 | `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings plus counts |
+| `compile_project_code` | Run an external UBT build from the MCP host for the current project/editor target |
+| `trigger_live_coding` | Request an editor-side Live Coding compile on Windows-supported setups |
+| `restart_editor` | Request an editor restart and wait for Remote Control to disconnect and reconnect |
+| `sync_project_code` | Use explicit `changed_paths` to choose Live Coding vs build-and-restart without guessing from source control |
+| `apply_window_ui_changes` | Thin helper that sequences widget variable flags, widget class defaults, optional font work, compile/save, and optional code sync |
 | `create_data_asset` | Create a concrete DataAsset asset and optionally initialize editable properties |
 | `modify_data_asset` | Apply a reflected property patch to an existing DataAsset |
 | `create_data_table` | Create a DataTable with a concrete row struct and optional initial rows |
@@ -429,8 +434,8 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — The live editor actions are exposed as 65 MCP **tools**. Static guidance lives in 7 resources plus 2 resource templates: `blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://import-capabilities`, `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, `blueprint://material-graph-guidance`, and the `blueprint://examples/{family}` / `blueprint://widget-patterns/{pattern}` templates.
-- **Small, distinct surface** — 65 tools with non-overlapping purposes. Extraction tools are read-only; authoring and import tools are explicit write operations with separate save semantics.
+- **Right primitive** — The live editor actions are exposed as 70 MCP **tools**. Static guidance lives in 9 resources plus 2 resource templates: `blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://import-capabilities`, `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, `blueprint://material-graph-guidance`, `blueprint://font-roles`, `blueprint://project-automation`, and the `blueprint://examples/{family}` / `blueprint://widget-patterns/{pattern}` templates.
+- **Small, distinct surface** — 70 tools with non-overlapping purposes. Extraction tools are read-only; authoring, import, and project-automation tools are explicit write or orchestration operations with separate save semantics.
 - **Description quality** — Tool descriptions stay selection-focused, while reusable workflows and examples live in resources/templates to save context.
 - **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; all write tools and `save_assets` require confirmation.
 - **Explicit save** — Write and import operations mutate assets and mark packages dirty, but they do not save automatically. Call `save_assets` when you want to persist the dirty packages to disk.
@@ -526,6 +531,12 @@ npm publish --access public
 ```
 
 ## Changelog
+
+### 1.13.0
+- **Widget metadata parity** — `modify_widget` and `modify_widget_blueprint.patch_widget` now accept `is_variable` aliases for existing widgets, and `extract_widget_blueprint` can include Blueprint class defaults alongside widget and slot data.
+- **Explicit widget defaults and fonts** — added widget-scoped `patch_class_defaults`, `import_fonts`, and `apply_widget_fonts` so UI polish flows can set class-default materials and runtime `UFont` assets without oversized reflected payloads.
+- **Project code automation** — added project-control support for `compile_project_code`, `trigger_live_coding`, `restart_editor`, `sync_project_code`, and the thin `apply_window_ui_changes` helper workflow.
+- **Automation coverage** — added UE automation for widget variable toggles, class-default patching, runtime font creation or application, plus MCP contract and project-controller coverage for the new code-sync surface.
 
 ### 1.12.0
 - **Classic material graph support** — added `extract_material`, `create_material`, `modify_material`, `extract_material_function`, `create_material_function`, `modify_material_function`, and `compile_material_asset` for compact UMaterial and MaterialFunction-family authoring.

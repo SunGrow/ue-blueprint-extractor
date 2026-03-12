@@ -118,7 +118,7 @@ public:
 
 	/** Extracts a compact authoring snapshot for a WidgetBlueprint. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
-	FString ExtractWidgetBlueprint(const FString& AssetPath);
+	FString ExtractWidgetBlueprint(const FString& AssetPath, const bool bIncludeClassDefaults = false);
 
 	/** Builds/replaces the entire widget hierarchy from JSON. Returns JSON with widget count and errors. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
@@ -132,6 +132,7 @@ public:
 	                     const FString& WidgetName,
 	                     const FString& PropertiesJson,
 	                     const FString& SlotJson,
+	                     const FString& WidgetOptionsJson = TEXT(""),
 	                     const bool bValidateOnly = false);
 
 	/** Applies a structural widget-tree mutation using a compact JSON payload. */
@@ -144,6 +145,16 @@ public:
 	/** Compiles a WidgetBlueprint. Returns JSON array of errors/warnings. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CompileWidgetBlueprint(const FString& AssetPath);
+
+	/** Imports one or more font files into UFontFace assets and optionally updates a runtime UFont. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ImportFonts(const FString& PayloadJson, const bool bValidateOnly = false);
+
+	/** Applies compact font settings to text widgets in an existing WidgetBlueprint. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ApplyWidgetFonts(const FString& AssetPath,
+	                         const FString& PayloadJson,
+	                         const bool bValidateOnly = false);
 
 	/** Saves one or more dirty asset packages explicitly. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
@@ -384,4 +395,16 @@ public:
 	/** Lists session-scoped import jobs. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ListImportJobs(const bool bIncludeCompleted = true);
+
+	/** Returns current project/editor context to the MCP host for build and reconnect orchestration. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString GetProjectAutomationContext();
+
+	/** Triggers an in-editor Live Coding compile when supported. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString TriggerLiveCoding(const bool bEnableForSession = true, const bool bWaitForCompletion = true);
+
+	/** Schedules an editor restart after the current remote call returns. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString RestartEditor(const bool bWarn = false, const FString& AdditionalCommandLine = TEXT(""));
 };

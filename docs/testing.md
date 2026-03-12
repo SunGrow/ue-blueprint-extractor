@@ -26,8 +26,9 @@ Optional flags:
 The default MCP run executes:
 
 - `tests/server-contract.test.ts`: in-memory contract checks against the exported `createBlueprintExtractorServer(...)`.
-  Covers static resources, resource templates, compact widget and material extraction, widget-path mutation routing, material graph routing, and structured error behavior.
+  Covers static resources, resource templates, compact widget/material extraction, widget-path mutation routing, host-side project-control tools, and structured error behavior.
 - `tests/ue-client.test.ts`: HTTP-layer `UEClient` coverage with a local mock Remote Control server.
+- `tests/project-controller.test.ts`: host-side build command selection, changed-path classification, and restart/reconnect polling.
 - `tests/stdio.integration.test.ts`: real stdio server smoke test against the built `dist/index.js`, including the material graph guidance resource plus compact material read/write transport coverage.
 - `tests/pack-smoke.mjs`: `npm pack` plus `npx blueprint-extractor-mcp` startup smoke from the produced tarball.
 - `tests/live.e2e.test.ts`: gated end-to-end import and extraction smoke against a real editor. It imports a texture through a local HTTP fixture server, verifies header forwarding, imports a local mesh fixture, creates scratch material-family assets, polls job status, and explicitly saves the imported and authored assets.
@@ -38,6 +39,13 @@ Live MCP smoke requires a running editor with the plugin loaded. Set:
 - `UE_REMOTE_CONTROL_HOST`
 - `UE_REMOTE_CONTROL_PORT`
 - optionally `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH` for a deterministic subsystem path override
+- optionally `UE_ENGINE_ROOT`, `UE_PROJECT_PATH`, and `UE_PROJECT_TARGET` / `UE_EDITOR_TARGET` for host-side `compile_project_code` and `sync_project_code`
+
+The narrowed project-code path is intentionally explicit:
+
+- `sync_project_code` requires `changed_paths`
+- generic Live Coding `Failure` is returned directly to the caller
+- automatic fallback is only used for deterministic preconditions such as unsupported or unavailable Live Coding
 
 ## UE Automation
 

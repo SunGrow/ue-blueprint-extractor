@@ -5,13 +5,22 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { UEClient } from './ue-client.js';
 import { compactBlueprint } from './compactor.js';
+import {
+  ProjectController,
+  type ProjectControllerLike,
+  type BuildConfiguration,
+  type BuildPlatform,
+} from './project-controller.js';
 
-export type UEClientLike = Pick<UEClient, 'callSubsystem'>;
+export type UEClientLike = Pick<UEClient, 'callSubsystem'> & Partial<Pick<UEClient, 'checkConnection'>>;
 
-export function createBlueprintExtractorServer(client: UEClientLike = new UEClient()) {
+export function createBlueprintExtractorServer(
+  client: UEClientLike = new UEClient(),
+  projectController: ProjectControllerLike = new ProjectController(),
+) {
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '1.12.0',
+    version: '1.13.0',
   });
 
 // Shared scope enum with detailed descriptions
@@ -104,6 +113,7 @@ server.resource(
         '- BlendSpace: create_blend_space, modify_blend_space',
         '- Blueprint members: create_blueprint, modify_blueprint_members',
         '- Shared persistence: save_assets',
+        '- Host/editor orchestration: compile_project_code, trigger_live_coding, restart_editor, sync_project_code, apply_window_ui_changes',
         '',
         'Supported selectors and operation surfaces:',
         '- UserDefinedStruct: field selector by guid or name; operations replace_fields, patch_field, rename_field, remove_field, reorder_fields.',
@@ -120,8 +130,9 @@ server.resource(
         '- build_widget_tree is the destructive bootstrap path for whole-tree replacement.',
         '- extract_widget_blueprint returns a compact authoring snapshot with widgetPath annotations.',
         '- modify_widget supports direct widget_name or widget_path patches for one widget.',
-        '- modify_widget_blueprint is the primary structural API: replace_tree, patch_widget, insert_child, remove_widget, move_widget, wrap_widget, replace_widget_class, batch, or compile.',
+        '- modify_widget_blueprint is the primary structural API: replace_tree, patch_widget, patch_class_defaults, insert_child, remove_widget, move_widget, wrap_widget, replace_widget_class, batch, or compile.',
         '- compile_widget_blueprint validates the asset but still does not save it.',
+        '- apply_window_ui_changes is a thin MCP helper that sequences variable-flag updates, class defaults, optional font work, compile/save, and optional code sync.',
         '',
         'Explicit deferrals:',
         '- No arbitrary Blueprint, Niagara, or BehaviorTree graph synthesis.',
@@ -201,6 +212,7 @@ server.resource(
         '- Keep payloads small by sending only changed fields, not full extracted objects, unless the tool explicitly expects a full replacement payload.',
         '- Re-extract after mutation when you need confirmation; do not assume UE normalized fields exactly as sent.',
         '- For multi-step widget work, prefer extract_widget_blueprint -> modify_widget_blueprint -> compile_widget_blueprint -> save_assets.',
+        '- For code orchestration, pass explicit changed_paths to sync_project_code instead of relying on source-control inference.',
       ].join('\n'),
     }],
   }),
@@ -226,6 +238,7 @@ server.resource(
         '- Anim assets: prefer stable notifyId/notifyGuid and sampleIndex selectors over array-position assumptions.',
         '- When a tool supports both name and path selectors, path is the safer choice after structural edits.',
         '- Common alias policy: snake_case is the canonical MCP shape; small ergonomic aliases are accepted only where documented.',
+        '- sync_project_code requires explicit changed_paths; it does not infer them from source control state.',
       ].join('\n'),
     }],
   }),
@@ -301,6 +314,64 @@ server.resource(
   }),
 );
 
+server.resource(
+  'font-role-guidance',
+  'blueprint://font-roles',
+  {
+    description: 'Compact UI font-role guidance for project-owned runtime fonts and widget application payloads.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Font Roles',
+        '',
+        '- Use explicit font file paths as the stable import contract; do not rely on installed-font name lookup.',
+        '- Import project-owned UFontFace assets, then optionally synthesize/update a runtime UFont for widget use.',
+        '- Apply fonts to widgets through compact payloads: widget selector + font_asset + typeface + size.',
+        '',
+        'Suggested roles:',
+        '- title: typeface=Bold, size=18-24',
+        '- button: typeface=Bold or Semibold, size=12-16',
+        '- body: typeface=Regular, size=10-14',
+        '- caption: typeface=Regular, size=9-11',
+        '',
+        'Keep font styling centralized in shared assets instead of repeating large FSlateFontInfo blobs.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'project-automation-guidance',
+  'blueprint://project-automation',
+  {
+    description: 'Host/editor project automation guidance for build, Live Coding, restart, and reconnect flows.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Project Automation',
+        '',
+        '- compile_project_code runs an external UBT build from the MCP host.',
+        '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups.',
+        '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect.',
+        '- sync_project_code requires explicit changed_paths and chooses Live Coding vs build_and_restart deterministically.',
+        '',
+        'build_and_restart is forced for:',
+        '- .h/.hpp/.inl/.generated.h changes',
+        '- .Build.cs, .Target.cs, .uplugin, .uproject changes',
+        '- explicit force_rebuild=true',
+        '',
+        'Generic Live Coding Failure is not auto-promoted into a rebuild. The caller receives the failure result directly.',
+      ].join('\n'),
+    }],
+  }),
+);
+
 const exampleResourceBodies: Record<string, string[]> = {
   widget_blueprint: [
     'Family: widget_blueprint',
@@ -357,6 +428,26 @@ const exampleResourceBodies: Record<string, string[]> = {
     '',
     'Example batch:',
     '{"settings":{"description":"Example function"},"operations":[{"operation":"add_expression","temp_id":"input","class":"/Script/Engine.MaterialExpressionFunctionInput","properties":{"InputName":"Color"}},{"operation":"add_expression","temp_id":"output","class":"/Script/Engine.MaterialExpressionFunctionOutput","properties":{"OutputName":"Result"}},{"operation":"connect_expressions","from_temp_id":"input","to_temp_id":"output","to_input_name":"A"}]}',
+  ],
+  window_ui_polish: [
+    'Family: window_ui_polish',
+    '',
+    'Recommended flow:',
+    '1. modify_widget / modify_widget_blueprint.patch_widget with is_variable',
+    '2. modify_widget_blueprint with operation=patch_class_defaults',
+    '3. import_fonts',
+    '4. apply_widget_fonts',
+    '5. compile_widget_blueprint',
+    '6. save_assets',
+    '7. sync_project_code (optional)',
+  ],
+  project_code: [
+    'Family: project_code',
+    '',
+    'Use explicit changed_paths with sync_project_code.',
+    '',
+    'Example:',
+    '{"changed_paths":["Source/MyGame/Private/MyActor.cpp"],"project_path":"C:/Projects/MyGame/MyGame.uproject","engine_root":"C:/Program Files/Epic Games/UE_5.7","target":"MyGameEditor"}',
   ],
   data_asset: [
     'Family: data_asset',
@@ -534,11 +625,11 @@ async function callSubsystemJson(method: string, params: Record<string, unknown>
   return parsed;
 }
 
-function jsonToolSuccess(parsed: Record<string, unknown>, options: { compact?: boolean } = {}) {
+function jsonToolSuccess(parsed: unknown, options: { compact?: boolean } = {}) {
   const compact = options.compact ?? true;
   return {
     content: [{ type: 'text' as const, text: compact ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2) }],
-    structuredContent: parsed,
+    structuredContent: parsed as Record<string, unknown>,
   };
 }
 
@@ -547,6 +638,44 @@ function jsonToolError(e: unknown) {
     content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
     isError: true,
   };
+}
+
+function maybeBoolean(...values: Array<unknown>): boolean | undefined {
+  for (const value of values) {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function getWidgetIdentifier(widgetName?: string, widgetPath?: string): string | null {
+  return widgetPath ?? widgetName ?? null;
+}
+
+function canFallbackFromLiveCoding(result: Record<string, unknown>): boolean {
+  const status = typeof result.status === 'string' ? result.status.toLowerCase() : '';
+  const compileResult = typeof result.compileResult === 'string' ? result.compileResult.toLowerCase() : '';
+  const reason = typeof result.reason === 'string' ? result.reason.toLowerCase() : '';
+
+  return (
+    status === 'unsupported'
+    || status === 'unavailable'
+    || compileResult === 'unsupported'
+    || compileResult === 'unavailable'
+    || reason === 'unsupported'
+    || reason === 'unavailable'
+    || result.fallbackRecommended === true
+  );
+}
+
+function supportsConnectionProbe(activeClient: UEClientLike): (() => Promise<boolean>) | null {
+  if (typeof activeClient.checkConnection === 'function') {
+    return activeClient.checkConnection.bind(activeClient);
+  }
+
+  return null;
 }
 
 // Tool 1: extract_blueprint
@@ -1400,6 +1529,7 @@ const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
 const WidgetBlueprintMutationOperationSchema = z.enum([
   'replace_tree',
   'patch_widget',
+  'patch_class_defaults',
   'insert_child',
   'remove_widget',
   'move_widget',
@@ -1486,6 +1616,27 @@ const CurveTableRowSchema = z.object({
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 const StringMapSchema = z.record(z.string(), z.string());
+const BuildPlatformSchema = z.enum(['Win64', 'Mac', 'Linux']);
+const BuildConfigurationSchema = z.enum(['Debug', 'DebugGame', 'Development', 'Shipping', 'Test']);
+const WidgetSelectorFieldsSchema = z.object({
+  widget_name: z.string().optional(),
+  widget_path: z.string().optional(),
+});
+const WidgetSelectorSchema = WidgetSelectorFieldsSchema.refine((value) => Boolean(value.widget_name || value.widget_path), {
+  message: 'widget_name or widget_path is required',
+});
+const FontImportItemSchema = z.object({
+  file_path: z.string(),
+  entry_name: z.string().optional(),
+  replace_existing: z.boolean().optional(),
+});
+const WindowFontApplicationSchema = WidgetSelectorFieldsSchema.extend({
+  font_asset: z.string(),
+  typeface: z.string().optional(),
+  size: z.number().int().positive(),
+}).refine((value) => Boolean(value.widget_name || value.widget_path), {
+  message: 'widget_name or widget_path is required',
+});
 const MaterialFunctionAssetKindSchema = z.enum(['function', 'layer', 'layer_blend']);
 const MaterialParameterAssociationSchema = z.enum([
   'GlobalParameter',
@@ -1831,10 +1982,13 @@ server.registerTool(
   'extract_widget_blueprint',
   {
     title: 'Extract Widget Blueprint',
-    description: 'Read a compact widget-authoring snapshot with widget tree, bindings, animations, and compile status.',
+    description: 'Read a compact widget-authoring snapshot with widget tree, bindings, animations, compile status, and optional class defaults.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint.',
+      ),
+      include_class_defaults: z.boolean().default(false).describe(
+        'When true, also include Blueprint generated-class defaults so widget-template state and class defaults can be distinguished.',
       ),
     },
     annotations: {
@@ -1845,10 +1999,11 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  async ({ asset_path }) => {
+  async ({ asset_path, include_class_defaults }) => {
     try {
       const parsed = await callSubsystemJson('ExtractWidgetBlueprint', {
         AssetPath: asset_path,
+        bIncludeClassDefaults: include_class_defaults,
       });
       return jsonToolSuccess(parsed);
     } catch (e) {
@@ -1901,7 +2056,7 @@ server.registerTool(
   'modify_widget',
   {
     title: 'Modify Widget',
-    description: 'Patch one widget by widget_name or widget_path. Rename via properties.name/newName/new_name.',
+    description: 'Patch one widget by widget_name or widget_path. Rename via properties.name/newName/new_name; variable flags are accepted as top-level aliases.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint',
@@ -1918,6 +2073,15 @@ server.registerTool(
       slot: z.record(z.string(), z.unknown()).optional().describe(
         'Slot properties to set',
       ),
+      is_variable: z.boolean().optional().describe(
+        'Optional alias for toggling the widget variable flag.',
+      ),
+      isVariable: z.boolean().optional().describe(
+        'Optional alias for toggling the widget variable flag.',
+      ),
+      bIsVariable: z.boolean().optional().describe(
+        'Optional alias for toggling the widget variable flag.',
+      ),
       validate_only: z.boolean().default(false).describe(
         'When true, validate the patch without changing the asset.',
       ),
@@ -1930,11 +2094,17 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  async ({ asset_path, widget_name, widget_path, properties, slot, validate_only }) => {
+  async ({ asset_path, widget_name, widget_path, properties, slot, is_variable, isVariable, bIsVariable, validate_only }) => {
     try {
       const widgetIdentifier = widget_path ?? widget_name;
       if (!widgetIdentifier) {
         return jsonToolError(new Error('widget_name or widget_path is required'));
+      }
+
+      const widgetOptions: Record<string, unknown> = {};
+      const variableFlag = maybeBoolean(is_variable, isVariable, bIsVariable);
+      if (typeof variableFlag === 'boolean') {
+        widgetOptions.is_variable = variableFlag;
       }
 
       const parsed = await callSubsystemJson('ModifyWidget', {
@@ -1942,6 +2112,7 @@ server.registerTool(
         WidgetName: widgetIdentifier,
         PropertiesJson: JSON.stringify(properties ?? {}),
         SlotJson: JSON.stringify(slot ?? {}),
+        WidgetOptionsJson: JSON.stringify(widgetOptions),
         bValidateOnly: validate_only,
       });
       return jsonToolSuccess(parsed);
@@ -2820,6 +2991,18 @@ server.registerTool(
       slot: z.record(z.string(), z.unknown()).optional().describe(
         'Slot patch for patch_widget or move_widget.',
       ),
+      class_defaults: z.record(z.string(), z.unknown()).optional().describe(
+        'Generated-class default patch for operation="patch_class_defaults".',
+      ),
+      is_variable: z.boolean().optional().describe(
+        'Optional alias for toggling the widget variable flag during patch_widget.',
+      ),
+      isVariable: z.boolean().optional().describe(
+        'Optional alias for toggling the widget variable flag during patch_widget.',
+      ),
+      bIsVariable: z.boolean().optional().describe(
+        'Optional alias for toggling the widget variable flag during patch_widget.',
+      ),
       operations: z.array(z.record(z.string(), z.unknown())).optional().describe(
         'Nested operations for operation="batch".',
       ),
@@ -2855,6 +3038,10 @@ server.registerTool(
     index,
     properties,
     slot,
+    class_defaults,
+    is_variable,
+    isVariable,
+    bIsVariable,
     operations,
     validate_only,
     compile_after,
@@ -2890,6 +3077,9 @@ server.registerTool(
         if (typeof index === 'number') payload.index = index;
         if (properties) payload.properties = properties;
         if (slot) payload.slot = slot;
+        if (class_defaults) payload.class_defaults = class_defaults;
+        const variableFlag = maybeBoolean(is_variable, isVariable, bIsVariable);
+        if (typeof variableFlag === 'boolean') payload.is_variable = variableFlag;
         if (operations) payload.operations = operations;
 
         mutation = await callSubsystemJson('ModifyWidgetBlueprintStructure', {
@@ -2910,6 +3100,622 @@ server.registerTool(
         : mutation;
 
       return jsonToolSuccess(structuredContent);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'compile_project_code',
+  {
+    title: 'Compile Project Code',
+    description: 'Run an external UBT build from the MCP host for the current project/editor target.',
+    inputSchema: {
+      engine_root: z.string().optional().describe(
+        'Optional Unreal Engine root. Falls back to UE_ENGINE_ROOT.',
+      ),
+      project_path: z.string().optional().describe(
+        'Optional .uproject path. Falls back to UE_PROJECT_PATH.',
+      ),
+      target: z.string().optional().describe(
+        'Optional build target such as MyGameEditor. Falls back to UE_PROJECT_TARGET or UE_EDITOR_TARGET.',
+      ),
+      platform: BuildPlatformSchema.optional().describe(
+        'Optional build platform. Defaults from the host OS.',
+      ),
+      configuration: BuildConfigurationSchema.optional().describe(
+        'Optional build configuration. Defaults to Development.',
+      ),
+      build_timeout_seconds: z.number().int().positive().optional().describe(
+        'Optional build timeout in seconds. Defaults to 1800.',
+      ),
+      include_output: z.boolean().default(false).describe(
+        'When true, include full stdout and stderr in the result. Failure cases include output automatically.',
+      ),
+    },
+    annotations: {
+      title: 'Compile Project Code',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ engine_root, project_path, target, platform, configuration, build_timeout_seconds, include_output }) => {
+    try {
+      const parsed = await projectController.compileProjectCode({
+        engineRoot: engine_root,
+        projectPath: project_path,
+        target,
+        platform: platform as BuildPlatform | undefined,
+        configuration: configuration as BuildConfiguration | undefined,
+        buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
+        includeOutput: include_output,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'trigger_live_coding',
+  {
+    title: 'Trigger Live Coding',
+    description: 'Request an editor-side Live Coding compile. Unsupported host platforms return a structured unsupported result.',
+    inputSchema: {
+      changed_paths: z.array(z.string()).optional().describe(
+        'Optional explicit changed paths to pass through to the editor-side automation surface.',
+      ),
+      wait_for_completion: z.boolean().default(true).describe(
+        'When true, request a synchronous/terminal Live Coding result from the editor-side method.',
+      ),
+    },
+    annotations: {
+      title: 'Trigger Live Coding',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ changed_paths, wait_for_completion }) => {
+    try {
+      if (!projectController.liveCodingSupported) {
+        return jsonToolSuccess({
+          success: false,
+          operation: 'trigger_live_coding',
+          status: 'unsupported',
+          supported: false,
+          reason: 'Host-side Live Coding automation is only supported on Windows.',
+        });
+      }
+
+      const parsed = await callSubsystemJson('TriggerLiveCoding', {
+        ChangedPathsJson: JSON.stringify(changed_paths ?? []),
+        bWaitForCompletion: wait_for_completion,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'restart_editor',
+  {
+    title: 'Restart Editor',
+    description: 'Request an editor restart, then wait for Remote Control to disconnect and reconnect.',
+    inputSchema: {
+      save_dirty_assets: z.boolean().default(true).describe(
+        'When true, ask the editor-side restart path to save dirty assets before relaunching.',
+      ),
+      wait_for_reconnect: z.boolean().default(true).describe(
+        'When true, wait for the editor to disconnect and reconnect before returning.',
+      ),
+      disconnect_timeout_seconds: z.number().int().positive().default(60).describe(
+        'Maximum seconds to wait for the editor to disconnect after the restart request.',
+      ),
+      reconnect_timeout_seconds: z.number().int().positive().default(180).describe(
+        'Maximum seconds to wait for Remote Control to return after the editor restarts.',
+      ),
+    },
+    annotations: {
+      title: 'Restart Editor',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ save_dirty_assets, wait_for_reconnect, disconnect_timeout_seconds, reconnect_timeout_seconds }) => {
+    try {
+      const restartRequest = await callSubsystemJson('RestartEditor', {
+        bSaveDirtyAssets: save_dirty_assets,
+      });
+
+      if (!wait_for_reconnect || restartRequest.success === false) {
+        return jsonToolSuccess(restartRequest);
+      }
+
+      const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+        disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+        reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+      });
+
+      return jsonToolSuccess({
+        ...restartRequest,
+        reconnect,
+        success: restartRequest.success !== false && reconnect.success,
+      });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'sync_project_code',
+  {
+    title: 'Sync Project Code',
+    description: 'Use explicit changed_paths to choose Live Coding vs build-and-restart. Generic Live Coding failure does not auto-fallback.',
+    inputSchema: {
+      changed_paths: z.array(z.string()).min(1).describe(
+        'Explicit changed file paths. This tool does not infer them from source control.',
+      ),
+      force_rebuild: z.boolean().default(false).describe(
+        'When true, force the build-and-restart path regardless of changed_paths.',
+      ),
+      engine_root: z.string().optional().describe(
+        'Optional Unreal Engine root. Falls back to UE_ENGINE_ROOT.',
+      ),
+      project_path: z.string().optional().describe(
+        'Optional .uproject path. Falls back to UE_PROJECT_PATH.',
+      ),
+      target: z.string().optional().describe(
+        'Optional build target such as MyGameEditor. Falls back to UE_PROJECT_TARGET or UE_EDITOR_TARGET.',
+      ),
+      platform: BuildPlatformSchema.optional().describe(
+        'Optional build platform. Defaults from the host OS.',
+      ),
+      configuration: BuildConfigurationSchema.optional().describe(
+        'Optional build configuration. Defaults to Development.',
+      ),
+      save_dirty_assets: z.boolean().default(true).describe(
+        'When true, ask the editor restart path to save dirty assets before relaunching.',
+      ),
+      save_asset_paths: z.array(z.string()).optional().describe(
+        'Optional explicit asset paths to save through save_assets before the editor restart.',
+      ),
+      build_timeout_seconds: z.number().int().positive().optional().describe(
+        'Optional external build timeout in seconds. Defaults to 1800.',
+      ),
+      disconnect_timeout_seconds: z.number().int().positive().default(60).describe(
+        'Maximum seconds to wait for the editor to disconnect after a restart request.',
+      ),
+      reconnect_timeout_seconds: z.number().int().positive().default(180).describe(
+        'Maximum seconds to wait for Remote Control to return after the editor restarts.',
+      ),
+      include_output: z.boolean().default(false).describe(
+        'When true, include full build stdout and stderr in the result. Failure cases include output automatically.',
+      ),
+    },
+    annotations: {
+      title: 'Sync Project Code',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({
+    changed_paths,
+    force_rebuild,
+    engine_root,
+    project_path,
+    target,
+    platform,
+    configuration,
+    save_dirty_assets,
+    save_asset_paths,
+    build_timeout_seconds,
+    disconnect_timeout_seconds,
+    reconnect_timeout_seconds,
+    include_output,
+  }) => {
+    try {
+      const plan = projectController.classifyChangedPaths(changed_paths, force_rebuild);
+      const structuredResult: Record<string, unknown> = {
+        success: false,
+        operation: 'sync_project_code',
+        changedPaths: changed_paths,
+        plan,
+      };
+
+      if (plan.strategy === 'live_coding') {
+        if (!projectController.liveCodingSupported) {
+          structuredResult.plan = {
+            strategy: 'build_and_restart',
+            restartRequired: true,
+            reasons: ['live_coding_unsupported_on_host'],
+          };
+        } else {
+          const liveCoding = await callSubsystemJson('TriggerLiveCoding', {
+            ChangedPathsJson: JSON.stringify(changed_paths),
+            bWaitForCompletion: true,
+          });
+
+          if (!canFallbackFromLiveCoding(liveCoding)) {
+            return jsonToolSuccess({
+              success: liveCoding.success === true,
+              operation: 'sync_project_code',
+              strategy: 'live_coding',
+              changedPaths: changed_paths,
+              plan,
+              liveCoding,
+            });
+          }
+
+          structuredResult.liveCoding = liveCoding;
+          structuredResult.plan = {
+            strategy: 'build_and_restart',
+            restartRequired: true,
+            reasons: [...plan.reasons, 'live_coding_precondition_failed'],
+          };
+        }
+      }
+
+      const build = await projectController.compileProjectCode({
+        engineRoot: engine_root,
+        projectPath: project_path,
+        target,
+        platform: platform as BuildPlatform | undefined,
+        configuration: configuration as BuildConfiguration | undefined,
+        buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
+        includeOutput: include_output,
+      });
+
+      structuredResult.strategy = 'build_and_restart';
+      structuredResult.build = build;
+
+      if (!build.success) {
+        return jsonToolSuccess(structuredResult);
+      }
+
+      if (Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
+        const saveResult = await callSubsystemJson('SaveAssets', {
+          AssetPathsJson: JSON.stringify(save_asset_paths),
+        });
+        structuredResult.save = saveResult;
+        if (saveResult.success === false) {
+          return jsonToolSuccess(structuredResult);
+        }
+      }
+
+      const restartRequest = await callSubsystemJson('RestartEditor', {
+        bSaveDirtyAssets: save_dirty_assets,
+      });
+      structuredResult.restartRequest = restartRequest;
+      if (restartRequest.success === false) {
+        return jsonToolSuccess(structuredResult);
+      }
+
+      const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+        disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+        reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+      });
+      structuredResult.reconnect = reconnect;
+      structuredResult.success = reconnect.success;
+      return jsonToolSuccess(structuredResult);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'apply_window_ui_changes',
+  {
+    title: 'Apply Window UI Changes',
+    description: 'Thin helper that applies variable flags, class defaults, font work, compile/save, and optional code sync in one ordered flow.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint to update.',
+      ),
+      variable_widgets: z.array(WidgetSelectorFieldsSchema.extend({
+        is_variable: z.boolean().default(true),
+      }).refine((value) => Boolean(value.widget_name || value.widget_path), {
+        message: 'widget_name or widget_path is required',
+      })).default([]).describe(
+        'Optional widget selectors to toggle as variables before the compile/save pass.',
+      ),
+      class_defaults: z.record(z.string(), z.unknown()).optional().describe(
+        'Optional widget Blueprint generated-class defaults to patch.',
+      ),
+      font_import: z.object({
+        destination_path: z.string(),
+        font_asset_path: z.string().optional(),
+        items: z.array(FontImportItemSchema).min(1),
+      }).optional().describe(
+        'Optional explicit-file-path font import payload passed through to ImportFonts.',
+      ),
+      font_applications: z.array(WindowFontApplicationSchema).optional().describe(
+        'Optional compact font applications passed through to ApplyWidgetFonts.',
+      ),
+      compile_after: z.boolean().default(true).describe(
+        'When true, compile the widget Blueprint after the requested mutations.',
+      ),
+      save_after: z.boolean().default(true).describe(
+        'When true, save the widget asset and any explicit extra save paths after a successful compile.',
+      ),
+      save_asset_paths: z.array(z.string()).optional().describe(
+        'Optional extra asset paths to save with the widget asset.',
+      ),
+      sync_project_code: z.object({
+        changed_paths: z.array(z.string()).min(1),
+        force_rebuild: z.boolean().default(false).optional(),
+        engine_root: z.string().optional(),
+        project_path: z.string().optional(),
+        target: z.string().optional(),
+        platform: BuildPlatformSchema.optional(),
+        configuration: BuildConfigurationSchema.optional(),
+        save_dirty_assets: z.boolean().default(true).optional(),
+        build_timeout_seconds: z.number().int().positive().optional(),
+        disconnect_timeout_seconds: z.number().int().positive().default(60).optional(),
+        reconnect_timeout_seconds: z.number().int().positive().default(180).optional(),
+        include_output: z.boolean().default(false).optional(),
+      }).optional().describe(
+        'Optional project-code sync step to run after the widget asset work succeeds.',
+      ),
+    },
+    annotations: {
+      title: 'Apply Window UI Changes',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({
+    asset_path,
+    variable_widgets,
+    class_defaults,
+    font_import,
+    font_applications,
+    compile_after,
+    save_after,
+    save_asset_paths,
+    sync_project_code,
+  }) => {
+    try {
+      const steps: Array<Record<string, unknown>> = [];
+
+      for (const selector of variable_widgets) {
+        const widgetIdentifier = getWidgetIdentifier(selector.widget_name, selector.widget_path);
+        if (!widgetIdentifier) {
+          return jsonToolError(new Error('variable_widgets entries require widget_name or widget_path'));
+        }
+
+        const result = await callSubsystemJson('ModifyWidget', {
+          AssetPath: asset_path,
+          WidgetName: widgetIdentifier,
+          PropertiesJson: JSON.stringify({}),
+          SlotJson: JSON.stringify({}),
+          WidgetOptionsJson: JSON.stringify({ is_variable: selector.is_variable }),
+          bValidateOnly: false,
+        });
+        steps.push({
+          step: 'mark_widget_variable',
+          selector,
+          result,
+        });
+        if (result.success === false) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'apply_window_ui_changes',
+            stoppedAt: 'mark_widget_variable',
+            steps,
+          });
+        }
+      }
+
+      if (class_defaults) {
+        const result = await callSubsystemJson('ModifyWidgetBlueprintStructure', {
+          AssetPath: asset_path,
+          Operation: 'patch_class_defaults',
+          PayloadJson: JSON.stringify({ class_defaults }),
+          bValidateOnly: false,
+        });
+        steps.push({
+          step: 'patch_class_defaults',
+          result,
+        });
+        if (result.success === false) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'apply_window_ui_changes',
+            stoppedAt: 'patch_class_defaults',
+            steps,
+          });
+        }
+      }
+
+      if (font_import) {
+        const result = await callSubsystemJson('ImportFonts', {
+          PayloadJson: JSON.stringify(font_import),
+          bValidateOnly: false,
+        });
+        steps.push({
+          step: 'import_fonts',
+          result,
+        });
+        if (result.success === false) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'apply_window_ui_changes',
+            stoppedAt: 'import_fonts',
+            steps,
+          });
+        }
+      }
+
+      if (font_applications && font_applications.length > 0) {
+        const result = await callSubsystemJson('ApplyWidgetFonts', {
+          AssetPath: asset_path,
+          PayloadJson: JSON.stringify({ applications: font_applications }),
+          bValidateOnly: false,
+        });
+        steps.push({
+          step: 'apply_widget_fonts',
+          result,
+        });
+        if (result.success === false) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'apply_window_ui_changes',
+            stoppedAt: 'apply_widget_fonts',
+            steps,
+          });
+        }
+      }
+
+      if (compile_after) {
+        const result = await callSubsystemJson('CompileWidgetBlueprint', {
+          AssetPath: asset_path,
+        });
+        steps.push({
+          step: 'compile_widget_blueprint',
+          result,
+        });
+        if (result.success === false) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'apply_window_ui_changes',
+            stoppedAt: 'compile_widget_blueprint',
+            steps,
+          });
+        }
+      }
+
+      if (save_after) {
+        const assetPaths = new Set<string>([asset_path]);
+        for (const extraPath of save_asset_paths ?? []) {
+          assetPaths.add(extraPath);
+        }
+        if (font_import?.font_asset_path) {
+          assetPaths.add(font_import.font_asset_path);
+        }
+
+        const result = await callSubsystemJson('SaveAssets', {
+          AssetPathsJson: JSON.stringify(Array.from(assetPaths)),
+        });
+        steps.push({
+          step: 'save_assets',
+          result,
+        });
+        if (result.success === false) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'apply_window_ui_changes',
+            stoppedAt: 'save_assets',
+            steps,
+          });
+        }
+      }
+
+      if (sync_project_code) {
+        const syncPlan = projectController.classifyChangedPaths(
+          sync_project_code.changed_paths,
+          sync_project_code.force_rebuild ?? false,
+        );
+        let needsBuildRestart = syncPlan.strategy === 'build_and_restart' || !projectController.liveCodingSupported;
+
+        if (syncPlan.strategy === 'live_coding' && projectController.liveCodingSupported) {
+          const liveCoding = await callSubsystemJson('TriggerLiveCoding', {
+            ChangedPathsJson: JSON.stringify(sync_project_code.changed_paths),
+            bWaitForCompletion: true,
+          });
+          if (!canFallbackFromLiveCoding(liveCoding)) {
+            steps.push({
+              step: 'sync_project_code',
+              strategy: 'live_coding',
+              result: liveCoding,
+            });
+            if (liveCoding.success === false) {
+              return jsonToolSuccess({
+                success: false,
+                operation: 'apply_window_ui_changes',
+                stoppedAt: 'sync_project_code',
+                steps,
+              });
+            }
+          } else {
+            steps.push({
+              step: 'sync_project_code_precheck',
+              strategy: 'live_coding',
+              result: liveCoding,
+            });
+            needsBuildRestart = true;
+          }
+        }
+
+        if (needsBuildRestart) {
+          const build = await projectController.compileProjectCode({
+            engineRoot: sync_project_code.engine_root,
+            projectPath: sync_project_code.project_path,
+            target: sync_project_code.target,
+            platform: sync_project_code.platform as BuildPlatform | undefined,
+            configuration: sync_project_code.configuration as BuildConfiguration | undefined,
+            buildTimeoutMs: typeof sync_project_code.build_timeout_seconds === 'number'
+              ? sync_project_code.build_timeout_seconds * 1000
+              : undefined,
+            includeOutput: sync_project_code.include_output ?? false,
+          });
+          steps.push({
+            step: 'compile_project_code',
+            result: build,
+          });
+          if (!build.success) {
+            return jsonToolSuccess({
+              success: false,
+              operation: 'apply_window_ui_changes',
+              stoppedAt: 'compile_project_code',
+              steps,
+            });
+          }
+
+          const restartRequest = await callSubsystemJson('RestartEditor', {
+            bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
+          });
+          const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+            disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
+            reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
+          });
+          steps.push({
+            step: 'sync_project_code',
+            strategy: 'build_and_restart',
+            restartRequest,
+            reconnect,
+          });
+          if (restartRequest.success === false || !reconnect.success) {
+            return jsonToolSuccess({
+              success: false,
+              operation: 'apply_window_ui_changes',
+              stoppedAt: 'sync_project_code',
+              steps,
+            });
+          }
+        }
+      }
+
+      return jsonToolSuccess({
+        success: true,
+        operation: 'apply_window_ui_changes',
+        steps,
+      });
     } catch (e) {
       return jsonToolError(e);
     }

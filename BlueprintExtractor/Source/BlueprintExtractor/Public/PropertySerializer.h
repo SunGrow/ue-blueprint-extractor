@@ -12,6 +12,7 @@ struct FPropertySerializer
 {
 	static TSharedPtr<FJsonValue> SerializePropertyValue(const FProperty* Property, const void* ValuePtr);
 	static TSharedPtr<FJsonObject> SerializePropertyOverrides(const UObject* Object);
+	static TSharedPtr<FJsonObject> SerializePropertyOverridesAgainstBaseline(const UObject* Object, const UObject* BaselineObject);
 	static TArray<TSharedPtr<FJsonValue>> SerializeUserProperties(
 		const void* Container,
 		const UClass* ContainerClass,

@@ -1,6 +1,7 @@
 #include "Builders/WidgetTreeBuilder.h"
 
 #include "Authoring/AssetMutationHelpers.h"
+#include "Authoring/BlueprintAuthoring.h"
 #include "Extractors/WidgetTreeExtractor.h"
 #include "PropertySerializer.h"
 
@@ -12,6 +13,8 @@
 #include "Components/PanelWidget.h"
 #include "Components/PanelSlot.h"
 #include "Blueprint/UserWidget.h"
+#include "Engine/Font.h"
+#include "Fonts/SlateFontInfo.h"
 #include "MovieScene.h"
 
 #include "Dom/JsonObject.h"
@@ -185,6 +188,34 @@ static bool IsWidgetPathIdentifier(const FString& Identifier)
 	return NormalizeWidgetIdentifier(Identifier).Contains(TEXT("/"));
 }
 
+static FString NormalizeFontAssetObjectPath(const FString& AssetPath)
+{
+	if (AssetPath.IsEmpty())
+	{
+		return FString();
+	}
+
+	int32 LastSlashIndex = INDEX_NONE;
+	int32 LastDotIndex = INDEX_NONE;
+	const bool bHasSlash = AssetPath.FindLastChar(TEXT('/'), LastSlashIndex);
+	const bool bHasDot = AssetPath.FindLastChar(TEXT('.'), LastDotIndex);
+	if (bHasDot && (!bHasSlash || LastDotIndex > LastSlashIndex))
+	{
+		return AssetPath;
+	}
+
+	if (bHasSlash && LastSlashIndex + 1 < AssetPath.Len())
+	{
+		const FString AssetName = AssetPath.Mid(LastSlashIndex + 1);
+		if (!AssetName.IsEmpty())
+		{
+			return FString::Printf(TEXT("%s.%s"), *AssetPath, *AssetName);
+		}
+	}
+
+	return NormalizeAssetObjectPath(AssetPath);
+}
+
 static TArray<TSharedPtr<FJsonValue>>& GetMutableChildrenArray(const TSharedPtr<FJsonObject>& ParentNode, const bool bCreateIfMissing)
 {
 	if (!ParentNode.IsValid())
@@ -284,6 +315,26 @@ static bool TryGetStringFieldAnyCase(const TSharedPtr<FJsonObject>& JsonObject,
 	for (const FString& Candidate : CandidateFields)
 	{
 		if (JsonObject->TryGetStringField(Candidate, OutValue) && !OutValue.IsEmpty())
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool TryGetBoolFieldAnyCase(const TSharedPtr<FJsonObject>& JsonObject,
+                                   const TArray<FString>& CandidateFields,
+                                   bool& OutValue)
+{
+	if (!JsonObject.IsValid())
+	{
+		return false;
+	}
+
+	for (const FString& Candidate : CandidateFields)
+	{
+		if (JsonObject->TryGetBoolField(Candidate, OutValue))
 		{
 			return true;
 		}
@@ -434,6 +485,19 @@ static TSharedPtr<FJsonObject> BuildWidgetCompileSnapshot(const UWidgetBlueprint
 	Compile->SetBoolField(TEXT("hasGeneratedClass"), bHasGeneratedClass);
 	Compile->SetBoolField(TEXT("needsCompile"), bDirty || Status == BS_Dirty || !bHasGeneratedClass);
 	return Compile;
+}
+
+static TSharedPtr<FJsonObject> ExtractWidgetClassDefaults(const UWidgetBlueprint* WidgetBP)
+{
+	if (!WidgetBP || !WidgetBP->GeneratedClass)
+	{
+		return MakeShared<FJsonObject>();
+	}
+
+	const UObject* GeneratedDefaultObject = WidgetBP->GeneratedClass->GetDefaultObject(false);
+	const UClass* ParentClass = WidgetBP->GeneratedClass->GetSuperClass();
+	const UObject* ParentDefaultObject = ParentClass ? ParentClass->GetDefaultObject(false) : nullptr;
+	return FPropertySerializer::SerializePropertyOverridesAgainstBaseline(GeneratedDefaultObject, ParentDefaultObject);
 }
 
 static TArray<TSharedPtr<FJsonValue>> ExtractWidgetAnimationSummaries(const UWidgetBlueprint* WidgetBP)
@@ -726,7 +790,8 @@ static TSharedPtr<FJsonObject> NormalizeSlotJson(const TSharedPtr<FJsonObject>& 
 }
 
 static TSharedPtr<FJsonObject> NormalizeWidgetPropertiesJson(const TSharedPtr<FJsonObject>& PropertiesJson,
-                                                             FString* OutRenameRequest)
+                                                             FString* OutRenameRequest,
+                                                             TOptional<bool>* OutVariableRequest = nullptr)
 {
 	const TSharedPtr<FJsonObject> NormalizedProperties = CloneJsonObject(PropertiesJson);
 	if (!NormalizedProperties.IsValid())
@@ -752,7 +817,57 @@ static TSharedPtr<FJsonObject> NormalizeWidgetPropertiesJson(const TSharedPtr<FJ
 		}
 	}
 
+	if (OutVariableRequest)
+	{
+		static const TCHAR* VariableFields[] = {
+			TEXT("is_variable"),
+			TEXT("isVariable"),
+			TEXT("bIsVariable"),
+		};
+
+		for (const TCHAR* VariableField : VariableFields)
+		{
+			bool bIsVariable = false;
+			if (NormalizedProperties->TryGetBoolField(VariableField, bIsVariable))
+			{
+				*OutVariableRequest = bIsVariable;
+				NormalizedProperties->RemoveField(VariableField);
+				break;
+			}
+		}
+	}
+
 	return NormalizedProperties;
+}
+
+static void ExtractWidgetVariableFlag(const TSharedPtr<FJsonObject>& JsonObject,
+                                      TOptional<bool>& OutVariableRequest,
+                                      const bool bRemoveConsumedFields = false)
+{
+	if (!JsonObject.IsValid())
+	{
+		return;
+	}
+
+	static const TCHAR* VariableFields[] = {
+		TEXT("is_variable"),
+		TEXT("isVariable"),
+		TEXT("bIsVariable"),
+	};
+
+	for (const TCHAR* VariableField : VariableFields)
+	{
+		bool bIsVariable = false;
+		if (JsonObject->TryGetBoolField(VariableField, bIsVariable))
+		{
+			OutVariableRequest = bIsVariable;
+			if (bRemoveConsumedFields)
+			{
+				JsonObject->RemoveField(VariableField);
+			}
+			return;
+		}
+	}
 }
 
 static void MergeJsonObjectFields(const TSharedPtr<FJsonObject>& Target,
@@ -790,6 +905,7 @@ static TSharedPtr<FJsonObject> EnsureObjectField(const TSharedPtr<FJsonObject>& 
 static bool ApplySnapshotWidgetPatch(const TSharedPtr<FJsonObject>& WidgetNode,
                                      const TSharedPtr<FJsonObject>& PropertiesJson,
                                      const TSharedPtr<FJsonObject>& SlotJson,
+                                     const TSharedPtr<FJsonObject>& WidgetOptionsJson,
                                      TArray<FString>& OutErrors)
 {
 	if (!WidgetNode.IsValid())
@@ -799,11 +915,18 @@ static bool ApplySnapshotWidgetPatch(const TSharedPtr<FJsonObject>& WidgetNode,
 	}
 
 	FString RenameRequest;
-	const TSharedPtr<FJsonObject> EffectiveProperties = NormalizeWidgetPropertiesJson(PropertiesJson, &RenameRequest);
+	TOptional<bool> PropertyVariableRequest;
+	const TSharedPtr<FJsonObject> EffectiveProperties = NormalizeWidgetPropertiesJson(PropertiesJson, &RenameRequest, &PropertyVariableRequest);
 	if (!RenameRequest.IsEmpty())
 	{
 		OutErrors.Add(TEXT("Batch widget patches do not support rename fields; use patch_widget directly instead."));
 		return false;
+	}
+
+	TOptional<bool> EffectiveVariableRequest = PropertyVariableRequest;
+	if (!EffectiveVariableRequest.IsSet())
+	{
+		ExtractWidgetVariableFlag(WidgetOptionsJson, EffectiveVariableRequest, false);
 	}
 
 	const TSharedPtr<FJsonObject> EffectiveSlot = NormalizeSlotJson(SlotJson);
@@ -817,6 +940,13 @@ static bool ApplySnapshotWidgetPatch(const TSharedPtr<FJsonObject>& WidgetNode,
 	{
 		const TSharedPtr<FJsonObject> TargetSlot = EnsureObjectField(WidgetNode, TEXT("slot"));
 		MergeJsonObjectFields(TargetSlot, EffectiveSlot);
+	}
+
+	if (EffectiveVariableRequest.IsSet())
+	{
+		WidgetNode->SetBoolField(TEXT("isVariable"), EffectiveVariableRequest.GetValue());
+		WidgetNode->RemoveField(TEXT("is_variable"));
+		WidgetNode->RemoveField(TEXT("bIsVariable"));
 	}
 
 	return true;
@@ -1161,6 +1291,22 @@ static UWidget* FindWidgetByIdentifier(UWidgetBlueprint* WidgetBP,
 	return CurrentWidget;
 }
 
+static FStructProperty* FindSlateFontInfoProperty(UObject* Object)
+{
+	if (!Object)
+	{
+		return nullptr;
+	}
+
+	FStructProperty* FontProperty = FindFProperty<FStructProperty>(Object->GetClass(), TEXT("Font"));
+	if (FontProperty && FontProperty->Struct == TBaseStructure<FSlateFontInfo>::Get())
+	{
+		return FontProperty;
+	}
+
+	return nullptr;
+}
+
 } // namespace WidgetTreeBuilderInternal
 
 // ---------------------------------------------------------------------------
@@ -1292,7 +1438,8 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 // 2. ExtractWidgetBlueprint
 // ---------------------------------------------------------------------------
 
-TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBlueprint* WidgetBP)
+TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBlueprint* WidgetBP,
+                                                                   const bool bIncludeClassDefaults)
 {
 	using namespace WidgetTreeBuilderInternal;
 
@@ -1327,6 +1474,10 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBluepr
 
 	Result->SetArrayField(TEXT("animations"), ExtractWidgetAnimationSummaries(WidgetBP));
 	Result->SetObjectField(TEXT("compile"), BuildWidgetCompileSnapshot(WidgetBP));
+	if (bIncludeClassDefaults)
+	{
+		Result->SetObjectField(TEXT("classDefaults"), ExtractWidgetClassDefaults(WidgetBP));
+	}
 
 	return Result;
 }
@@ -1446,6 +1597,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
                                                          const FString& WidgetName,
                                                          const TSharedPtr<FJsonObject>& PropertiesJson,
                                                          const TSharedPtr<FJsonObject>& SlotJson,
+                                                         const TSharedPtr<FJsonObject>& WidgetOptionsJson,
                                                          const bool bValidateOnly)
 {
 	using namespace WidgetTreeBuilderInternal;
@@ -1482,7 +1634,12 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 	}
 
 	FString RequestedRename;
-	const TSharedPtr<FJsonObject> EffectivePropertiesJson = NormalizeWidgetPropertiesJson(PropertiesJson, &RequestedRename);
+	TOptional<bool> RequestedVariableFlag;
+	const TSharedPtr<FJsonObject> EffectivePropertiesJson = NormalizeWidgetPropertiesJson(PropertiesJson, &RequestedRename, &RequestedVariableFlag);
+	if (!RequestedVariableFlag.IsSet())
+	{
+		ExtractWidgetVariableFlag(WidgetOptionsJson, RequestedVariableFlag, false);
+	}
 	const TSharedPtr<FJsonObject> EffectiveSlotJson = NormalizeSlotJson(SlotJson);
 
 	TArray<FString> ValidationErrors;
@@ -1543,6 +1700,11 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 		}
 	}
 
+	if (RequestedVariableFlag.IsSet())
+	{
+		Widget->bIsVariable = RequestedVariableFlag.GetValue();
+	}
+
 	if (!RequestedRename.IsEmpty())
 	{
 		RenameWidgetTemplate(WidgetBP, Widget, RequestedRename, OutErrors);
@@ -1565,6 +1727,9 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidget(UWidgetBlueprint* Widge
 		}
 	}
 
+	SyncWidgetVariableGuids(WidgetBP);
+	SyncGeneratedWidgetVariables(WidgetBP);
+	PruneStaleWidgetReferences(WidgetBP);
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
 	WidgetBP->MarkPackageDirty();
 	Context.TrackDirtyObject(WidgetBP);
@@ -1599,6 +1764,24 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidg
 	{
 		Context.AddError(TEXT("empty_operation"), TEXT("WidgetBlueprint structural operation is required"), WidgetBP->GetPathName());
 		return Context.BuildResult(false);
+	}
+
+	if (Operation == TEXT("patch_class_defaults"))
+	{
+		const TSharedPtr<FJsonObject> Result = FBlueprintAuthoring::Modify(
+			WidgetBP,
+			TEXT("patch_class_defaults"),
+			PayloadJson,
+			bValidateOnly);
+		if (!Result.IsValid())
+		{
+			Context.AddError(TEXT("patch_class_defaults_failed"), TEXT("WidgetBlueprint class-default patch failed"), WidgetBP->GetPathName());
+			return Context.BuildResult(false);
+		}
+
+		Result->SetStringField(TEXT("operation"), TEXT("modify_widget_blueprint"));
+		Result->SetStringField(TEXT("widgetOperation"), Operation);
+		return Result;
 	}
 
 	const TSharedPtr<FJsonObject> WidgetTreeJson = FWidgetTreeExtractor::Extract(WidgetBP);
@@ -1965,7 +2148,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidg
 			TSharedPtr<FJsonObject> SlotPatch = MakeShared<FJsonObject>();
 			TryGetObjectField(OperationJson, TEXT("properties"), PropertiesPatch);
 			TryGetObjectField(OperationJson, TEXT("slot"), SlotPatch);
-			return ApplySnapshotWidgetPatch(TargetLocation.Node, PropertiesPatch, SlotPatch, OutErrors);
+			return ApplySnapshotWidgetPatch(TargetLocation.Node, PropertiesPatch, SlotPatch, OperationJson, OutErrors);
 		}
 		if (RequestedOperation == TEXT("batch"))
 		{
@@ -2024,7 +2207,175 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidg
 }
 
 // ---------------------------------------------------------------------------
-// 6. CompileWidgetBlueprint
+// 6. ApplyWidgetFonts
+// ---------------------------------------------------------------------------
+
+TSharedPtr<FJsonObject> FWidgetTreeBuilder::ApplyWidgetFonts(UWidgetBlueprint* WidgetBP,
+                                                             const TSharedPtr<FJsonObject>& PayloadJson,
+                                                             const bool bValidateOnly)
+{
+	using namespace WidgetTreeBuilderInternal;
+
+	const FString AssetPath = WidgetBP ? WidgetBP->GetPathName() : FString();
+	FAssetMutationContext Context(TEXT("apply_widget_fonts"), AssetPath, TEXT("WidgetBlueprint"), bValidateOnly);
+	if (!ensureMsgf(WidgetBP, TEXT("WidgetTreeBuilder::ApplyWidgetFonts: null WidgetBP")))
+	{
+		Context.AddError(TEXT("null_widget_blueprint"), TEXT("WidgetBlueprint is null"));
+		return Context.BuildResult(false);
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* TargetValues = nullptr;
+	if (!PayloadJson.IsValid() || !PayloadJson->TryGetArrayField(TEXT("targets"), TargetValues) || !TargetValues)
+	{
+		Context.AddError(TEXT("missing_targets"), TEXT("apply_widget_fonts requires a targets array"), AssetPath);
+		return Context.BuildResult(false);
+	}
+
+	struct FResolvedFontTarget
+	{
+		int32 Index = INDEX_NONE;
+		FString Identifier;
+		FString WidgetPath;
+		FString FontAssetPath;
+		FString Typeface;
+		int32 Size = 0;
+		UWidget* Widget = nullptr;
+		UFont* FontAsset = nullptr;
+		FStructProperty* FontProperty = nullptr;
+	};
+
+	TArray<FResolvedFontTarget> ResolvedTargets;
+	TArray<FString> ValidationErrors;
+	TArray<FString> ValidationWarnings;
+	for (int32 Index = 0; Index < TargetValues->Num(); ++Index)
+	{
+		const TSharedPtr<FJsonObject> TargetObject = (*TargetValues)[Index].IsValid() ? (*TargetValues)[Index]->AsObject() : nullptr;
+		if (!TargetObject.IsValid())
+		{
+			ValidationErrors.Add(FString::Printf(TEXT("targets[%d] must be an object"), Index));
+			continue;
+		}
+
+		FResolvedFontTarget Target;
+		Target.Index = Index;
+		Target.Identifier = GetWidgetIdentifierFromPayload(
+			TargetObject,
+			{TEXT("widget_name"), TEXT("widgetName")},
+			{TEXT("widget_path"), TEXT("widgetPath")});
+		if (Target.Identifier.IsEmpty())
+		{
+			ValidationErrors.Add(FString::Printf(TEXT("targets[%d] requires widget_name or widget_path"), Index));
+			continue;
+		}
+
+		if (!TryGetStringFieldAnyCase(TargetObject, {TEXT("font_asset"), TEXT("fontAsset")}, Target.FontAssetPath))
+		{
+			ValidationErrors.Add(FString::Printf(TEXT("targets[%d] requires font_asset"), Index));
+			continue;
+		}
+
+		if (!TargetObject->TryGetNumberField(TEXT("size"), Target.Size) || Target.Size <= 0)
+		{
+			ValidationErrors.Add(FString::Printf(TEXT("targets[%d].size must be a positive integer"), Index));
+			continue;
+		}
+
+		TryGetStringFieldAnyCase(TargetObject, {TEXT("typeface"), TEXT("typeface_name"), TEXT("typefaceName")}, Target.Typeface);
+
+		Target.FontAsset = Cast<UFont>(ResolveAssetByPath(NormalizeFontAssetObjectPath(Target.FontAssetPath)));
+		if (!Target.FontAsset)
+		{
+			ValidationErrors.Add(FString::Printf(TEXT("targets[%d].font_asset does not resolve to a UFont: %s"), Index, *Target.FontAssetPath));
+			continue;
+		}
+
+		Target.Widget = FindWidgetByIdentifier(WidgetBP, Target.Identifier, &Target.WidgetPath);
+		if (!Target.Widget)
+		{
+			ValidationWarnings.Add(FString::Printf(TEXT("Widget not found for font target '%s'"), *Target.Identifier));
+			continue;
+		}
+
+		Target.FontProperty = FindSlateFontInfoProperty(Target.Widget);
+		if (!Target.FontProperty)
+		{
+			ValidationWarnings.Add(FString::Printf(TEXT("Widget '%s' does not expose a Font property and was skipped"), *Target.WidgetPath));
+			continue;
+		}
+
+		ResolvedTargets.Add(Target);
+	}
+
+	const bool bValidationSuccess = ValidationErrors.Num() == 0;
+	Context.SetValidationSummary(
+		bValidationSuccess,
+		bValidationSuccess ? TEXT("Widget font payload validated.") : TEXT("Widget font payload failed validation."),
+		ValidationErrors);
+	for (const FString& Warning : ValidationWarnings)
+	{
+		Context.AddWarning(TEXT("font_target_warning"), Warning, AssetPath);
+	}
+	if (!bValidationSuccess)
+	{
+		return BuildMutationResult(Context, false, ValidationErrors);
+	}
+
+	if (bValidateOnly)
+	{
+		const TSharedPtr<FJsonObject> Result = Context.BuildResult(true);
+		Result->SetStringField(TEXT("status"), ValidationWarnings.Num() > 0 ? TEXT("validated_with_warnings") : TEXT("validated"));
+		Result->SetNumberField(TEXT("targetCount"), TargetValues->Num());
+		Result->SetNumberField(TEXT("applicableTargetCount"), ResolvedTargets.Num());
+		Result->SetNumberField(TEXT("warningCount"), ValidationWarnings.Num());
+		return Result;
+	}
+
+	FWidgetBlueprintPreviewGuard PreviewGuard(WidgetBP);
+	Context.BeginTransaction(FText::FromString(TEXT("Apply Widget Fonts")));
+	WidgetBP->Modify();
+
+	TArray<TSharedPtr<FJsonValue>> TargetResults;
+	for (const FResolvedFontTarget& Target : ResolvedTargets)
+	{
+		check(Target.Widget && Target.FontProperty && Target.FontAsset);
+		Target.Widget->Modify();
+
+		FSlateFontInfo* FontInfo = Target.FontProperty->ContainerPtrToValuePtr<FSlateFontInfo>(Target.Widget);
+		if (!ensure(FontInfo))
+		{
+			continue;
+		}
+
+		FontInfo->FontObject = Target.FontAsset;
+		FontInfo->TypefaceFontName = Target.Typeface.IsEmpty() ? FName(TEXT("Default")) : FName(*Target.Typeface);
+		FontInfo->Size = Target.Size;
+
+		const TSharedPtr<FJsonObject> TargetResult = MakeShared<FJsonObject>();
+		TargetResult->SetNumberField(TEXT("index"), Target.Index);
+		TargetResult->SetStringField(TEXT("widgetPath"), Target.WidgetPath);
+		TargetResult->SetStringField(TEXT("widgetName"), Target.Widget->GetName());
+		TargetResult->SetStringField(TEXT("fontAssetPath"), Target.FontAsset->GetPathName());
+		TargetResult->SetStringField(TEXT("typeface"), FontInfo->TypefaceFontName.ToString());
+		TargetResult->SetNumberField(TEXT("size"), FontInfo->Size);
+		TargetResult->SetStringField(TEXT("status"), TEXT("applied"));
+		TargetResults.Add(MakeShared<FJsonValueObject>(TargetResult));
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
+	WidgetBP->MarkPackageDirty();
+	Context.TrackDirtyObject(WidgetBP);
+
+	const TSharedPtr<FJsonObject> Result = Context.BuildResult(true);
+	Result->SetStringField(TEXT("status"), ValidationWarnings.Num() > 0 ? TEXT("partial_success") : TEXT("succeeded"));
+	Result->SetNumberField(TEXT("targetCount"), TargetValues->Num());
+	Result->SetNumberField(TEXT("appliedCount"), ResolvedTargets.Num());
+	Result->SetNumberField(TEXT("warningCount"), ValidationWarnings.Num());
+	Result->SetArrayField(TEXT("targets"), TargetResults);
+	return Result;
+}
+
+// ---------------------------------------------------------------------------
+// 7. CompileWidgetBlueprint
 // ---------------------------------------------------------------------------
 
 TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBlueprint* WidgetBP)
@@ -2212,7 +2563,8 @@ UWidget* FWidgetTreeBuilder::CreateWidgetFromJson(UWidgetTree* WidgetTree,
 	{
 		bool bIsVariable = false;
 		if (WidgetJson->TryGetBoolField(TEXT("is_variable"), bIsVariable)
-			|| WidgetJson->TryGetBoolField(TEXT("isVariable"), bIsVariable))
+			|| WidgetJson->TryGetBoolField(TEXT("isVariable"), bIsVariable)
+			|| WidgetJson->TryGetBoolField(TEXT("bIsVariable"), bIsVariable))
 		{
 			Widget->bIsVariable = bIsVariable;
 		}

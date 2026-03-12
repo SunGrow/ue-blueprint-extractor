@@ -7,9 +7,10 @@ This package exposes the `blueprint-extractor` server over stdio and talks to a 
 Current surface area includes:
 
 - read-only extraction tools for Blueprints, AI assets, data assets, curves, materials, and animation metadata
-- explicit-save authoring tools for the supported editor-side asset families, including compact widget extraction, incremental widget-structure ops, and classic material graph authoring for materials and MaterialFunction-family assets
+- explicit-save authoring tools for the supported editor-side asset families, including compact widget extraction, incremental widget-structure ops, widget class-default routing, and classic material graph authoring for materials and MaterialFunction-family assets
 - async import and reimport tools with polling for generic assets plus typed texture and mesh helpers
-- static guidance resources and resource templates for authoring conventions, selector rules, example payloads, widget patterns, and classic material graph guidance
+- host-side project automation tools for external builds, Live Coding requests, restart/reconnect orchestration, and a thin window-polish helper
+- static guidance resources and resource templates for authoring conventions, selector rules, font roles, project automation, example payloads, widget patterns, and classic material graph guidance
 
 ## Requirements
 
@@ -26,6 +27,14 @@ npx blueprint-extractor-mcp
 The server reads `UE_REMOTE_CONTROL_PORT` and defaults to `30010`.
 
 You can also set `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH` to force a specific subsystem object path instead of using the built-in probe list.
+
+For host-side code automation, these optional env vars are supported:
+
+- `UE_ENGINE_ROOT`
+- `UE_PROJECT_PATH`
+- `UE_PROJECT_TARGET` or `UE_EDITOR_TARGET`
+- `UE_BUILD_PLATFORM`
+- `UE_BUILD_CONFIGURATION`
 
 ## Install In MCP Clients
 
@@ -59,7 +68,7 @@ BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live
 
 The live suite imports a texture over a local HTTP fixture server, verifies request-header forwarding, imports a local mesh fixture, polls both jobs to completion, and also smoke-tests scratch material, material function, and material instance authoring before saving the returned asset paths.
 
-The default unit/stdio suites also cover resource-template registration plus the compact widget and material graph surfaces (`extract_widget_blueprint`, `modify_widget_blueprint`, `extract_material`, and `modify_material`).
+The default unit/stdio suites also cover resource-template registration, the narrowed widget surfaces (`extract_widget_blueprint`, `modify_widget`, `modify_widget_blueprint`), the host-side project-control tools (`compile_project_code`, `trigger_live_coding`, `restart_editor`, `sync_project_code`, `apply_window_ui_changes`), and the compact material graph surfaces (`extract_material`, `modify_material`).
 
 Repository and full documentation:
 
