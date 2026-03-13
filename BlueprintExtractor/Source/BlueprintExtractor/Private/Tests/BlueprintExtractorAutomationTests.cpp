@@ -5,13 +5,23 @@
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphNode.h"
+#include "EdGraph/EdGraphPin.h"
+#include "EdGraphSchema_K2.h"
+#include "EdGraphSchema_K2_Actions.h"
 #include "EditorFramework/AssetImportData.h"
+#include "Engine/Blueprint.h"
+#include "Engine/Font.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture.h"
-#include "Engine/Font.h"
 #include "Editor.h"
-#include "WidgetBlueprint.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_ExecutionSequence.h"
+#include "K2Node_FunctionEntry.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
@@ -26,6 +36,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "WidgetBlueprint.h"
 
 namespace BlueprintExtractorAutomation
 {
@@ -193,6 +204,52 @@ static bool ExpectValidateOnlyResult(FAutomationTestBase& Test,
 	return true;
 }
 
+static TSharedPtr<FJsonObject> ExpectFailureResult(FAutomationTestBase& Test,
+                                                   const FString& RawJson,
+                                                   const FString& Context)
+{
+	const TSharedPtr<FJsonObject> Parsed = ParseJsonObject(Test, RawJson, Context);
+	if (!Parsed.IsValid())
+	{
+		return nullptr;
+	}
+
+	FString Error;
+	const bool bHasErrorString = Parsed->TryGetStringField(TEXT("error"), Error) && !Error.IsEmpty();
+
+	const TArray<TSharedPtr<FJsonValue>>* ErrorsArray = nullptr;
+	const bool bHasErrorsArray = Parsed->TryGetArrayField(TEXT("errors"), ErrorsArray) && ErrorsArray != nullptr && ErrorsArray->Num() > 0;
+
+	const TArray<TSharedPtr<FJsonValue>>* DiagnosticsArray = nullptr;
+	const bool bHasDiagnosticsArray = Parsed->TryGetArrayField(TEXT("diagnostics"), DiagnosticsArray) && DiagnosticsArray != nullptr && DiagnosticsArray->Num() > 0;
+
+	bool bValidationFailed = false;
+	const TSharedPtr<FJsonObject>* ValidationObject = nullptr;
+	if (Parsed->TryGetObjectField(TEXT("validation"), ValidationObject) && ValidationObject != nullptr && ValidationObject->IsValid())
+	{
+		bool bValidationSuccess = true;
+		if ((*ValidationObject)->TryGetBoolField(TEXT("success"), bValidationSuccess))
+		{
+			bValidationFailed = !bValidationSuccess;
+		}
+	}
+
+	const bool bHasStructuredFailure = bHasErrorString || bHasErrorsArray || bHasDiagnosticsArray || bValidationFailed;
+	if (bHasStructuredFailure)
+	{
+		Test.AddInfo(FString::Printf(TEXT("%s returned error payload: %s"), *Context, *RawJson));
+	}
+	Test.TestTrue(*FString::Printf(TEXT("%s returns a structured failure payload"), *Context), bHasStructuredFailure);
+
+	bool bSuccess = true;
+	if (Parsed->HasTypedField<EJson::Boolean>(TEXT("success")))
+	{
+		bSuccess = Parsed->GetBoolField(TEXT("success"));
+	}
+	Test.TestFalse(*FString::Printf(TEXT("%s fails as expected"), *Context), bSuccess);
+	return Parsed;
+}
+
 static TSharedPtr<FJsonObject> WaitForImportJob(FAutomationTestBase& Test,
                                                 UBlueprintExtractorSubsystem* Subsystem,
                                                 const FString& InitialJson,
@@ -285,6 +342,19 @@ static bool TryGetObjectFieldCopy(const TSharedPtr<FJsonObject>& Parsed,
 	return false;
 }
 
+static FString SerializeJsonObjectForSearch(const TSharedPtr<FJsonObject>& Parsed)
+{
+	if (!Parsed.IsValid())
+	{
+		return FString();
+	}
+
+	FString Output;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Output);
+	FJsonSerializer::Serialize(Parsed.ToSharedRef(), Writer);
+	return Output;
+}
+
 static TSharedPtr<FJsonObject> FindArrayObjectByStringField(const TSharedPtr<FJsonObject>& Parsed,
                                                             const TCHAR* ArrayField,
                                                             const TCHAR* ValueField,
@@ -342,6 +412,116 @@ static TSharedPtr<FJsonObject> FindWidgetNodeByPath(const TSharedPtr<FJsonObject
 	}
 
 	return nullptr;
+}
+
+static UEdGraph* FindFunctionGraphByName(UBlueprint* Blueprint, const FName GraphName)
+{
+	if (!Blueprint)
+	{
+		return nullptr;
+	}
+
+	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+	{
+		if (Graph && Graph->GetFName() == GraphName)
+		{
+			return Graph;
+		}
+	}
+
+	return nullptr;
+}
+
+static UK2Node_FunctionEntry* FindFunctionEntryNodeInGraph(UEdGraph* Graph)
+{
+	if (!Graph)
+	{
+		return nullptr;
+	}
+
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (UK2Node_FunctionEntry* EntryNode = Cast<UK2Node_FunctionEntry>(Node))
+		{
+			return EntryNode;
+		}
+	}
+
+	return nullptr;
+}
+
+static UEdGraphPin* FindNodePinByName(UEdGraphNode* Node, const FString& PinName)
+{
+	if (!Node)
+	{
+		return nullptr;
+	}
+
+	for (UEdGraphPin* Pin : Node->Pins)
+	{
+		if (Pin && Pin->PinName == FName(*PinName))
+		{
+			return Pin;
+		}
+	}
+
+	return nullptr;
+}
+
+static bool SeedSequenceInitializerGraph(FAutomationTestBase& Test,
+                                         UBlueprint* Blueprint,
+                                         const FString& GraphName)
+{
+	if (!Blueprint)
+	{
+		Test.AddError(TEXT("Cannot seed a sequence graph on a null Blueprint."));
+		return false;
+	}
+
+	UEdGraph* TargetGraph = FindFunctionGraphByName(Blueprint, FName(*GraphName));
+	Test.TestNotNull(TEXT("Target function graph exists for sequence seeding"), TargetGraph);
+	if (!TargetGraph)
+	{
+		return false;
+	}
+
+	UK2Node_FunctionEntry* EntryNode = FindFunctionEntryNodeInGraph(TargetGraph);
+	Test.TestNotNull(TEXT("Target function graph exposes a function entry node"), EntryNode);
+	if (!EntryNode)
+	{
+		return false;
+	}
+
+	UK2Node_ExecutionSequence* SequenceNode = FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_ExecutionSequence>(
+		TargetGraph,
+		FVector2D(320.0f, 0.0f),
+		EK2NewNodeFlags::None,
+		[](UK2Node_ExecutionSequence*) {});
+	Test.TestNotNull(TEXT("Sequence node is spawned for initializer coverage"), SequenceNode);
+	if (!SequenceNode)
+	{
+		return false;
+	}
+
+	UEdGraphPin* EntryThenPin = FindNodePinByName(EntryNode, TEXT("then"));
+	UEdGraphPin* SequenceExecutePin = FindNodePinByName(SequenceNode, TEXT("execute"));
+	Test.TestNotNull(TEXT("Initializer entry exposes then pin"), EntryThenPin);
+	Test.TestNotNull(TEXT("Sequence node exposes execute pin"), SequenceExecutePin);
+	if (!EntryThenPin || !SequenceExecutePin)
+	{
+		return false;
+	}
+
+	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+	const bool bConnected = Schema && Schema->TryCreateConnection(EntryThenPin, SequenceExecutePin);
+	Test.TestTrue(TEXT("Initializer entry is wired into the sequence node"), bConnected);
+	if (!bConnected)
+	{
+		return false;
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
 }
 
 static UBlueprintExtractorSubsystem* GetSubsystem(FAutomationTestBase& Test)
@@ -564,23 +744,32 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 
 	Test.TestFalse(TEXT("Blueprint .uasset file is not written before SaveAssets"), FPaths::FileExists(MakePackageFilename(BlueprintAssetPath)));
 
-	ExpectSuccessfulResult(
+	const TSharedPtr<FJsonObject> CreateWidgetResult = ExpectSuccessfulResult(
 		Test,
 		Subsystem->CreateWidgetBlueprint(
 			WidgetAssetPath,
 			TEXT("UserWidget")),
 		TEXT("CreateWidgetBlueprint"));
+	FString WidgetPackagePath = WidgetAssetPath;
+	FString CreatedWidgetObjectPath = WidgetObjectPath;
+	if (CreateWidgetResult.IsValid())
+	{
+		Test.TestTrue(TEXT("CreateWidgetBlueprint returns packagePath"), CreateWidgetResult->TryGetStringField(TEXT("packagePath"), WidgetPackagePath));
+		Test.TestTrue(TEXT("CreateWidgetBlueprint returns objectPath"), CreateWidgetResult->TryGetStringField(TEXT("objectPath"), CreatedWidgetObjectPath));
+		Test.TestEqual(TEXT("CreateWidgetBlueprint packagePath matches the requested asset path"), WidgetPackagePath, WidgetAssetPath);
+		Test.TestEqual(TEXT("CreateWidgetBlueprint objectPath matches the generated object path"), CreatedWidgetObjectPath, WidgetObjectPath);
+	}
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->BuildWidgetTree(
-			WidgetObjectPath,
+			WidgetPackagePath,
 			TEXT(R"json({"class":"CanvasPanel","name":"RootCanvas","is_variable":true,"children":[{"class":"TextBlock","name":"TitleText","is_variable":true}]})json"),
 			false),
 		TEXT("BuildWidgetTree"));
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->ModifyWidget(
-			WidgetObjectPath,
+			WidgetPackagePath,
 			TEXT("TitleText"),
 			TEXT(R"json({"RenderOpacity":0.5})json"),
 			TEXT("{}"),
@@ -589,7 +778,7 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 		TEXT("ModifyWidget"));
 	ExpectSuccessfulResult(
 		Test,
-		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		Subsystem->CompileWidgetBlueprint(WidgetPackagePath),
 		TEXT("CompileWidgetBlueprint"));
 
 	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
@@ -610,7 +799,7 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->BuildWidgetTree(
-			WidgetObjectPath,
+			WidgetPackagePath,
 			TEXT(R"json({"class":"CanvasPanel","name":"RootCanvas","is_variable":true,"children":[{"class":"TextBlock","name":"BodyText","is_variable":true}]})json"),
 			false),
 		TEXT("BuildWidgetTree rebuild"));
@@ -626,7 +815,7 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 
 	ExpectSuccessfulResult(
 		Test,
-		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		Subsystem->CompileWidgetBlueprint(WidgetPackagePath),
 		TEXT("CompileWidgetBlueprint after rebuild"));
 
 	ExpectSuccessfulResult(
@@ -810,7 +999,7 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 
 	const TArray<FString> AssetsToSave = {
 		BlueprintObjectPath,
-		WidgetObjectPath,
+		WidgetPackagePath,
 		DataAssetObjectPath,
 		StructObjectPath,
 		EnumObjectPath,
@@ -1543,6 +1732,51 @@ static bool RunWidgetSlotAliasCoverage(FAutomationTestBase& Test)
 
 	ExpectSuccessfulResult(
 		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"CanvasPanel","name":"CanvasRoot","children":[{"class":"Border","name":"AnchoredPanel","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree for canvas slot alias"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidget(
+			WidgetObjectPath,
+			TEXT("AnchoredPanel"),
+			TEXT("{}"),
+			TEXT(R"json({"Anchors":{"Minimum":{"X":0.25,"Y":0.0},"Maximum":{"X":0.75,"Y":1.0}},"Offsets":{"Left":8.0,"Top":12.0,"Right":-16.0,"Bottom":-20.0},"Alignment":{"X":0.5,"Y":0.0},"AutoSize":true,"ZOrder":7})json"),
+			TEXT("{}"),
+			false),
+		TEXT("ModifyWidget canvas slot aliases"));
+
+	WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Canvas slot alias widget blueprint exists"), WidgetBP);
+	if (!WidgetBP)
+	{
+		return false;
+	}
+
+	UWidget* AnchoredPanel = WidgetBP->WidgetTree->FindWidget(TEXT("AnchoredPanel"));
+	Test.TestNotNull(TEXT("AnchoredPanel exists"), AnchoredPanel);
+
+	UCanvasPanelSlot* CanvasSlot = AnchoredPanel ? Cast<UCanvasPanelSlot>(AnchoredPanel->Slot) : nullptr;
+	Test.TestNotNull(TEXT("AnchoredPanel uses a CanvasPanel slot"), CanvasSlot);
+	if (CanvasSlot)
+	{
+		Test.TestEqual(TEXT("Canvas anchor minimum X alias is applied"), CanvasSlot->GetAnchors().Minimum.X, 0.25);
+		Test.TestEqual(TEXT("Canvas anchor maximum X alias is applied"), CanvasSlot->GetAnchors().Maximum.X, 0.75);
+		Test.TestEqual(TEXT("Canvas offsets left alias is applied"), CanvasSlot->GetOffsets().Left, 8.0f);
+		Test.TestEqual(TEXT("Canvas offsets top alias is applied"), CanvasSlot->GetOffsets().Top, 12.0f);
+		Test.TestEqual(TEXT("Canvas offsets right alias is applied"), CanvasSlot->GetOffsets().Right, -16.0f);
+		Test.TestEqual(TEXT("Canvas offsets bottom alias is applied"), CanvasSlot->GetOffsets().Bottom, -20.0f);
+		Test.TestEqual(TEXT("Canvas alignment X alias is applied"), CanvasSlot->GetAlignment().X, 0.5);
+		Test.TestEqual(TEXT("Canvas alignment Y alias is applied"), CanvasSlot->GetAlignment().Y, 0.0);
+		Test.TestTrue(TEXT("Canvas autosize alias is applied"), CanvasSlot->GetAutoSize());
+		Test.TestEqual(TEXT("Canvas ZOrder alias is applied"), CanvasSlot->GetZOrder(), 7);
+	}
+
+	ExpectSuccessfulResult(
+		Test,
 		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
 		TEXT("CompileWidgetBlueprint after slot alias"));
 
@@ -1564,7 +1798,7 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CreateWidgetBlueprint(
 			WidgetAssetPath,
-			FixtureStyledWidgetParentClassPath),
+			TEXT("BlueprintExtractorFixtureStyledWidgetParent")),
 		TEXT("CreateWidgetBlueprint for widget defaults"));
 
 	ExpectSuccessfulResult(
@@ -1672,6 +1906,9 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 
 	TSharedPtr<FJsonObject> ClassDefaultsJson;
 	Test.TestTrue(TEXT("ExtractWidgetBlueprint surfaces classDefaults"), TryGetObjectFieldCopy(ExtractResult, TEXT("classDefaults"), ClassDefaultsJson) && ClassDefaultsJson.IsValid());
+	FString ExtractedParentClassPath;
+	Test.TestTrue(TEXT("ExtractWidgetBlueprint surfaces the resolved parentClassPath"), ExtractResult->TryGetStringField(TEXT("parentClassPath"), ExtractedParentClassPath));
+	Test.TestEqual(TEXT("Short-name widget parent resolution preserves the project class path"), ExtractedParentClassPath, FString(FixtureStyledWidgetParentClassPath));
 	if (ClassDefaultsJson.IsValid())
 	{
 		FString ActiveDefaultPath;
@@ -1825,6 +2062,9 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 
 	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureOps"));
 	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+	const FString AssetChildWidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureAssetChild"));
+	const FString GeneratedChildWidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureGeneratedChild"));
+	const FString GeneratedChildWidgetObjectPath = MakeObjectPath(GeneratedChildWidgetAssetPath);
 
 	ExpectSuccessfulResult(
 		Test,
@@ -1832,6 +2072,18 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 			WidgetAssetPath,
 			TEXT("UserWidget")),
 		TEXT("CreateWidgetBlueprint for structure ops"));
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			AssetChildWidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for asset child widget"));
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			GeneratedChildWidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for generated class child widget"));
 
 	ExpectSuccessfulResult(
 		Test,
@@ -1846,7 +2098,10 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 		Subsystem->ModifyWidgetBlueprintStructure(
 			WidgetObjectPath,
 			TEXT("batch"),
-			TEXT(R"json({"operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/HeaderRow","child_widget":{"class":"Button","name":"HelpButton","is_variable":true}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}},{"operation":"move_widget","widget_path":"WindowRoot/HeaderRow/ActionHost","new_parent_widget_path":"WindowRoot/ContentRoot","index":0},{"operation":"patch_widget","widget_path":"WindowRoot/HeaderRow/TitleText","properties":{"Text":"Window Title"}}]})json"),
+			FString::Printf(
+				TEXT(R"json({"operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/HeaderRow","child_widget":{"class":"Button","name":"HelpButton","is_variable":true}},{"operation":"insert_child","parent_widget_path":"WindowRoot/ContentRoot","child_widget":{"class":"%s","name":"AssetPanel","is_variable":true}},{"operation":"insert_child","parent_widget_path":"WindowRoot/ContentRoot","child_widget":{"class":"%s_C","name":"GeneratedPanel","is_variable":true}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}},{"operation":"move_widget","widget_path":"WindowRoot/HeaderRow/ActionHost","new_parent_widget_path":"WindowRoot/ContentRoot","index":0},{"operation":"patch_widget","widget_path":"WindowRoot/HeaderRow/TitleText","properties":{"Text":"Window Title"}}]})json"),
+				*AssetChildWidgetAssetPath,
+				*GeneratedChildWidgetObjectPath),
 			true),
 		TEXT("ModifyWidgetBlueprintStructure validate_only batch"));
 
@@ -1855,7 +2110,10 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 		Subsystem->ModifyWidgetBlueprintStructure(
 			WidgetObjectPath,
 			TEXT("batch"),
-			TEXT(R"json({"operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/HeaderRow","child_widget":{"class":"Button","name":"HelpButton","is_variable":true}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}},{"operation":"move_widget","widget_path":"WindowRoot/HeaderRow/ActionHost","new_parent_widget_path":"WindowRoot/ContentRoot","index":0},{"operation":"patch_widget","widget_path":"WindowRoot/HeaderRow/TitleText","properties":{"Text":"Window Title"}}]})json"),
+			FString::Printf(
+				TEXT(R"json({"operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/HeaderRow","child_widget":{"class":"Button","name":"HelpButton","is_variable":true}},{"operation":"insert_child","parent_widget_path":"WindowRoot/ContentRoot","child_widget":{"class":"%s","name":"AssetPanel","is_variable":true}},{"operation":"insert_child","parent_widget_path":"WindowRoot/ContentRoot","child_widget":{"class":"%s_C","name":"GeneratedPanel","is_variable":true}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}},{"operation":"move_widget","widget_path":"WindowRoot/HeaderRow/ActionHost","new_parent_widget_path":"WindowRoot/ContentRoot","index":0},{"operation":"patch_widget","widget_path":"WindowRoot/HeaderRow/TitleText","properties":{"Text":"Window Title"}}]})json"),
+				*AssetChildWidgetAssetPath,
+				*GeneratedChildWidgetObjectPath),
 			false),
 		TEXT("ModifyWidgetBlueprintStructure batch"));
 
@@ -1913,6 +2171,10 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 
 	const TSharedPtr<FJsonObject> BodyTextNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot/BodyFrame/BodyText"));
 	Test.TestNotNull(TEXT("wrap_widget preserves the child inside the wrapper"), BodyTextNode.Get());
+	const TSharedPtr<FJsonObject> AssetPanelNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot/AssetPanel"));
+	Test.TestNotNull(TEXT("Custom widget insert accepts Blueprint asset package paths"), AssetPanelNode.Get());
+	const TSharedPtr<FJsonObject> GeneratedPanelNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot/GeneratedPanel"));
+	Test.TestNotNull(TEXT("Custom widget insert accepts generated Blueprint class paths"), GeneratedPanelNode.Get());
 
 	const TSharedPtr<FJsonObject> RemovedHelpButton = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/HeaderRow/HelpButton"));
 	Test.TestNull(TEXT("remove_widget removes the HelpButton"), RemovedHelpButton.Get());
@@ -1921,6 +2183,285 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
 		TEXT("CompileWidgetBlueprint after structure ops"));
+
+	return true;
+}
+
+static bool RunBlueprintGraphAuthoringCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString BlueprintAssetPath = MakeUniqueAssetPath(TEXT("BP_GraphAuthoring"));
+	const FString BlueprintObjectPath = MakeObjectPath(BlueprintAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateBlueprint(
+			BlueprintAssetPath,
+			TEXT("/Script/Engine.Actor"),
+			TEXT("{}"),
+			false),
+		TEXT("CreateBlueprint for graph authoring"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintGraphs(
+			BlueprintObjectPath,
+			TEXT("upsert_function_graphs"),
+			TEXT(R"json({"functionGraphs":[{"graphName":"Alpha","category":"Smoke"}]})json"),
+			false),
+		TEXT("ModifyBlueprintGraphs upsert Alpha"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintGraphs(
+			BlueprintObjectPath,
+			TEXT("upsert_function_graphs"),
+			TEXT(R"json({"functionGraphs":[{"graphName":"Beta","category":"Smoke"}]})json"),
+			false),
+		TEXT("ModifyBlueprintGraphs upsert Beta"));
+
+	const TSharedPtr<FJsonObject> CompileGraphResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintGraphs(
+			BlueprintObjectPath,
+			TEXT("compile"),
+			TEXT("{}"),
+			false),
+		TEXT("ModifyBlueprintGraphs compile"));
+	if (!CompileGraphResult.IsValid())
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* FunctionGraphs = nullptr;
+	Test.TestTrue(TEXT("ModifyBlueprintGraphs compile returns function graph names"), CompileGraphResult->TryGetArrayField(TEXT("functionGraphs"), FunctionGraphs) && FunctionGraphs != nullptr);
+	if (!FunctionGraphs)
+	{
+		return false;
+	}
+
+	bool bHasAlpha = false;
+	bool bHasBeta = false;
+	for (const TSharedPtr<FJsonValue>& GraphValue : *FunctionGraphs)
+	{
+		const FString GraphName = GraphValue.IsValid() ? GraphValue->AsString() : FString();
+		if (GraphName.IsEmpty())
+		{
+			continue;
+		}
+
+		if (GraphName == TEXT("Alpha"))
+		{
+			bHasAlpha = true;
+		}
+		else if (GraphName == TEXT("Beta"))
+		{
+			bHasBeta = true;
+		}
+	}
+	Test.TestTrue(TEXT("upsert_function_graphs adds the first named graph"), bHasAlpha);
+	Test.TestTrue(TEXT("upsert_function_graphs preserves unrelated graphs"), bHasBeta);
+
+	return true;
+}
+
+static bool RunWidgetStructureFailureRecoveryCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureFailure"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for structure failure"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"VerticalBox","name":"ContentRoot","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree for structure failure"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ WidgetAssetPath })),
+		TEXT("SaveAssets baseline structure failure widget"));
+
+	const TSharedPtr<FJsonObject> FailureResult = ExpectFailureResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("insert_child"),
+			TEXT(R"json({"parent_widget_path":"WindowRoot/MissingParent","child_widget":{"class":"TextBlock","name":"ShouldNotExist","properties":{"Text":"Unexpected"}}})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure invalid insert_child"));
+	if (!FailureResult.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(
+		TEXT("Invalid widget structure mutation reports the expected operation"),
+		FailureResult->GetStringField(TEXT("operation")),
+		FString(TEXT("modify_widget_blueprint")));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath),
+		TEXT("ExtractWidgetBlueprint after invalid structure mutation"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	Test.TestTrue(TEXT("ExtractWidgetBlueprint returns a rootWidget after invalid structure mutation"), TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid());
+	if (!RootWidgetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> ContentRootNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot"));
+	Test.TestNotNull(TEXT("Saved widget root remains extractable after invalid structure mutation"), ContentRootNode.Get());
+	const TSharedPtr<FJsonObject> MissingChildNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/MissingParent/ShouldNotExist"));
+	Test.TestNull(TEXT("Invalid widget child is not persisted after structure failure"), MissingChildNode.Get());
+
+	return true;
+}
+
+static bool RunBlueprintGraphAppendAndRollbackCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString BlueprintAssetPath = MakeUniqueAssetPath(TEXT("BP_GraphAppend"));
+	const FString BlueprintObjectPath = MakeObjectPath(BlueprintAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateBlueprint(
+			BlueprintAssetPath,
+			TEXT("/Script/Engine.Actor"),
+			TEXT("{}"),
+			false),
+		TEXT("CreateBlueprint for append coverage"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintMembers(
+			BlueprintObjectPath,
+			TEXT("replace_function_stubs"),
+			TEXT(R"json({"functionStubs":[{"graphName":"BpInitialize","category":"Settings"},{"graphName":"ApplyForcedRallyServeMode","category":"Settings"}]})json"),
+			false),
+		TEXT("ModifyBlueprintMembers replace_function_stubs for append coverage"));
+
+	UBlueprint* Blueprint = Cast<UBlueprint>(ResolveAssetByPath(BlueprintObjectPath));
+	Test.TestNotNull(TEXT("Append coverage blueprint exists"), Blueprint);
+	if (!Blueprint)
+	{
+		return false;
+	}
+
+	if (!SeedSequenceInitializerGraph(Test, Blueprint, TEXT("BpInitialize")))
+	{
+		return false;
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintMembers(
+			BlueprintObjectPath,
+			TEXT("compile"),
+			TEXT("{}"),
+			false),
+		TEXT("ModifyBlueprintMembers compile seeded initializer graph"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ BlueprintAssetPath })),
+		TEXT("SaveAssets baseline append coverage blueprint"));
+
+	const TSharedPtr<FJsonObject> AppendResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintGraphs(
+			BlueprintObjectPath,
+			TEXT("append_function_call_to_sequence"),
+			TEXT(R"json({"graphName":"BpInitialize","functionName":"ApplyForcedRallyServeMode","sequenceNodeTitle":"Sequence","posX":640.0,"posY":0.0})json"),
+			false),
+		TEXT("ModifyBlueprintGraphs append_function_call_to_sequence"));
+	if (!AppendResult.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestTrue(TEXT("Append coverage returns the initializer graph name"), JsonArrayContainsString(AppendResult, TEXT("functionGraphs"), TEXT("BpInitialize")));
+	Test.TestTrue(TEXT("Append coverage preserves the target function graph name"), JsonArrayContainsString(AppendResult, TEXT("functionGraphs"), TEXT("ApplyForcedRallyServeMode")));
+
+	const TSharedPtr<FJsonObject> ExtractAfterAppend = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractBlueprint(
+			BlueprintObjectPath,
+			TEXT("Full"),
+			TEXT("BpInitialize")),
+		TEXT("ExtractBlueprint after append_function_call_to_sequence"));
+	if (!ExtractAfterAppend.IsValid())
+	{
+		return false;
+	}
+
+	const FString SerializedAppendExtract = SerializeJsonObjectForSearch(ExtractAfterAppend);
+	Test.TestTrue(TEXT("Extracted initializer graph includes the appended function call name"), SerializedAppendExtract.Contains(TEXT("ApplyForcedRallyServeMode")));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ BlueprintAssetPath })),
+		TEXT("SaveAssets appended graph coverage blueprint"));
+
+	const TSharedPtr<FJsonObject> FailureResult = ExpectFailureResult(
+		Test,
+		Subsystem->ModifyBlueprintGraphs(
+			BlueprintObjectPath,
+			TEXT("append_function_call_to_sequence"),
+			TEXT(R"json({"graphName":"MissingInitializerGraph","functionName":"ApplyForcedRallyServeMode"})json"),
+			false),
+		TEXT("ModifyBlueprintGraphs invalid append_function_call_to_sequence"));
+	if (!FailureResult.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> ExtractAfterFailure = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractBlueprint(
+			BlueprintObjectPath,
+			TEXT("FunctionsShallow"),
+			TEXT("BpInitialize,ApplyForcedRallyServeMode")),
+		TEXT("ExtractBlueprint after invalid append mutation"));
+	if (!ExtractAfterFailure.IsValid())
+	{
+		return false;
+	}
+
+	const FString SerializedFailureExtract = SerializeJsonObjectForSearch(ExtractAfterFailure);
+	Test.TestTrue(TEXT("Blueprint remains extractable after invalid graph mutation"), SerializedFailureExtract.Contains(TEXT("BpInitialize")));
+	Test.TestTrue(TEXT("Invalid graph mutation preserves the callable target graph"), SerializedFailureExtract.Contains(TEXT("ApplyForcedRallyServeMode")));
 
 	return true;
 }
@@ -2066,6 +2607,21 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("WidgetStructureOps"), [this]()
 		{
 			TestTrue(TEXT("Widget structure coverage completes"), RunWidgetStructureCoverage(*this));
+		});
+
+		It(TEXT("WidgetStructureFailureRecovery"), [this]()
+		{
+			TestTrue(TEXT("Widget failure recovery coverage completes"), RunWidgetStructureFailureRecoveryCoverage(*this));
+		});
+
+		It(TEXT("BlueprintGraphAuthoring"), [this]()
+		{
+			TestTrue(TEXT("Blueprint graph authoring coverage completes"), RunBlueprintGraphAuthoringCoverage(*this));
+		});
+
+		It(TEXT("BlueprintGraphAppendAndRollback"), [this]()
+		{
+			TestTrue(TEXT("Blueprint graph append and rollback coverage completes"), RunBlueprintGraphAppendAndRollbackCoverage(*this));
 		});
 
 		It(TEXT("CommonUIWidgetRoundTrip"), [this]()

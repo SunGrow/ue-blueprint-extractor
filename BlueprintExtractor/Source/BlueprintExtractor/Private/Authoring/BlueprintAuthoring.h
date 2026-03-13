@@ -16,4 +16,9 @@ struct FBlueprintAuthoring
 	                                      const FString& Operation,
 	                                      const TSharedPtr<FJsonObject>& PayloadJson,
 	                                      bool bValidateOnly);
+
+	static TSharedPtr<FJsonObject> ModifyGraphs(UBlueprint* Blueprint,
+	                                            const FString& Operation,
+	                                            const TSharedPtr<FJsonObject>& PayloadJson,
+	                                            bool bValidateOnly);
 };

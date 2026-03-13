@@ -47,7 +47,7 @@ ue-blueprint-extractor/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── src/
-│   │   ├── index.ts                 # MCP tool definitions (70 tools + 9 resources + 2 resource templates)
+│   │   ├── index.ts                 # MCP tool definitions (72 tools + 9 resources + 2 resource templates)
 │   │   ├── compactor.ts             # JSON compaction for LLM consumption (strip noise fields, minify)
 │   │   ├── ue-client.ts             # UE Remote Control HTTP client
 │   │   └── types.ts                 # Shared TypeScript types
@@ -367,6 +367,7 @@ Then open a new session or restart your client. The tools will appear automatica
 | `modify_widget` | Patch properties, slot config, rename fields, and widget variable flags on one widget by `widget_name` or `widget_path` |
 | `modify_widget_blueprint` | Primary widget authoring tool for structural ops such as replace-tree, patch-widget, patch-class-defaults, insert-child, move, wrap, replace-class, batch, and compile workflows |
 | `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings plus counts |
+| `get_project_automation_context` | Return the editor-derived engine root, project path, and editor target used by project-control tools as their first fallback |
 | `compile_project_code` | Run an external UBT build from the MCP host for the current project/editor target |
 | `trigger_live_coding` | Request an editor-side Live Coding compile on Windows-supported setups |
 | `restart_editor` | Request an editor restart and wait for Remote Control to disconnect and reconnect |
@@ -405,6 +406,7 @@ Then open a new session or restart your client. The tools will appear automatica
 | `modify_blend_space` | Replace or patch BlendSpace samples and axes |
 | `create_blueprint` | Create a Blueprint with optional variables, component templates, function stubs, and class defaults |
 | `modify_blueprint_members` | Replace or patch Blueprint variables, components, function stubs, class defaults, and compile |
+| `modify_blueprint_graphs` | Add or replace named function graphs, append targeted function calls into existing sequence-style graphs, and compile with rollback-safe failure handling |
 | `import_assets` | Enqueue a generic async asset import job for local files or HTTP/HTTPS URLs |
 | `reimport_assets` | Enqueue an async reimport job against existing imported assets |
 | `get_import_job` | Poll the current state of one async import or reimport job |
@@ -417,6 +419,15 @@ Then open a new session or restart your client. The tools will appear automatica
 - Use `widget_path` when practical; it is safer than `widget_name` after structural edits.
 - Use `properties.name`, `properties.newName`, or `properties.new_name` to rename the widget itself.
 - For box slots, `slot.Size.sizeRule` accepts `Automatic` or the shorthand `Auto`.
+
+Widget authoring notes:
+- `create_widget_blueprint` accepts `parent_class_path` as the preferred explicit parent reference and keeps `parent_class` as a compatibility alias.
+- Widget tools accept either package paths such as `/Game/UI/WBP_Window` or object paths such as `/Game/UI/WBP_Window.WBP_Window`.
+- Widget create and extract responses include additive `packagePath` and `objectPath` fields so follow-up tool calls can reuse the returned path form directly.
+
+Project automation notes:
+- `compile_project_code` and `sync_project_code` resolve `engine_root`, `project_path`, and `target` in this order: explicit tool arguments, editor-derived `get_project_automation_context`, then environment variables.
+- `trigger_live_coding.changed_paths` and `restart_editor.save_dirty_assets` remain accepted compatibility inputs, but explicit `save_assets` and `sync_project_code.changed_paths` are the reliable orchestration primitives.
 
 ### Architecture
 
@@ -434,12 +445,12 @@ The `BlueprintExtractorSubsystem` (`UEditorSubsystem`) wraps the existing librar
 
 The MCP server follows current best practices for tool design:
 
-- **Right primitive** — The live editor actions are exposed as 70 MCP **tools**. Static guidance lives in 9 resources plus 2 resource templates: `blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://import-capabilities`, `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, `blueprint://material-graph-guidance`, `blueprint://font-roles`, `blueprint://project-automation`, and the `blueprint://examples/{family}` / `blueprint://widget-patterns/{pattern}` templates.
-- **Small, distinct surface** — 70 tools with non-overlapping purposes. Extraction tools are read-only; authoring, import, and project-automation tools are explicit write or orchestration operations with separate save semantics.
+- **Right primitive** — The live editor actions are exposed as 72 MCP **tools**. Static guidance lives in 9 resources plus 2 resource templates: `blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://import-capabilities`, `blueprint://authoring-conventions`, `blueprint://selector-conventions`, `blueprint://widget-best-practices`, `blueprint://material-graph-guidance`, `blueprint://font-roles`, `blueprint://project-automation`, and the `blueprint://examples/{family}` / `blueprint://widget-patterns/{pattern}` templates.
+- **Small, distinct surface** — 72 tools with non-overlapping purposes. Extraction tools are read-only; authoring, import, and project-automation tools are explicit write or orchestration operations with separate save semantics.
 - **Description quality** — Tool descriptions stay selection-focused, while reusable workflows and examples live in resources/templates to save context.
 - **Annotations** — All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval. Read-only extraction tools are auto-approvable; all write tools and `save_assets` require confirmation.
 - **Explicit save** — Write and import operations mutate assets and mark packages dirty, but they do not save automatically. Call `save_assets` when you want to persist the dirty packages to disk.
-- **Bounded authoring** — The write surface covers reflected properties, declarative trees, schema assets, animation metadata, and Blueprint members; arbitrary graph/controller/world synthesis is still intentionally deferred.
+- **Bounded authoring** — The write surface covers reflected properties, declarative trees, schema assets, animation metadata, Blueprint members, and targeted Blueprint graph mutations; generic controller/world synthesis is still intentionally deferred.
 - **Security** — stdio transport, env-based credentials (`UE_REMOTE_CONTROL_PORT`), local-only by default. No auth tokens or remote access.
 
 ### Environment Variables
@@ -532,6 +543,13 @@ npm publish --access public
 
 ## Changelog
 
+### 1.14.1
+- **Project-control hardening** — `compile_project_code` and `sync_project_code` now fall back to editor-derived project automation context before environment variables, and Windows batch builds are launched in a `cmd.exe`-safe way.
+- **Contract alignment** — `trigger_live_coding` and `restart_editor` now match the current subsystem signatures while keeping the older MCP inputs as compatibility aliases with explicit diagnostics.
+- **Widget path ergonomics** — widget create and extract responses now include additive `packagePath` and `objectPath`, and widget tools accept both path styles consistently.
+- **Widget class resolution** — widget creation and structure edits now resolve project-defined widget parents by short loaded name, accept Blueprint widget asset paths, and normalize CanvasPanel slot aliases such as top-level `Anchors` and `Offsets`.
+- **Blueprint graph authoring** — added `modify_blueprint_graphs` for rollback-safe targeted graph operations such as named function-graph upserts and appending calls into existing sequence-style initializer graphs.
+
 ### 1.13.0
 - **Widget metadata parity** — `modify_widget` and `modify_widget_blueprint.patch_widget` now accept `is_variable` aliases for existing widgets, and `extract_widget_blueprint` can include Blueprint class defaults alongside widget and slot data.
 - **Explicit widget defaults and fonts** — added widget-scoped `patch_class_defaults`, `import_fonts`, and `apply_widget_fonts` so UI polish flows can set class-default materials and runtime `UFont` assets without oversized reflected payloads.
@@ -559,7 +577,7 @@ npm publish --access public
 ### 1.9.0
 - **18 new authoring tools** — added `create_user_defined_struct`, `modify_user_defined_struct`, `create_user_defined_enum`, `modify_user_defined_enum`, `create_blackboard`, `modify_blackboard`, `create_behavior_tree`, `modify_behavior_tree`, `create_state_tree`, `modify_state_tree`, `create_anim_sequence`, `modify_anim_sequence`, `create_anim_montage`, `modify_anim_montage`, `create_blend_space`, `modify_blend_space`, `create_blueprint`, and `modify_blueprint_members`.
 - **Stable writer selectors** — BehaviorTree writes now target `nodePath`, StateTree writes support `stateId`/`statePath`, `editorNodeId`, and `transitionId`, animation writes expose stable notify identifiers plus `sampleIndex`, and Blueprint/member/schema surfaces use explicit selector fields.
-- **Feasible-family write coverage** — explicit-save authoring now spans schema assets, AI assets, StateTrees, animation metadata assets, and Blueprint member authoring while still deferring arbitrary graph synthesis, controller editing, and live world mutation.
+- **Feasible-family write coverage** — explicit-save authoring now spans schema assets, AI assets, StateTrees, animation metadata assets, Blueprint member authoring, and targeted Blueprint graph mutations while still deferring controller editing and live world mutation.
 - **Shared write core** — added normalized mutation results, explicit `save_assets` persistence, validation-only write flows, and reusable reflected property patching for editor-side authoring.
 - **Widget hardening** — widget tree replacement now preflights before destructive changes, widget/property writes use the shared mutation layer, and `modify_widget_blueprint` remains the higher-level alias for tree replacement, patching, and compile workflows.
 - **New authoring families** — added `create_data_table`, `modify_data_table`, `create_curve`, `modify_curve`, `create_curve_table`, and `modify_curve_table`, alongside the already added `create_data_asset`, `modify_data_asset`, `create_material_instance`, and `modify_material_instance`.

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ProjectController, classifyChangedPaths } from '../src/project-controller.js';
+import { ProjectController, classifyChangedPaths, resolveCommandInvocation } from '../src/project-controller.js';
 
 describe('ProjectController', () => {
   const tempDirs: string[] = [];
@@ -84,6 +84,25 @@ describe('ProjectController', () => {
       '-NoHotReloadFromIDE',
     ]);
     expect(result.stdout).toContain('MyGameEditor');
+  });
+
+  it('wraps Windows batch files through cmd.exe to avoid spawn EINVAL', () => {
+    const invocation = resolveCommandInvocation(
+      'C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat',
+      ['MyGameEditor', 'Win64', 'Development', '-Project=C:/Projects/My Game/MyGame.uproject'],
+      'win32',
+      { ComSpec: 'C:/Windows/System32/cmd.exe' },
+    );
+
+    expect(invocation).toEqual({
+      executable: 'C:/Windows/System32/cmd.exe',
+      args: [
+        '/d',
+        '/s',
+        '/c',
+        'call "C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat" MyGameEditor Win64 Development "-Project=C:/Projects/My Game/MyGame.uproject"',
+      ],
+    });
   });
 
   it('waits for the editor to disconnect and reconnect after restart', async () => {

@@ -5,16 +5,21 @@
 #include "PropertySerializer.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "EdGraphSchema_K2_Actions.h"
 #include "Components/ActorComponent.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
+#include "Engine/MemberReference.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_ExecutionSequence.h"
 #include "K2Node_FunctionEntry.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
+#include "PackageTools.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -67,6 +72,13 @@ static TArray<TSharedPtr<FJsonValue>> GetFunctionArray(
 	const TSharedPtr<FJsonObject>& Payload)
 {
 	const TArray<TSharedPtr<FJsonValue>>* Functions = nullptr;
+	if (Payload.IsValid()
+		&& Payload->TryGetArrayField(TEXT("functionGraphs"), Functions)
+		&& Functions)
+	{
+		return *Functions;
+	}
+
 	if (Payload.IsValid()
 		&& Payload->TryGetArrayField(TEXT("functionStubs"), Functions)
 		&& Functions)
@@ -1127,6 +1139,256 @@ static bool ReplaceFunctionStubs(UBlueprint* Blueprint,
 	return bSuccess && OutErrors.Num() == 0;
 }
 
+static bool UpsertFunctionStubs(UBlueprint* Blueprint,
+                                const TArray<TSharedPtr<FJsonValue>>& Functions,
+                                TArray<FString>& OutErrors)
+{
+	if (!Blueprint)
+	{
+		OutErrors.Add(TEXT("Blueprint is null."));
+		return false;
+	}
+
+	bool bSuccess = true;
+	for (int32 Index = 0; Index < Functions.Num(); ++Index)
+	{
+		const TSharedPtr<FJsonObject> FunctionObject =
+			Functions[Index].IsValid() ? Functions[Index]->AsObject() : nullptr;
+		if (!FunctionObject.IsValid())
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("functionGraphs[%d] must be an object."),
+				Index));
+			bSuccess = false;
+			continue;
+		}
+
+		FString FunctionName;
+		if (!ParseFunctionName(FunctionObject, FunctionName))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("functionGraphs[%d] requires functionName, graphName, or name."),
+				Index));
+			bSuccess = false;
+			continue;
+		}
+
+		bool bReplaceExisting = false;
+		FunctionObject->TryGetBoolField(TEXT("replaceExisting"), bReplaceExisting);
+		UEdGraph* TargetGraph = FindFunctionGraph(Blueprint, FName(*FunctionName));
+		if (TargetGraph && bReplaceExisting)
+		{
+			TArray<UEdGraph*> GraphsToRemove = { TargetGraph };
+			FBlueprintEditorUtils::RemoveGraphs(Blueprint, GraphsToRemove);
+			TargetGraph = nullptr;
+		}
+
+		if (!TargetGraph)
+		{
+			TargetGraph = FBlueprintEditorUtils::CreateNewGraph(
+				Blueprint,
+				FName(*FunctionName),
+				UEdGraph::StaticClass(),
+				UEdGraphSchema_K2::StaticClass());
+			if (!TargetGraph)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("Failed to create function graph '%s'."),
+					*FunctionName));
+				bSuccess = false;
+				continue;
+			}
+
+			FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, TargetGraph, true, nullptr);
+		}
+
+		bSuccess &= ApplyFunctionStub(TargetGraph, FunctionObject, OutErrors);
+	}
+
+	return bSuccess && OutErrors.Num() == 0;
+}
+
+static bool ReloadBlueprintPackage(UBlueprint* Blueprint, FString& OutError)
+{
+	if (!Blueprint)
+	{
+		OutError = TEXT("Blueprint is null.");
+		return false;
+	}
+
+	UPackage* Package = Blueprint->GetOutermost();
+	if (!Package)
+	{
+		OutError = TEXT("Blueprint package is null.");
+		return false;
+	}
+
+	const TArray<UPackage*> PackagesToReload = { Package };
+	FText ReloadError;
+	const bool bReloaded = UPackageTools::ReloadPackages(
+		PackagesToReload,
+		ReloadError,
+		EReloadPackagesInteractionMode::AssumePositive);
+	if (!bReloaded)
+	{
+		OutError = ReloadError.ToString();
+		return false;
+	}
+
+	return true;
+}
+
+static UEdGraphPin* FindPinByName(UEdGraphNode* Node, const FString& PinName)
+{
+	if (!Node)
+	{
+		return nullptr;
+	}
+
+	for (UEdGraphPin* Pin : Node->Pins)
+	{
+		if (Pin && Pin->PinName == FName(*PinName))
+		{
+			return Pin;
+		}
+	}
+
+	return nullptr;
+}
+
+static bool AppendFunctionCallToSequence(UBlueprint* Blueprint,
+                                         const TSharedPtr<FJsonObject>& Payload,
+                                         TArray<FString>& OutErrors)
+{
+	if (!Blueprint || !Payload.IsValid())
+	{
+		OutErrors.Add(TEXT("append_function_call_to_sequence requires a Blueprint and payload."));
+		return false;
+	}
+
+	FString GraphName;
+	if (!Payload->TryGetStringField(TEXT("graphName"), GraphName) || GraphName.IsEmpty())
+	{
+		OutErrors.Add(TEXT("append_function_call_to_sequence requires graphName."));
+		return false;
+	}
+
+	UEdGraph* Graph = FindFunctionGraph(Blueprint, FName(*GraphName));
+	if (!Graph)
+	{
+		OutErrors.Add(FString::Printf(TEXT("Blueprint graph '%s' was not found."), *GraphName));
+		return false;
+	}
+
+	FString FunctionName;
+	if (!Payload->TryGetStringField(TEXT("functionName"), FunctionName) || FunctionName.IsEmpty())
+	{
+		OutErrors.Add(TEXT("append_function_call_to_sequence requires functionName."));
+		return false;
+	}
+
+	UK2Node_ExecutionSequence* SequenceNode = nullptr;
+	FString SequenceNodeTitle;
+	Payload->TryGetStringField(TEXT("sequenceNodeTitle"), SequenceNodeTitle);
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		UK2Node_ExecutionSequence* Candidate = Cast<UK2Node_ExecutionSequence>(Node);
+		if (!Candidate)
+		{
+			continue;
+		}
+
+		if (SequenceNodeTitle.IsEmpty() || Candidate->GetNodeTitle(ENodeTitleType::ListView).ToString().Contains(SequenceNodeTitle))
+		{
+			SequenceNode = Candidate;
+			break;
+		}
+	}
+
+	if (!SequenceNode)
+	{
+		OutErrors.Add(FString::Printf(TEXT("No execution sequence node was found in graph '%s'."), *GraphName));
+		return false;
+	}
+
+	double PosX = 0.0;
+	double PosY = 0.0;
+	Payload->TryGetNumberField(TEXT("posX"), PosX);
+	Payload->TryGetNumberField(TEXT("posY"), PosY);
+	const FVector2D NodePosition(PosX, PosY);
+
+	UK2Node_CallFunction* CallFunctionNode = FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_CallFunction>(
+		Graph,
+		NodePosition,
+		EK2NewNodeFlags::None,
+		[&FunctionName, Blueprint, Payload](UK2Node_CallFunction* NewNode)
+		{
+			FString OwnerClassPath;
+			if (Payload->TryGetStringField(TEXT("ownerClass"), OwnerClassPath) && !OwnerClassPath.IsEmpty())
+			{
+				if (UClass* OwnerClass = FAuthoringHelpers::ResolveClass(OwnerClassPath, UObject::StaticClass()))
+				{
+					if (UFunction* Function = OwnerClass->FindFunctionByName(FName(*FunctionName)))
+					{
+						NewNode->SetFromFunction(Function);
+						return;
+					}
+				}
+			}
+
+			if (Blueprint && Blueprint->SkeletonGeneratedClass)
+			{
+				if (UFunction* Function = Blueprint->SkeletonGeneratedClass->FindFunctionByName(FName(*FunctionName)))
+				{
+					NewNode->SetFromFunction(Function);
+					return;
+				}
+			}
+
+			NewNode->FunctionReference.SetSelfMember(FName(*FunctionName));
+		});
+
+	if (!CallFunctionNode)
+	{
+		OutErrors.Add(FString::Printf(TEXT("Failed to create call node for '%s'."), *FunctionName));
+		return false;
+	}
+
+	int32 ThenPinCount = 0;
+	for (UEdGraphPin* Pin : SequenceNode->Pins)
+	{
+		if (Pin && Pin->Direction == EGPD_Output && Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+		{
+			++ThenPinCount;
+		}
+	}
+
+	if (ThenPinCount <= 0)
+	{
+		OutErrors.Add(TEXT("Execution sequence node did not expose any exec output pins."));
+		return false;
+	}
+
+	const int32 AppendIndex = ThenPinCount - 1;
+	SequenceNode->AddInputPin();
+	UEdGraphPin* ThenPin = SequenceNode->GetThenPinGivenIndex(AppendIndex + 1);
+	UEdGraphPin* ExecutePin = FindPinByName(CallFunctionNode, TEXT("execute"));
+	if (!ThenPin || !ExecutePin)
+	{
+		OutErrors.Add(TEXT("Failed to resolve exec pins while appending a function call."));
+		return false;
+	}
+
+	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+	if (!Schema->TryCreateConnection(ThenPin, ExecutePin))
+	{
+		OutErrors.Add(TEXT("Failed to wire the appended function call into the sequence node."));
+		return false;
+	}
+
+	return true;
+}
+
 static bool ApplyClassDefaults(UBlueprint* Blueprint,
                                const TSharedPtr<FJsonObject>& DefaultsObject,
                                TArray<FString>& OutErrors,
@@ -1223,6 +1485,42 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 
 	OutErrors.Add(FString::Printf(
 		TEXT("Unsupported Blueprint operation '%s'."),
+		*Operation));
+	return false;
+}
+
+static bool ApplyGraphOperation(UBlueprint* Blueprint,
+                                const FString& Operation,
+                                const TSharedPtr<FJsonObject>& Payload,
+                                TArray<FString>& OutErrors,
+                                EBlueprintMutationFlags& OutMutationFlags)
+{
+	if (!Blueprint)
+	{
+		OutErrors.Add(TEXT("Blueprint is null."));
+		return false;
+	}
+
+	if (Operation == TEXT("upsert_function_graphs"))
+	{
+		OutMutationFlags |= EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		return UpsertFunctionStubs(Blueprint, GetFunctionArray(Payload), OutErrors);
+	}
+
+	if (Operation == TEXT("append_function_call_to_sequence"))
+	{
+		OutMutationFlags |= EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		return AppendFunctionCallToSequence(Blueprint, Payload, OutErrors);
+	}
+
+	if (Operation == TEXT("compile"))
+	{
+		OutMutationFlags |= EBlueprintMutationFlags::Compile;
+		return true;
+	}
+
+	OutErrors.Add(FString::Printf(
+		TEXT("Unsupported Blueprint graph operation '%s'."),
 		*Operation));
 	return false;
 }
@@ -1498,6 +1796,24 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 	Context.BeginTransaction(FText::FromString(TEXT("Modify Blueprint")));
 	Blueprint->Modify();
 
+	auto RollbackBlueprint = [&Context, Blueprint, &AssetPath]()
+	{
+		FString ReloadError;
+		const bool bRolledBack = ReloadBlueprintPackage(Blueprint, ReloadError);
+		if (bRolledBack)
+		{
+			Context.AddWarning(TEXT("rollback_applied"),
+			                   TEXT("Blueprint mutation failed and the package was reloaded from disk to discard in-memory changes."),
+			                   AssetPath);
+		}
+		else
+		{
+			Context.AddError(TEXT("rollback_failed"),
+			                 FString::Printf(TEXT("Blueprint mutation failed and rollback also failed: %s"), *ReloadError),
+			                 AssetPath);
+		}
+	};
+
 	TArray<FString> ApplyErrors;
 	MutationFlags = EBlueprintMutationFlags::None;
 	ApplyOperation(Blueprint, Operation, Payload, ApplyErrors, MutationFlags);
@@ -1507,6 +1823,7 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 	}
 	if (ApplyErrors.Num() > 0)
 	{
+		RollbackBlueprint();
 		return Context.BuildResult(false);
 	}
 
@@ -1525,6 +1842,7 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 		if (Context.CompileSummary.IsValid()
 			&& !Context.CompileSummary->GetBoolField(TEXT("success")))
 		{
+			RollbackBlueprint();
 			return Context.BuildResult(false);
 		}
 	}
@@ -1537,4 +1855,162 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 	}
 
 	return Context.BuildResult(true);
+}
+
+TSharedPtr<FJsonObject> FBlueprintAuthoring::ModifyGraphs(
+	UBlueprint* Blueprint,
+	const FString& Operation,
+	const TSharedPtr<FJsonObject>& PayloadJson,
+	const bool bValidateOnly)
+{
+	using namespace BlueprintAuthoringInternal;
+
+	const FString AssetPath = Blueprint ? Blueprint->GetPathName() : FString();
+	FAssetMutationContext Context(
+		TEXT("modify_blueprint_graphs"),
+		AssetPath,
+		TEXT("Blueprint"),
+		bValidateOnly);
+
+	if (!Blueprint)
+	{
+		Context.AddError(TEXT("asset_not_found"), TEXT("Blueprint is null."));
+		return Context.BuildResult(false);
+	}
+
+	const TSharedPtr<FJsonObject> Payload = NormalizePayload(PayloadJson);
+	auto BuildGraphMutationResult = [&Context](UBlueprint* TargetBlueprint, const bool bSuccess) -> TSharedPtr<FJsonObject>
+	{
+		const TSharedPtr<FJsonObject> Result = Context.BuildResult(bSuccess);
+		if (!Result.IsValid() || !TargetBlueprint)
+		{
+			return Result;
+		}
+
+		TArray<TSharedPtr<FJsonValue>> FunctionGraphNames;
+		for (UEdGraph* Graph : TargetBlueprint->FunctionGraphs)
+		{
+			if (Graph)
+			{
+				FunctionGraphNames.Add(MakeShared<FJsonValueString>(Graph->GetName()));
+			}
+		}
+		Result->SetArrayField(TEXT("functionGraphs"), FunctionGraphNames);
+		return Result;
+	};
+
+	UBlueprint* WorkingBlueprint = Blueprint;
+	if (bValidateOnly)
+	{
+		WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage());
+		if (!WorkingBlueprint)
+		{
+			Context.AddError(
+				TEXT("preview_duplicate_failed"),
+				TEXT("Failed to duplicate Blueprint for validation."));
+			return Context.BuildResult(false);
+		}
+	}
+
+	TArray<FString> ValidationErrors;
+	EBlueprintMutationFlags MutationFlags = EBlueprintMutationFlags::None;
+	ApplyGraphOperation(
+		WorkingBlueprint,
+		Operation,
+		Payload,
+		ValidationErrors,
+		MutationFlags);
+	Context.SetValidationSummary(
+		ValidationErrors.Num() == 0,
+		ValidationErrors.Num() == 0
+			? TEXT("Blueprint graph payload validated.")
+			: TEXT("Blueprint graph payload failed validation."),
+		ValidationErrors);
+	for (const FString& Error : ValidationErrors)
+	{
+		Context.AddError(TEXT("validation_error"), Error, AssetPath);
+	}
+	if (ValidationErrors.Num() > 0)
+	{
+		return Context.BuildResult(false);
+	}
+
+	if (EnumHasAnyFlags(MutationFlags, EBlueprintMutationFlags::Structural))
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WorkingBlueprint);
+	}
+
+	if (EnumHasAnyFlags(MutationFlags, EBlueprintMutationFlags::Compile))
+	{
+		FAuthoringHelpers::CompileBlueprint(WorkingBlueprint, Context, TEXT("Blueprint"));
+		if (Context.CompileSummary.IsValid()
+			&& !Context.CompileSummary->GetBoolField(TEXT("success")))
+		{
+			return Context.BuildResult(false);
+		}
+	}
+
+	if (bValidateOnly)
+	{
+		return BuildGraphMutationResult(WorkingBlueprint, true);
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Modify Blueprint Graphs")));
+	Blueprint->Modify();
+
+	auto RollbackBlueprint = [&Context, Blueprint, &AssetPath]()
+	{
+		FString ReloadError;
+		const bool bRolledBack = ReloadBlueprintPackage(Blueprint, ReloadError);
+		if (bRolledBack)
+		{
+			Context.AddWarning(TEXT("rollback_applied"),
+			                   TEXT("Blueprint graph mutation failed and the package was reloaded from disk to discard in-memory changes."),
+			                   AssetPath);
+		}
+		else
+		{
+			Context.AddError(TEXT("rollback_failed"),
+			                 FString::Printf(TEXT("Blueprint graph mutation failed and rollback also failed: %s"), *ReloadError),
+			                 AssetPath);
+		}
+	};
+
+	TArray<FString> ApplyErrors;
+	MutationFlags = EBlueprintMutationFlags::None;
+	ApplyGraphOperation(Blueprint, Operation, Payload, ApplyErrors, MutationFlags);
+	for (const FString& Error : ApplyErrors)
+	{
+		Context.AddError(TEXT("apply_error"), Error, AssetPath);
+	}
+	if (ApplyErrors.Num() > 0)
+	{
+		RollbackBlueprint();
+		return Context.BuildResult(false);
+	}
+
+	if (EnumHasAnyFlags(MutationFlags, EBlueprintMutationFlags::Structural))
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+
+	if (EnumHasAnyFlags(MutationFlags, EBlueprintMutationFlags::Compile))
+	{
+		FAuthoringHelpers::CompileBlueprint(Blueprint, Context, TEXT("Blueprint"));
+		if (Context.CompileSummary.IsValid()
+			&& !Context.CompileSummary->GetBoolField(TEXT("success")))
+		{
+			RollbackBlueprint();
+			return Context.BuildResult(false);
+		}
+	}
+
+	Blueprint->MarkPackageDirty();
+	Context.TrackDirtyObject(Blueprint);
+	if (Blueprint->GeneratedClass && Blueprint->GeneratedClass->GetDefaultObject())
+	{
+		Context.TrackDirtyObject(Blueprint->GeneratedClass->GetDefaultObject());
+	}
+
+	return BuildGraphMutationResult(Blueprint, true);
 }

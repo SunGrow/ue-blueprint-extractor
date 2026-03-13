@@ -49,9 +49,11 @@
 #include "GenericPlatform/GenericPlatformProperties.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
+#include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/EngineVersionComparison.h"
 #include "UnrealEdMisc.h"
+#include "UObject/UObjectIterator.h"
 
 #if PLATFORM_WINDOWS
 #include "ILiveCodingModule.h"
@@ -86,7 +88,46 @@ static FBlueprintExtractorImportJobManager& GetImportJobManager(FBlueprintExtrac
 template <typename AssetType>
 static AssetType* LoadAssetByPath(const FString& AssetPath)
 {
-	return Cast<AssetType>(ResolveAssetByPath(AssetPath));
+	if (AssetType* ResolvedAsset = Cast<AssetType>(ResolveAssetByPath(AssetPath)))
+	{
+		return ResolvedAsset;
+	}
+
+	const FString ObjectPath = NormalizeAssetObjectPath(AssetPath);
+	if (ObjectPath.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	FString PackagePath = ObjectPath;
+	if (FPackageName::IsValidObjectPath(ObjectPath))
+	{
+		PackagePath = FPackageName::ObjectPathToPackageName(ObjectPath);
+	}
+
+	for (TObjectIterator<AssetType> It; It; ++It)
+	{
+		AssetType* Candidate = *It;
+		if (!Candidate || Candidate->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			continue;
+		}
+
+		if (Candidate->GetPathName() == ObjectPath)
+		{
+			return Candidate;
+		}
+
+		if (UPackage* CandidatePackage = Candidate->GetOutermost())
+		{
+			if (CandidatePackage->GetName() == PackagePath)
+			{
+				return Candidate;
+			}
+		}
+	}
+
+	return nullptr;
 }
 
 static bool ResolveAssetClassFilter(const FString& ClassFilter, FTopLevelAssetPath& OutClassPath, bool& bOutRecursiveClasses)
@@ -1955,6 +1996,42 @@ FString UBlueprintExtractorSubsystem::ModifyBlueprintMembers(
 	if (!Result.IsValid())
 	{
 		return MakeErrorJson(TEXT("Failed to modify Blueprint members"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ModifyBlueprintGraphs(
+	const FString& AssetPath,
+	const FString& Operation,
+	const FString& PayloadJson,
+	const bool bValidateOnly)
+{
+	UBlueprint* Blueprint = LoadAssetByPath<UBlueprint>(AssetPath);
+	if (!Blueprint)
+	{
+		return MakeErrorJson(
+			FString::Printf(TEXT("Asset not found or not a Blueprint: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FBlueprintAuthoring::ModifyGraphs(
+		Blueprint,
+		Operation,
+		ParsedPayload,
+		bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to modify Blueprint graphs"));
 	}
 
 	return SerializeJsonObject(Result);

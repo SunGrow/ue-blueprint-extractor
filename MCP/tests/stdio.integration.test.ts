@@ -207,11 +207,13 @@ describe('stdio integration', () => {
     expect(tools.tools.some((tool) => tool.name === 'extract_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'get_project_automation_context')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compile_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'trigger_live_coding')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_blueprint_graphs')).toBe(true);
     expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://examples/{family}')).toBe(true);
     expect(resourceTemplates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://widget-patterns/{pattern}')).toBe(true);
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
@@ -293,7 +295,7 @@ describe('stdio integration', () => {
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'TriggerLiveCoding',
         parameters: {
-          ChangedPathsJson: JSON.stringify(['Source/Test/MyActor.cpp']),
+          bEnableForSession: true,
           bWaitForCompletion: true,
         },
       });

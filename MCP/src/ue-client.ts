@@ -13,6 +13,14 @@ export const DEFAULT_SUBSYSTEM_CANDIDATE_PATHS = [
 ] as const;
 
 type FetchLike = typeof fetch;
+type SubsystemPathSource = 'explicit' | 'discovered';
+
+interface RawCallResult {
+  response: RemoteCallResponse | null;
+  status?: number;
+  error?: string;
+  timedOut?: boolean;
+}
 
 export interface UEClientOptions {
   host?: string;
@@ -41,6 +49,7 @@ export class UEClient {
   private connectionTimeoutMs: number;
   private candidatePaths: readonly string[];
   private subsystemPath: string | null = null;
+  private subsystemPathSource: SubsystemPathSource | null = null;
 
   constructor(options: UEClientOptions = {}) {
     this.host = options.host ?? process.env.UE_REMOTE_CONTROL_HOST ?? DEFAULT_HOST;
@@ -50,6 +59,7 @@ export class UEClient {
     this.connectionTimeoutMs = options.connectionTimeoutMs ?? DEFAULT_CONNECTION_TIMEOUT_MS;
     this.candidatePaths = options.candidatePaths ?? DEFAULT_SUBSYSTEM_CANDIDATE_PATHS;
     this.subsystemPath = options.subsystemPath ?? process.env[SUBSYSTEM_PATH_ENV] ?? null;
+    this.subsystemPathSource = this.subsystemPath ? 'explicit' : null;
   }
 
   private get baseUrl(): string {
@@ -85,8 +95,9 @@ export class UEClient {
       try {
         // Try calling ListAssets as a health check
         const res = await this.rawCall(path, 'ListAssets', { PackagePath: '/Game', bRecursive: false, ClassFilter: '' });
-        if (res !== null) {
+        if (res.response !== null) {
           this.subsystemPath = path;
+          this.subsystemPathSource = 'discovered';
           return path;
         }
       } catch {
@@ -99,7 +110,32 @@ export class UEClient {
     );
   }
 
-  private async rawCall(objectPath: string, functionName: string, parameters: Record<string, unknown>): Promise<RemoteCallResponse | null> {
+  private clearDiscoveredSubsystemPath() {
+    if (this.subsystemPathSource === 'discovered') {
+      this.subsystemPath = null;
+      this.subsystemPathSource = null;
+    }
+  }
+
+  private formatCallFailure(method: string, objectPath: string, result: RawCallResult): string {
+    const details: string[] = [
+      `${this.host}:${this.port}`,
+      `objectPath=${objectPath}`,
+    ];
+    if (typeof result.status === 'number') {
+      details.push(`status=${result.status}`);
+    }
+    if (result.error) {
+      details.push(`detail=${result.error}`);
+    }
+    if (result.timedOut) {
+      details.push(`timeoutMs=${this.timeoutMs}`);
+    }
+
+    return `Failed to call ${method} on BlueprintExtractorSubsystem (${details.join(', ')})`;
+  }
+
+  private async rawCall(objectPath: string, functionName: string, parameters: Record<string, unknown>): Promise<RawCallResult> {
     const body: RemoteCallRequest = {
       objectPath,
       functionName,
@@ -119,11 +155,41 @@ export class UEClient {
       });
       clearTimeout(timeout);
 
-      if (!res.ok) return null;
-      return await res.json() as RemoteCallResponse;
-    } catch {
+      if (!res.ok) {
+        let errorDetail = res.statusText || `HTTP ${res.status}`;
+        try {
+          const responseText = await res.text();
+          if (responseText.trim().length > 0) {
+            errorDetail = responseText;
+          }
+        } catch {
+          // Keep the HTTP status text when the body cannot be read.
+        }
+
+        return {
+          response: null,
+          status: res.status,
+          error: errorDetail,
+        };
+      }
+
+      return {
+        response: await res.json() as RemoteCallResponse,
+      };
+    } catch (error) {
       clearTimeout(timeout);
-      return null;
+      if (error instanceof Error && error.name === 'AbortError') {
+        return {
+          response: null,
+          error: `Request timed out after ${this.timeoutMs}ms`,
+          timedOut: true,
+        };
+      }
+
+      return {
+        response: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
@@ -133,15 +199,21 @@ export class UEClient {
       throw new Error(`UE Editor not running or Remote Control not available on ${this.host}:${this.port}`);
     }
 
-    const objectPath = await this.discoverSubsystem();
-    const res = await this.rawCall(objectPath, method, params);
+    let objectPath = await this.discoverSubsystem();
+    let res = await this.rawCall(objectPath, method, params);
 
-    if (res === null) {
-      throw new Error(`Failed to call ${method} on BlueprintExtractorSubsystem`);
+    if (res.response === null && this.subsystemPathSource === 'discovered') {
+      this.clearDiscoveredSubsystemPath();
+      objectPath = await this.discoverSubsystem();
+      res = await this.rawCall(objectPath, method, params);
+    }
+
+    if (res.response === null) {
+      throw new Error(this.formatCallFailure(method, objectPath, res));
     }
 
     // The subsystem methods return FString, which comes back as ReturnValue
-    const returnValue = res.ReturnValue ?? JSON.stringify(res);
+    const returnValue = res.response.ReturnValue ?? JSON.stringify(res.response);
     return typeof returnValue === 'string' ? returnValue : JSON.stringify(returnValue);
   }
 }

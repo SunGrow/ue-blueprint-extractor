@@ -20,7 +20,7 @@ export function createBlueprintExtractorServer(
 ) {
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '1.13.0',
+    version: '1.14.1',
   });
 
 // Shared scope enum with detailed descriptions
@@ -111,7 +111,8 @@ server.resource(
         '- AnimSequence: create_anim_sequence, modify_anim_sequence',
         '- AnimMontage: create_anim_montage, modify_anim_montage',
         '- BlendSpace: create_blend_space, modify_blend_space',
-        '- Blueprint members: create_blueprint, modify_blueprint_members',
+        '- Blueprint members: create_blueprint, modify_blueprint_members, modify_blueprint_graphs',
+        '- Project automation context: get_project_automation_context',
         '- Shared persistence: save_assets',
         '- Host/editor orchestration: compile_project_code, trigger_live_coding, restart_editor, sync_project_code, apply_window_ui_changes',
         '',
@@ -125,17 +126,18 @@ server.resource(
         '- AnimMontage: notify selector by notifyId/notifyGuid with notifyIndex or track metadata as fallback; operations replace_notifies, patch_notify, replace_sections, replace_slots.',
         '- BlendSpace: sample selector by sampleIndex; operations replace_samples, patch_sample, set_axes.',
         '- Blueprint members: selectors by variableName, componentName, and functionName; operations replace_variables, patch_variable, replace_components, patch_component, replace_function_stubs, patch_class_defaults, compile.',
+        '- Blueprint graphs: operation upsert_function_graphs preserves unrelated graphs; append_function_call_to_sequence patches an existing sequence-style initializer without replacing the whole graph.',
         '',
         'WidgetBlueprint guidance:',
         '- build_widget_tree is the destructive bootstrap path for whole-tree replacement.',
-        '- extract_widget_blueprint returns a compact authoring snapshot with widgetPath annotations.',
+        '- extract_widget_blueprint returns a compact authoring snapshot with widgetPath annotations and additive packagePath/objectPath fields.',
         '- modify_widget supports direct widget_name or widget_path patches for one widget.',
         '- modify_widget_blueprint is the primary structural API: replace_tree, patch_widget, patch_class_defaults, insert_child, remove_widget, move_widget, wrap_widget, replace_widget_class, batch, or compile.',
         '- compile_widget_blueprint validates the asset but still does not save it.',
         '- apply_window_ui_changes is a thin MCP helper that sequences variable-flag updates, class defaults, optional font work, compile/save, and optional code sync.',
         '',
         'Explicit deferrals:',
-        '- No arbitrary Blueprint, Niagara, or BehaviorTree graph synthesis.',
+        '- Blueprint graph authoring is explicit and opt-in via modify_blueprint_graphs; generic arbitrary graph synthesis is still intentionally bounded to targeted graph operations.',
         '- Material graph authoring currently targets the classic material ecosystem; there is no first-class Substrate-specific DSL yet.',
         '- No ControlRig, IK controller, or live world editing surfaces.',
         '- Animation authoring is limited to metadata, sections, slots, samples, notifies, sync markers, and curve metadata; raw authored track synthesis is out of scope.',
@@ -356,9 +358,11 @@ server.resource(
       text: [
         'Blueprint Extractor Project Automation',
         '',
+        '- get_project_automation_context returns the editor-derived engine root, project file path, and editor target that project-control tools use as their first fallback.',
         '- compile_project_code runs an external UBT build from the MCP host.',
-        '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups.',
-        '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect.',
+        '- compile_project_code and sync_project_code resolve engine_root, project_path, and target in this order: explicit args -> editor context -> environment.',
+        '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups. changed_paths remains an accepted compatibility input but the current editor-side trigger ignores it.',
+        '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect. save_dirty_assets remains an accepted compatibility input; explicit save_assets is the reliable persistence path.',
         '- sync_project_code requires explicit changed_paths and chooses Live Coding vs build_and_restart deterministically.',
         '',
         'build_and_restart is forced for:',
@@ -676,6 +680,121 @@ function supportsConnectionProbe(activeClient: UEClientLike): (() => Promise<boo
   }
 
   return null;
+}
+
+type ProjectAutomationContext = {
+  success?: boolean;
+  operation?: string;
+  projectName?: string;
+  projectFilePath?: string;
+  projectDir?: string;
+  engineDir?: string;
+  engineRoot?: string;
+  editorTarget?: string;
+  hostPlatform?: string;
+  supportsLiveCoding?: boolean;
+  liveCodingAvailable?: boolean;
+  liveCodingEnabled?: boolean;
+  liveCodingStarted?: boolean;
+  liveCodingError?: string;
+};
+
+type ProjectInputSource = 'explicit' | 'editor_context' | 'environment' | 'missing';
+
+type ResolvedProjectInputs = {
+  engineRoot?: string;
+  projectPath?: string;
+  target?: string;
+  context: ProjectAutomationContext | null;
+  contextError?: string;
+  sources: {
+    engineRoot: ProjectInputSource;
+    projectPath: ProjectInputSource;
+    target: ProjectInputSource;
+  };
+};
+
+let cachedProjectAutomationContext: ProjectAutomationContext | null = null;
+
+function firstDefinedString(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+async function getProjectAutomationContext(forceRefresh = false): Promise<ProjectAutomationContext> {
+  if (!forceRefresh && cachedProjectAutomationContext) {
+    return cachedProjectAutomationContext;
+  }
+
+  const parsed = await callSubsystemJson('GetProjectAutomationContext', {});
+  cachedProjectAutomationContext = parsed as ProjectAutomationContext;
+  return cachedProjectAutomationContext;
+}
+
+async function resolveProjectInputs(
+  request: {
+    engine_root?: string;
+    project_path?: string;
+    target?: string;
+  },
+): Promise<ResolvedProjectInputs> {
+  let context: ProjectAutomationContext | null = null;
+  let contextError: string | undefined;
+
+  if (!request.engine_root || !request.project_path || !request.target) {
+    try {
+      context = await getProjectAutomationContext();
+    } catch (error) {
+      contextError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const engineRootFromContext = firstDefinedString(context?.engineRoot);
+  const projectPathFromContext = firstDefinedString(context?.projectFilePath);
+  const targetFromContext = firstDefinedString(context?.editorTarget);
+  const engineRootFromEnv = firstDefinedString(process.env.UE_ENGINE_ROOT);
+  const projectPathFromEnv = firstDefinedString(process.env.UE_PROJECT_PATH);
+  const targetFromEnv = firstDefinedString(process.env.UE_PROJECT_TARGET, process.env.UE_EDITOR_TARGET);
+
+  const engineRoot = firstDefinedString(request.engine_root, engineRootFromContext, engineRootFromEnv);
+  const projectPath = firstDefinedString(request.project_path, projectPathFromContext, projectPathFromEnv);
+  const target = firstDefinedString(request.target, targetFromContext, targetFromEnv);
+
+  return {
+    engineRoot,
+    projectPath,
+    target,
+    context,
+    contextError,
+    sources: {
+      engineRoot: request.engine_root ? 'explicit' : engineRootFromContext ? 'editor_context' : engineRootFromEnv ? 'environment' : 'missing',
+      projectPath: request.project_path ? 'explicit' : projectPathFromContext ? 'editor_context' : projectPathFromEnv ? 'environment' : 'missing',
+      target: request.target ? 'explicit' : targetFromContext ? 'editor_context' : targetFromEnv ? 'environment' : 'missing',
+    },
+  };
+}
+
+function buildProjectResolutionDiagnostics(resolved: ResolvedProjectInputs): string[] {
+  const diagnostics = [
+    `engine_root=${resolved.sources.engineRoot}`,
+    `project_path=${resolved.sources.projectPath}`,
+    `target=${resolved.sources.target}`,
+  ];
+
+  if (resolved.contextError) {
+    diagnostics.push(`editor_context_error=${resolved.contextError}`);
+  }
+
+  return diagnostics;
+}
+
+function explainProjectResolutionFailure(prefix: string, resolved: ResolvedProjectInputs): Error {
+  return new Error(`${prefix}; attempted explicit args -> editor context -> environment (${buildProjectResolutionDiagnostics(resolved).join(', ')})`);
 }
 
 // Tool 1: extract_blueprint
@@ -1870,6 +1989,12 @@ const BlueprintMemberMutationOperationSchema = z.enum([
   'compile',
 ]);
 
+const BlueprintGraphMutationOperationSchema = z.enum([
+  'upsert_function_graphs',
+  'append_function_call_to_sequence',
+  'compile',
+]);
+
 const UserDefinedStructFieldSchema = z.object({
   guid: z.string().optional(),
   name: z.string().optional(),
@@ -1954,7 +2079,10 @@ server.registerTool(
         'UE content path for the new WidgetBlueprint (e.g. /Game/UI/WBP_MyWidget)',
       ),
       parent_class: z.string().default('UserWidget').describe(
-        'Parent class name (e.g. UserWidget, CommonActivatableWidget, CommonButtonBase)',
+        'Compatibility alias for the parent widget class name or path (e.g. UserWidget, CommonActivatableWidget, /Script/MyModule.MyWidgetBase)',
+      ),
+      parent_class_path: z.string().optional().describe(
+        'Preferred explicit parent widget class path or short loaded class name.',
       ),
     },
     annotations: {
@@ -1965,11 +2093,11 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  async ({ asset_path, parent_class }) => {
+  async ({ asset_path, parent_class, parent_class_path }) => {
     try {
       const parsed = await callSubsystemJson('CreateWidgetBlueprint', {
         AssetPath: asset_path,
-        ParentClass: parent_class,
+        ParentClass: parent_class_path ?? parent_class,
       });
       return jsonToolSuccess(parsed);
     } catch (e) {
@@ -3107,6 +3235,30 @@ server.registerTool(
 );
 
 server.registerTool(
+  'get_project_automation_context',
+  {
+    title: 'Get Project Automation Context',
+    description: 'Read the current editor-derived project, engine, and target context used by project-control tools.',
+    inputSchema: {},
+    annotations: {
+      title: 'Get Project Automation Context',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async () => {
+    try {
+      const parsed = await getProjectAutomationContext(true);
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
   'compile_project_code',
   {
     title: 'Compile Project Code',
@@ -3144,18 +3296,28 @@ server.registerTool(
   },
   async ({ engine_root, project_path, target, platform, configuration, build_timeout_seconds, include_output }) => {
     try {
+      const resolved = await resolveProjectInputs({ engine_root, project_path, target });
       const parsed = await projectController.compileProjectCode({
-        engineRoot: engine_root,
-        projectPath: project_path,
-        target,
+        engineRoot: resolved.engineRoot,
+        projectPath: resolved.projectPath,
+        target: resolved.target,
         platform: platform as BuildPlatform | undefined,
         configuration: configuration as BuildConfiguration | undefined,
         buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
         includeOutput: include_output,
       });
-      return jsonToolSuccess(parsed);
+      return jsonToolSuccess({
+        ...parsed,
+        inputResolution: {
+          engineRoot: resolved.sources.engineRoot,
+          projectPath: resolved.sources.projectPath,
+          target: resolved.sources.target,
+          contextError: resolved.contextError,
+        },
+      });
     } catch (e) {
-      return jsonToolError(e);
+      const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+      return jsonToolError(explainProjectResolutionFailure(e instanceof Error ? e.message : String(e), resolved));
     }
   },
 );
@@ -3194,10 +3356,14 @@ server.registerTool(
       }
 
       const parsed = await callSubsystemJson('TriggerLiveCoding', {
-        ChangedPathsJson: JSON.stringify(changed_paths ?? []),
+        bEnableForSession: true,
         bWaitForCompletion: wait_for_completion,
       });
-      return jsonToolSuccess(parsed);
+      return jsonToolSuccess({
+        ...parsed,
+        changedPathsAccepted: changed_paths ?? [],
+        changedPathsAppliedByEditor: false,
+      });
     } catch (e) {
       return jsonToolError(e);
     }
@@ -3234,11 +3400,17 @@ server.registerTool(
   async ({ save_dirty_assets, wait_for_reconnect, disconnect_timeout_seconds, reconnect_timeout_seconds }) => {
     try {
       const restartRequest = await callSubsystemJson('RestartEditor', {
-        bSaveDirtyAssets: save_dirty_assets,
+        bWarn: false,
       });
 
+      cachedProjectAutomationContext = null;
+
       if (!wait_for_reconnect || restartRequest.success === false) {
-        return jsonToolSuccess(restartRequest);
+        return jsonToolSuccess({
+          ...restartRequest,
+          saveDirtyAssetsAccepted: save_dirty_assets,
+          saveDirtyAssetsAppliedByEditor: false,
+        });
       }
 
       const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
@@ -3248,6 +3420,8 @@ server.registerTool(
 
       return jsonToolSuccess({
         ...restartRequest,
+        saveDirtyAssetsAccepted: save_dirty_assets,
+        saveDirtyAssetsAppliedByEditor: false,
         reconnect,
         success: restartRequest.success !== false && reconnect.success,
       });
@@ -3328,11 +3502,18 @@ server.registerTool(
   }) => {
     try {
       const plan = projectController.classifyChangedPaths(changed_paths, force_rebuild);
+      const resolvedProjectInputs = await resolveProjectInputs({ engine_root, project_path, target });
       const structuredResult: Record<string, unknown> = {
         success: false,
         operation: 'sync_project_code',
         changedPaths: changed_paths,
         plan,
+        inputResolution: {
+          engineRoot: resolvedProjectInputs.sources.engineRoot,
+          projectPath: resolvedProjectInputs.sources.projectPath,
+          target: resolvedProjectInputs.sources.target,
+          contextError: resolvedProjectInputs.contextError,
+        },
       };
 
       if (plan.strategy === 'live_coding') {
@@ -3344,7 +3525,7 @@ server.registerTool(
           };
         } else {
           const liveCoding = await callSubsystemJson('TriggerLiveCoding', {
-            ChangedPathsJson: JSON.stringify(changed_paths),
+            bEnableForSession: true,
             bWaitForCompletion: true,
           });
 
@@ -3369,9 +3550,9 @@ server.registerTool(
       }
 
       const build = await projectController.compileProjectCode({
-        engineRoot: engine_root,
-        projectPath: project_path,
-        target,
+        engineRoot: resolvedProjectInputs.engineRoot,
+        projectPath: resolvedProjectInputs.projectPath,
+        target: resolvedProjectInputs.target,
         platform: platform as BuildPlatform | undefined,
         configuration: configuration as BuildConfiguration | undefined,
         buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
@@ -3396,9 +3577,11 @@ server.registerTool(
       }
 
       const restartRequest = await callSubsystemJson('RestartEditor', {
-        bSaveDirtyAssets: save_dirty_assets,
+        bWarn: false,
       });
+      cachedProjectAutomationContext = null;
       structuredResult.restartRequest = restartRequest;
+      structuredResult.restartRequestSaveDirtyAssetsAccepted = save_dirty_assets;
       if (restartRequest.success === false) {
         return jsonToolSuccess(structuredResult);
       }
@@ -3411,7 +3594,8 @@ server.registerTool(
       structuredResult.success = reconnect.success;
       return jsonToolSuccess(structuredResult);
     } catch (e) {
-      return jsonToolError(e);
+      const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+      return jsonToolError(explainProjectResolutionFailure(e instanceof Error ? e.message : String(e), resolved));
     }
   },
 );
@@ -3631,11 +3815,16 @@ server.registerTool(
           sync_project_code.changed_paths,
           sync_project_code.force_rebuild ?? false,
         );
+        const resolvedProjectInputs = await resolveProjectInputs({
+          engine_root: sync_project_code.engine_root,
+          project_path: sync_project_code.project_path,
+          target: sync_project_code.target,
+        });
         let needsBuildRestart = syncPlan.strategy === 'build_and_restart' || !projectController.liveCodingSupported;
 
         if (syncPlan.strategy === 'live_coding' && projectController.liveCodingSupported) {
           const liveCoding = await callSubsystemJson('TriggerLiveCoding', {
-            ChangedPathsJson: JSON.stringify(sync_project_code.changed_paths),
+            bEnableForSession: true,
             bWaitForCompletion: true,
           });
           if (!canFallbackFromLiveCoding(liveCoding)) {
@@ -3664,9 +3853,9 @@ server.registerTool(
 
         if (needsBuildRestart) {
           const build = await projectController.compileProjectCode({
-            engineRoot: sync_project_code.engine_root,
-            projectPath: sync_project_code.project_path,
-            target: sync_project_code.target,
+            engineRoot: resolvedProjectInputs.engineRoot,
+            projectPath: resolvedProjectInputs.projectPath,
+            target: resolvedProjectInputs.target,
             platform: sync_project_code.platform as BuildPlatform | undefined,
             configuration: sync_project_code.configuration as BuildConfiguration | undefined,
             buildTimeoutMs: typeof sync_project_code.build_timeout_seconds === 'number'
@@ -3677,6 +3866,12 @@ server.registerTool(
           steps.push({
             step: 'compile_project_code',
             result: build,
+            inputResolution: {
+              engineRoot: resolvedProjectInputs.sources.engineRoot,
+              projectPath: resolvedProjectInputs.sources.projectPath,
+              target: resolvedProjectInputs.sources.target,
+              contextError: resolvedProjectInputs.contextError,
+            },
           });
           if (!build.success) {
             return jsonToolSuccess({
@@ -3688,8 +3883,9 @@ server.registerTool(
           }
 
           const restartRequest = await callSubsystemJson('RestartEditor', {
-            bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
+            bWarn: false,
           });
+          cachedProjectAutomationContext = null;
           const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
             disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
             reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
@@ -3698,6 +3894,7 @@ server.registerTool(
             step: 'sync_project_code',
             strategy: 'build_and_restart',
             restartRequest,
+            saveDirtyAssetsAccepted: sync_project_code.save_dirty_assets ?? true,
             reconnect,
           });
           if (restartRequest.success === false || !reconnect.success) {
@@ -4733,6 +4930,64 @@ RETURNS: JSON with validation and compile summaries, dirtyPackages, and diagnost
   async ({ asset_path, operation, payload, validate_only }) => {
     try {
       const parsed = await callSubsystemJson('ModifyBlueprintMembers', {
+        AssetPath: asset_path,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_blueprint_graphs',
+  {
+    title: 'Modify Blueprint Graphs',
+    description: `Modify explicit Blueprint graph authoring surfaces with rollback-safe apply semantics.
+
+USAGE:
+- operation="upsert_function_graphs": payload.functionGraphs or payload.functions adds or replaces only the named function graphs. Existing unrelated graphs are preserved.
+- operation="append_function_call_to_sequence": payload targets one existing graph and appends a function call node to a sequence node.
+- operation="compile": validates and recompiles the Blueprint graph state without saving it.
+
+RETURNS: JSON with validation and compile summaries, dirtyPackages, diagnostics, and rollback diagnostics when an apply/compile failure forced the package to reload from disk.`,
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Blueprint asset to modify.',
+      ),
+      operation: BlueprintGraphMutationOperationSchema.describe(
+        'Blueprint graph mutation operation to apply.',
+      ),
+      payload: z.object({
+        functionGraphs: z.array(JsonObjectSchema).optional(),
+        functions: z.array(JsonObjectSchema).optional(),
+        graphName: z.string().optional(),
+        functionName: z.string().optional(),
+        ownerClass: z.string().optional(),
+        sequenceNodeTitle: z.string().optional(),
+        posX: z.number().optional(),
+        posY: z.number().optional(),
+      }).passthrough().default({}).describe(
+        'Operation payload. Function-graph upserts accept extractor-adjacent graph objects keyed by graphName/functionName/name.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the mutation without changing the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Blueprint Graphs',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyBlueprintGraphs', {
         AssetPath: asset_path,
         Operation: operation,
         PayloadJson: JSON.stringify(payload ?? {}),

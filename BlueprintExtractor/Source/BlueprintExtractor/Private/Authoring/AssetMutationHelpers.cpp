@@ -6,6 +6,7 @@
 #include "Misc/PackageName.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/Package.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace AssetMutationHelpersInternal
@@ -116,6 +117,7 @@ static FString NormalizeAssetPackagePath(const FString& AssetPath)
 UObject* ResolveAssetByPath(const FString& AssetPath)
 {
 	const FString ObjectPath = NormalizeAssetObjectPath(AssetPath);
+	const FString PackagePath = NormalizeAssetPackagePath(AssetPath);
 	if (ObjectPath.IsEmpty())
 	{
 		return nullptr;
@@ -126,9 +128,45 @@ UObject* ResolveAssetByPath(const FString& AssetPath)
 		return ExistingAsset;
 	}
 
-	const FString PackagePath = NormalizeAssetPackagePath(AssetPath);
 	if (!PackagePath.IsEmpty())
 	{
+		const FString AssetName = FPackageName::GetLongPackageAssetName(PackagePath);
+		if (UPackage* ExistingPackage = FindPackage(nullptr, *PackagePath))
+		{
+			if (!AssetName.IsEmpty())
+			{
+				if (UObject* ExistingPackageAsset = StaticFindObject(UObject::StaticClass(), ExistingPackage, *AssetName))
+				{
+					return ExistingPackageAsset;
+				}
+			}
+		}
+
+		if (!AssetName.IsEmpty())
+		{
+			for (TObjectIterator<UObject> It; It; ++It)
+			{
+				UObject* Candidate = *It;
+				if (!Candidate || Candidate->HasAnyFlags(RF_ClassDefaultObject))
+				{
+					continue;
+				}
+
+				if (Candidate->GetPathName() == ObjectPath)
+				{
+					return Candidate;
+				}
+
+				if (UPackage* CandidatePackage = Candidate->GetOutermost())
+				{
+					if (CandidatePackage->GetName() == PackagePath && Candidate->GetName() == AssetName)
+					{
+						return Candidate;
+					}
+				}
+			}
+		}
+
 		TArray<FAssetData> AssetDatas;
 		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
 		AssetRegistryModule.Get().GetAssetsByPackageName(FName(*PackagePath), AssetDatas, true);
@@ -248,9 +286,19 @@ TSharedPtr<FJsonObject> FAssetMutationContext::BuildResult(const bool bSuccess) 
 	using namespace AssetMutationHelpersInternal;
 
 	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	const FString ObjectPath = NormalizeAssetObjectPath(AssetPath);
+	const FString PackagePath = NormalizeAssetPackagePath(AssetPath);
 	Result->SetBoolField(TEXT("success"), bSuccess);
 	Result->SetStringField(TEXT("operation"), Operation);
 	Result->SetStringField(TEXT("assetPath"), AssetPath);
+	if (!PackagePath.IsEmpty())
+	{
+		Result->SetStringField(TEXT("packagePath"), PackagePath);
+	}
+	if (!ObjectPath.IsEmpty())
+	{
+		Result->SetStringField(TEXT("objectPath"), ObjectPath);
+	}
 	Result->SetStringField(TEXT("assetClass"), AssetClass);
 	Result->SetBoolField(TEXT("saved"), false);
 	Result->SetBoolField(TEXT("validateOnly"), bValidateOnly);

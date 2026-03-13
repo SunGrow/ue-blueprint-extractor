@@ -372,6 +372,13 @@ public:
 	                               const FString& PayloadJson = TEXT(""),
 	                               const bool bValidateOnly = false);
 
+	/** Applies targeted graph-authoring operations to an existing Blueprint asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyBlueprintGraphs(const FString& AssetPath,
+	                              const FString& Operation,
+	                              const FString& PayloadJson = TEXT(""),
+	                              const bool bValidateOnly = false);
+
 	/** Enqueues a generic async import job. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ImportAssets(const FString& PayloadJson, const bool bValidateOnly = false);

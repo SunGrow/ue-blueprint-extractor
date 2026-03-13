@@ -129,7 +129,7 @@ describe('createBlueprintExtractorServer', () => {
     const saveAssets = tools.tools.find((tool) => tool.name === 'save_assets');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(2);
-    expect(tools.tools).toHaveLength(70);
+    expect(tools.tools).toHaveLength(72);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -154,10 +154,12 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'modify_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compile_material_asset')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compile_project_code')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'get_project_automation_context')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'trigger_live_coding')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_blueprint_graphs')).toBe(true);
     expect(extractBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractWidgetBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractMaterial?.annotations?.readOnlyHint).toBe(true);
@@ -480,6 +482,91 @@ describe('createBlueprintExtractorServer', () => {
             },
           }),
           bValidateOnly: false,
+        },
+      },
+    ]);
+  });
+
+  it('routes explicit Blueprint graph mutations through the graph authoring API', async () => {
+    const fakeClient = new FakeUEClient((method, params) => JSON.stringify({
+      success: true,
+      operation: 'modify_blueprint_graphs',
+      assetPath: params.AssetPath,
+      widgetOperation: params.Operation,
+      functionGraphs: ['ForcedRallyServeMode_WidgetInitialize', 'ForcedRallyServeMode_UpdateAfterChanges'],
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const upsertGraphs = await harness.client.callTool({
+      name: 'modify_blueprint_graphs',
+      arguments: {
+        asset_path: '/Game/Test/BP_SettingsLogic',
+        operation: 'upsert_function_graphs',
+        payload: {
+          functionGraphs: [
+            { graphName: 'ForcedRallyServeMode_WidgetInitialize', category: 'Settings' },
+            { graphName: 'ForcedRallyServeMode_UpdateAfterChanges', category: 'Settings' },
+          ],
+        },
+      },
+    });
+    const appendCall = await harness.client.callTool({
+      name: 'modify_blueprint_graphs',
+      arguments: {
+        asset_path: '/Game/Test/BP_SettingsLogic',
+        operation: 'append_function_call_to_sequence',
+        payload: {
+          graphName: 'BpInitialize',
+          functionName: 'ForcedRallyServeMode_UpdateAfterChanges',
+          sequenceNodeTitle: 'Sequence',
+          posX: 256,
+          posY: 144,
+        },
+        validate_only: true,
+      },
+    });
+
+    expect(JSON.parse(getTextContent(upsertGraphs))).toMatchObject({
+      success: true,
+      operation: 'modify_blueprint_graphs',
+      functionGraphs: [
+        'ForcedRallyServeMode_WidgetInitialize',
+        'ForcedRallyServeMode_UpdateAfterChanges',
+      ],
+    });
+    expect(JSON.parse(getTextContent(appendCall))).toMatchObject({
+      success: true,
+      operation: 'modify_blueprint_graphs',
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ModifyBlueprintGraphs',
+        params: {
+          AssetPath: '/Game/Test/BP_SettingsLogic',
+          Operation: 'upsert_function_graphs',
+          PayloadJson: JSON.stringify({
+            functionGraphs: [
+              { graphName: 'ForcedRallyServeMode_WidgetInitialize', category: 'Settings' },
+              { graphName: 'ForcedRallyServeMode_UpdateAfterChanges', category: 'Settings' },
+            ],
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'ModifyBlueprintGraphs',
+        params: {
+          AssetPath: '/Game/Test/BP_SettingsLogic',
+          Operation: 'append_function_call_to_sequence',
+          PayloadJson: JSON.stringify({
+            graphName: 'BpInitialize',
+            functionName: 'ForcedRallyServeMode_UpdateAfterChanges',
+            sequenceNodeTitle: 'Sequence',
+            posX: 256,
+            posY: 144,
+          }),
+          bValidateOnly: true,
         },
       },
     ]);
@@ -822,6 +909,86 @@ describe('createBlueprintExtractorServer', () => {
     ]);
   });
 
+  it('fills missing compile_project_code inputs from editor automation context before env fallback', async () => {
+    const fakeClient = new FakeUEClient((method) => {
+      if (method === 'GetProjectAutomationContext') {
+        return JSON.stringify({
+          success: true,
+          operation: 'get_project_automation_context',
+          engineRoot: 'C:/Epic/UE_5.7',
+          projectFilePath: 'C:/Projects/MyGame/MyGame.uproject',
+          editorTarget: 'MyGameEditor',
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const fakeController = new FakeProjectController();
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'compile_project_code',
+      arguments: {},
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      operation: 'compile_project_code',
+      inputResolution: {
+        engineRoot: 'editor_context',
+        projectPath: 'editor_context',
+        target: 'editor_context',
+      },
+    });
+    expect(fakeController.compileCalls).toEqual([
+      {
+        engineRoot: 'C:/Epic/UE_5.7',
+        projectPath: 'C:/Projects/MyGame/MyGame.uproject',
+        target: 'MyGameEditor',
+        platform: undefined,
+        configuration: undefined,
+        buildTimeoutMs: undefined,
+        includeOutput: false,
+      },
+    ]);
+  });
+
+  it('exposes editor-derived project automation context directly', async () => {
+    const fakeClient = new FakeUEClient((method) => {
+      if (method === 'GetProjectAutomationContext') {
+        return JSON.stringify({
+          success: true,
+          operation: 'get_project_automation_context',
+          engineRoot: 'C:/Epic/UE_5.7',
+          projectFilePath: 'C:/Projects/MyGame/MyGame.uproject',
+          editorTarget: 'MyGameEditor',
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'get_project_automation_context',
+      arguments: {},
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      operation: 'get_project_automation_context',
+      engineRoot: 'C:/Epic/UE_5.7',
+      projectFilePath: 'C:/Projects/MyGame/MyGame.uproject',
+      editorTarget: 'MyGameEditor',
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'GetProjectAutomationContext',
+        params: {},
+      },
+    ]);
+  });
+
   it('returns generic live coding failures without falling back to build-and-restart', async () => {
     const fakeClient = new FakeUEClient((method) => {
       if (method === 'TriggerLiveCoding') {
@@ -937,6 +1104,31 @@ describe('createBlueprintExtractorServer', () => {
       {
         disconnectTimeoutMs: 60000,
         reconnectTimeoutMs: 180000,
+      },
+    ]);
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'GetProjectAutomationContext',
+        params: {},
+      },
+      {
+        method: 'TriggerLiveCoding',
+        params: {
+          bEnableForSession: true,
+          bWaitForCompletion: true,
+        },
+      },
+      {
+        method: 'SaveAssets',
+        params: {
+          AssetPathsJson: JSON.stringify(['/Game/UI/WBP_Window']),
+        },
+      },
+      {
+        method: 'RestartEditor',
+        params: {
+          bWarn: false,
+        },
       },
     ]);
   });

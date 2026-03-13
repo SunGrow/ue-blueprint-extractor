@@ -152,6 +152,52 @@ describe('UEClient', () => {
     );
   });
 
+  it('re-discovers the subsystem path once when a discovered path fails mid-call', async () => {
+    let searchAttempts = 0;
+    const server = await startMockRemoteControlServer({
+      onCall: (request) => {
+        if (request.functionName === 'ListAssets' && request.objectPath === '/Script/Test.BadPath') {
+          return { status: 404, body: { error: 'missing' } };
+        }
+
+        if (request.functionName === 'ListAssets' && request.objectPath === '/Script/Test.GoodPath') {
+          return { body: { ReturnValue: '[]' } };
+        }
+
+        if (request.functionName === 'SearchAssets' && request.objectPath === '/Script/Test.GoodPath') {
+          searchAttempts += 1;
+          if (searchAttempts === 1) {
+            return { status: 404, body: { error: 'stale path' } };
+          }
+
+          return { body: { ReturnValue: JSON.stringify([{ path: '/Game/Test/BP_Player' }]) } };
+        }
+
+        return { status: 404, body: { error: 'unexpected' } };
+      },
+    });
+    servers.push(server);
+
+    const client = new UEClient({
+      host: server.host,
+      port: server.port,
+      candidatePaths: ['/Script/Test.BadPath', '/Script/Test.GoodPath'],
+      timeoutMs: 200,
+    });
+
+    const result = await client.callSubsystem('SearchAssets', { Query: 'Player' });
+
+    expect(JSON.parse(result)).toEqual([{ path: '/Game/Test/BP_Player' }]);
+    expect(server.requests.map((request) => [request.objectPath, request.functionName])).toEqual([
+      ['/Script/Test.BadPath', 'ListAssets'],
+      ['/Script/Test.GoodPath', 'ListAssets'],
+      ['/Script/Test.GoodPath', 'SearchAssets'],
+      ['/Script/Test.BadPath', 'ListAssets'],
+      ['/Script/Test.GoodPath', 'ListAssets'],
+      ['/Script/Test.GoodPath', 'SearchAssets'],
+    ]);
+  });
+
   it('times out hung subsystem calls', async () => {
     const server = await startMockRemoteControlServer({
       onCall: async () => {

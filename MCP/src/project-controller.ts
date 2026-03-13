@@ -70,6 +70,11 @@ export interface RestartReconnectResult {
 
 export type ProbeConnection = (() => Promise<boolean>) | null;
 
+export interface CommandInvocation {
+  executable: string;
+  args: string[];
+}
+
 export interface CommandRunner {
   (
     executable: string,
@@ -106,6 +111,47 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
+function isWindowsBatchScript(executable: string, platform: NodeJS.Platform): boolean {
+  return platform === 'win32' && /\.(bat|cmd)$/iu.test(executable);
+}
+
+function quoteWindowsCommandArg(value: string): string {
+  if (value.length === 0) {
+    return '""';
+  }
+
+  if (!/[\s"]/u.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/"/gu, '""')}"`;
+}
+
+export function resolveCommandInvocation(
+  executable: string,
+  args: string[],
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv = process.env,
+): CommandInvocation {
+  if (!isWindowsBatchScript(executable, platform)) {
+    return {
+      executable,
+      args,
+    };
+  }
+
+  const commandLine = [
+    'call',
+    quoteWindowsCommandArg(executable),
+    ...args.map(quoteWindowsCommandArg),
+  ].join(' ');
+
+  return {
+    executable: env.ComSpec || 'cmd.exe',
+    args: ['/d', '/s', '/c', commandLine],
+  };
+}
+
 async function defaultRunCommand(
   executable: string,
   args: string[],
@@ -116,10 +162,17 @@ async function defaultRunCommand(
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return await new Promise((resolveRun, rejectRun) => {
-    const child = spawn(executable, args, {
+    const invocation = resolveCommandInvocation(
+      executable,
+      args,
+      process.platform,
+      options.env ?? process.env,
+    );
+    const child = spawn(invocation.executable, invocation.args, {
       cwd: options.cwd,
       env: options.env,
       shell: false,
+      windowsVerbatimArguments: isWindowsBatchScript(executable, process.platform),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

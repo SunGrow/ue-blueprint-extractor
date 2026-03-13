@@ -1,6 +1,7 @@
 #include "Builders/WidgetTreeBuilder.h"
 
 #include "Authoring/AssetMutationHelpers.h"
+#include "Authoring/AuthoringHelpers.h"
 #include "Authoring/BlueprintAuthoring.h"
 #include "Extractors/WidgetTreeExtractor.h"
 #include "PropertySerializer.h"
@@ -35,8 +36,12 @@
 #include "Logging/TokenizedMessage.h"
 
 #include "CoreGlobals.h"
+#include "Misc/PackageName.h"
 #include "UObject/UnrealType.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/Package.h"
+
+#include <initializer_list>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,6 +56,36 @@ static TSharedPtr<FJsonObject> MakeErrorResult(const FString& ErrorMessage)
 	Result->SetBoolField(TEXT("success"), false);
 	Result->SetStringField(TEXT("error"), ErrorMessage);
 	return Result;
+}
+
+static void AddAssetPathFields(const TSharedPtr<FJsonObject>& Result, const FString& AssetPath)
+{
+	if (!Result.IsValid())
+	{
+		return;
+	}
+
+	const FString ObjectPath = NormalizeAssetObjectPath(AssetPath);
+	FString PackagePath = ObjectPath;
+	if (FPackageName::IsValidObjectPath(ObjectPath))
+	{
+		PackagePath = FPackageName::ObjectPathToPackageName(ObjectPath);
+	}
+
+	if (!PackagePath.IsEmpty())
+	{
+		Result->SetStringField(TEXT("packagePath"), PackagePath);
+	}
+
+	if (!ObjectPath.IsEmpty())
+	{
+		Result->SetStringField(TEXT("objectPath"), ObjectPath);
+	}
+}
+
+static void AddAssetPathFields(const TSharedPtr<FJsonObject>& Result, const UObject* Asset)
+{
+	AddAssetPathFields(Result, Asset ? Asset->GetPathName() : FString());
 }
 
 static TSharedPtr<FJsonObject> MakeErrorResult(const FString& ErrorMessage, const TArray<FString>& Errors)
@@ -387,17 +422,75 @@ static UClass* ResolveWidgetClassByName(const FString& ClassName)
 		return nullptr;
 	}
 
-	UClass* Resolved = nullptr;
-
-	const bool bIsFullPath = ClassName.StartsWith(TEXT("/"));
-	if (bIsFullPath)
+	auto IsSupportedWidgetClass = [](UClass* Candidate) -> bool
 	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *ClassName);
-		if (Resolved && Resolved->IsChildOf(UWidget::StaticClass()))
+		return Candidate && Candidate->IsChildOf(UWidget::StaticClass());
+	};
+	auto GetBlueprintWidgetClass = [&IsSupportedWidgetClass](const UWidgetBlueprint* WidgetBlueprint) -> UClass*
+	{
+		if (!WidgetBlueprint)
 		{
-			return Resolved;
+			return nullptr;
 		}
-		return nullptr;
+
+		UClass* CandidateClass = WidgetBlueprint->GeneratedClass
+			? WidgetBlueprint->GeneratedClass
+			: WidgetBlueprint->SkeletonGeneratedClass;
+		return IsSupportedWidgetClass(CandidateClass) ? CandidateClass : nullptr;
+	};
+	auto NormalizeWidgetBlueprintLookupPath = [](const FString& InputPath) -> FString
+	{
+		if (InputPath.EndsWith(TEXT("_C")))
+		{
+			return InputPath.LeftChop(2);
+		}
+
+		return InputPath;
+	};
+
+	UClass* Resolved = FAuthoringHelpers::ResolveClass(ClassName, UWidget::StaticClass());
+	if (IsSupportedWidgetClass(Resolved))
+	{
+		return Resolved;
+	}
+
+	if (ClassName.StartsWith(TEXT("/")))
+	{
+		const FString BlueprintLookupPath = NormalizeWidgetBlueprintLookupPath(ClassName);
+		const FString WidgetBlueprintObjectPath = NormalizeAssetObjectPath(BlueprintLookupPath);
+		FString WidgetBlueprintPackagePath = WidgetBlueprintObjectPath;
+		if (FPackageName::IsValidObjectPath(WidgetBlueprintObjectPath))
+		{
+			WidgetBlueprintPackagePath = FPackageName::ObjectPathToPackageName(WidgetBlueprintObjectPath);
+		}
+
+		for (TObjectIterator<UWidgetBlueprint> It; It; ++It)
+		{
+			const UWidgetBlueprint* Candidate = *It;
+			if (!Candidate || Candidate->HasAnyFlags(RF_ClassDefaultObject))
+			{
+				continue;
+			}
+
+			if (Candidate->GetPathName() == WidgetBlueprintObjectPath
+				|| Candidate->GetOutermost()->GetName() == WidgetBlueprintPackagePath)
+			{
+				Resolved = GetBlueprintWidgetClass(Candidate);
+				if (Resolved)
+				{
+					return Resolved;
+				}
+			}
+		}
+
+		if (const UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(ResolveAssetByPath(BlueprintLookupPath)))
+		{
+			Resolved = GetBlueprintWidgetClass(WidgetBlueprint);
+			if (Resolved)
+			{
+				return Resolved;
+			}
+		}
 	}
 
 	const FString UPrefixedName = TEXT("U") + ClassName;
@@ -423,7 +516,30 @@ static UClass* ResolveWidgetClassByName(const FString& ClassName)
 		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/CommonUI.") + ClassName));
 	}
 
-	if (Resolved && !Resolved->IsChildOf(UWidget::StaticClass()))
+	if (!Resolved)
+	{
+		const FString BlueprintGeneratedName = ClassName.EndsWith(TEXT("_C")) ? ClassName : ClassName + TEXT("_C");
+		for (TObjectIterator<UClass> It; It; ++It)
+		{
+			UClass* Candidate = *It;
+			if (!IsSupportedWidgetClass(Candidate))
+			{
+				continue;
+			}
+
+			const FString CandidateName = Candidate->GetName();
+			if (CandidateName == ClassName
+				|| CandidateName == UPrefixedName
+				|| CandidateName == BlueprintGeneratedName
+				|| Candidate->GetFName().ToString() == ClassName)
+			{
+				Resolved = Candidate;
+				break;
+			}
+		}
+	}
+
+	if (!IsSupportedWidgetClass(Resolved))
 	{
 		return nullptr;
 	}
@@ -779,11 +895,77 @@ static TSharedPtr<FJsonObject> NormalizeSlotJson(const TSharedPtr<FJsonObject>& 
 
 	NormalizedSlot->RemoveField(TEXT("slotClass"));
 	MoveJsonFieldIfPresent(NormalizedSlot, TEXT("size"), TEXT("Size"));
+	MoveJsonFieldIfPresent(NormalizedSlot, TEXT("AutoSize"), TEXT("bAutoSize"));
+	MoveJsonFieldIfPresent(NormalizedSlot, TEXT("autoSize"), TEXT("bAutoSize"));
+	MoveJsonFieldIfPresent(NormalizedSlot, TEXT("auto_size"), TEXT("bAutoSize"));
+	MoveJsonFieldIfPresent(NormalizedSlot, TEXT("zOrder"), TEXT("ZOrder"));
+	MoveJsonFieldIfPresent(NormalizedSlot, TEXT("z_order"), TEXT("ZOrder"));
 
 	const TSharedPtr<FJsonObject>* SizeJson = nullptr;
 	if (NormalizedSlot->TryGetObjectField(TEXT("Size"), SizeJson) && SizeJson && SizeJson->IsValid())
 	{
 		NormalizeSlateChildSizeJson(*SizeJson);
+	}
+
+	const bool bHasCanvasLayoutAliases =
+		NormalizedSlot->HasField(TEXT("Anchors"))
+		|| NormalizedSlot->HasField(TEXT("anchors"))
+		|| NormalizedSlot->HasField(TEXT("Offsets"))
+		|| NormalizedSlot->HasField(TEXT("offsets"))
+		|| NormalizedSlot->HasField(TEXT("Alignment"))
+		|| NormalizedSlot->HasField(TEXT("alignment"))
+		|| NormalizedSlot->HasField(TEXT("AutoSize"))
+		|| NormalizedSlot->HasField(TEXT("autoSize"))
+		|| NormalizedSlot->HasField(TEXT("auto_size"))
+		|| NormalizedSlot->HasField(TEXT("ZOrder"))
+		|| NormalizedSlot->HasField(TEXT("zOrder"))
+		|| NormalizedSlot->HasField(TEXT("z_order"));
+	if (bHasCanvasLayoutAliases)
+	{
+		TSharedPtr<FJsonObject> LayoutDataObject;
+		if (const TSharedPtr<FJsonObject>* ExistingLayoutData = nullptr;
+			NormalizedSlot->TryGetObjectField(TEXT("LayoutData"), ExistingLayoutData)
+			&& ExistingLayoutData
+			&& ExistingLayoutData->IsValid())
+		{
+			LayoutDataObject = CloneJsonObject(*ExistingLayoutData);
+		}
+		else
+		{
+			LayoutDataObject = MakeShared<FJsonObject>();
+		}
+
+		auto MoveAnySlotFieldToLayoutData = [&NormalizedSlot, &LayoutDataObject](
+			const TCHAR* TargetField,
+			std::initializer_list<const TCHAR*> SourceFields)
+		{
+			if (!LayoutDataObject.IsValid())
+			{
+				return;
+			}
+
+			if (!LayoutDataObject->HasField(TargetField))
+			{
+				for (const TCHAR* SourceField : SourceFields)
+				{
+					if (const TSharedPtr<FJsonValue> ExistingValue = NormalizedSlot->TryGetField(SourceField))
+					{
+						LayoutDataObject->SetField(TargetField, ExistingValue);
+						break;
+					}
+				}
+			}
+
+			for (const TCHAR* SourceField : SourceFields)
+			{
+				NormalizedSlot->RemoveField(SourceField);
+			}
+		};
+
+		MoveAnySlotFieldToLayoutData(TEXT("Anchors"), { TEXT("Anchors"), TEXT("anchors") });
+		MoveAnySlotFieldToLayoutData(TEXT("Offsets"), { TEXT("Offsets"), TEXT("offsets") });
+		MoveAnySlotFieldToLayoutData(TEXT("Alignment"), { TEXT("Alignment"), TEXT("alignment") });
+		NormalizedSlot->SetObjectField(TEXT("LayoutData"), LayoutDataObject);
 	}
 
 	return NormalizedSlot;
@@ -1318,49 +1500,22 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 {
 	using namespace WidgetTreeBuilderInternal;
 
-	FAssetMutationContext Context(TEXT("create_widget_blueprint"), AssetPath, TEXT("WidgetBlueprint"), false);
+	const FString PackageAssetPath = FPackageName::IsValidObjectPath(AssetPath)
+		? FPackageName::ObjectPathToPackageName(AssetPath)
+		: AssetPath;
+	FAssetMutationContext Context(TEXT("create_widget_blueprint"), PackageAssetPath, TEXT("WidgetBlueprint"), false);
 
 	// Determine the parent class name — default to UserWidget
 	const FString EffectiveClassName = ParentClassName.IsEmpty() ? TEXT("UserWidget") : ParentClassName;
 
 	// Resolve the parent class
-	UClass* ParentClass = nullptr;
-	{
-		// Try: "U" + name via FindFirstObject
-		const FString UPrefixedName = TEXT("U") + EffectiveClassName;
-		ParentClass = FindObject<UClass>(static_cast<UObject*>(nullptr), *UPrefixedName);
-
-		if (!ParentClass)
-		{
-			ParentClass = FindObject<UClass>(static_cast<UObject*>(nullptr), *EffectiveClassName);
-		}
-
-		// Try: StaticLoadClass in UMG (without U prefix — UObject names don't have it)
-		if (!ParentClass)
-		{
-			ParentClass = StaticLoadClass(UUserWidget::StaticClass(), nullptr,
-				*(TEXT("/Script/UMG.") + EffectiveClassName));
-		}
-
-		// Try: StaticLoadClass in CommonUI
-		if (!ParentClass)
-		{
-			ParentClass = StaticLoadClass(UUserWidget::StaticClass(), nullptr,
-				*(TEXT("/Script/CommonUI.") + EffectiveClassName));
-		}
-
-		if (!ParentClass)
-		{
-			// Try full path in case user passed one
-			ParentClass = StaticLoadClass(UUserWidget::StaticClass(), nullptr, *EffectiveClassName);
-		}
-	}
+	UClass* ParentClass = ResolveWidgetClassByName(EffectiveClassName);
 
 	if (!ParentClass)
 	{
 		Context.AddError(TEXT("parent_class_not_found"),
 		                 FString::Printf(TEXT("Parent class not found: %s"), *EffectiveClassName),
-		                 AssetPath);
+		                 PackageAssetPath);
 		return Context.BuildResult(false);
 	}
 
@@ -1371,28 +1526,28 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 			Context.AddError(TEXT("invalid_parent_class"),
 			                 FString::Printf(TEXT("Parent class '%s' is not a subclass of UUserWidget"),
 			                 *ParentClass->GetName()),
-			                 AssetPath);
+			                 PackageAssetPath);
 			return Context.BuildResult(false);
 		}
 	}
 
-	if (DoesAssetExist(AssetPath))
+	if (DoesAssetExist(PackageAssetPath))
 	{
 		Context.AddError(TEXT("asset_exists"),
-		                 FString::Printf(TEXT("Asset already exists: %s"), *AssetPath),
-		                 AssetPath);
+		                 FString::Printf(TEXT("Asset already exists: %s"), *PackageAssetPath),
+		                 PackageAssetPath);
 		return Context.BuildResult(false);
 	}
 
 	Context.BeginTransaction(FText::FromString(TEXT("Create Widget Blueprint")));
 
 	// Create the package
-	UPackage* Package = CreatePackage(*AssetPath);
-	if (!ensureMsgf(Package, TEXT("WidgetTreeBuilder: Failed to create package at '%s'"), *AssetPath))
+	UPackage* Package = CreatePackage(*PackageAssetPath);
+	if (!ensureMsgf(Package, TEXT("WidgetTreeBuilder: Failed to create package at '%s'"), *PackageAssetPath))
 	{
 		Context.AddError(TEXT("package_create_failed"),
-		                 FString::Printf(TEXT("Failed to create package at: %s"), *AssetPath),
-		                 AssetPath);
+		                 FString::Printf(TEXT("Failed to create package at: %s"), *PackageAssetPath),
+		                 PackageAssetPath);
 		return Context.BuildResult(false);
 	}
 
@@ -1405,7 +1560,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 	}
 	Factory->ParentClass = ParentClass;
 
-	const FName AssetName = FPackageName::GetShortFName(AssetPath);
+	const FName AssetName = FPackageName::GetShortFName(PackageAssetPath);
 	UObject* CreatedAsset = Factory->FactoryCreateNew(
 		UWidgetBlueprint::StaticClass(),
 		Package,
@@ -1417,8 +1572,8 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 	if (!CreatedAsset)
 	{
 		Context.AddError(TEXT("factory_create_new_failed"),
-		                 FString::Printf(TEXT("FactoryCreateNew failed for: %s"), *AssetPath),
-		                 AssetPath);
+		                 FString::Printf(TEXT("FactoryCreateNew failed for: %s"), *PackageAssetPath),
+		                 PackageAssetPath);
 		return Context.BuildResult(false);
 	}
 
@@ -1429,7 +1584,8 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 	Context.SetValidationSummary(true, TEXT("WidgetBlueprint creation inputs validated."));
 
 	const TSharedPtr<FJsonObject> Result = Context.BuildResult(true);
-	Result->SetStringField(TEXT("assetPath"), AssetPath);
+	Result->SetStringField(TEXT("assetPath"), PackageAssetPath);
+	AddAssetPathFields(Result, CreatedAsset);
 	Result->SetStringField(TEXT("parentClass"), ParentClass->GetName());
 	return Result;
 }
@@ -1452,6 +1608,7 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBluepr
 	Result->SetBoolField(TEXT("success"), true);
 	Result->SetStringField(TEXT("operation"), TEXT("extract_widget_blueprint"));
 	Result->SetStringField(TEXT("assetPath"), WidgetBP->GetPathName());
+	AddAssetPathFields(Result, WidgetBP);
 	Result->SetStringField(TEXT("assetClass"), TEXT("WidgetBlueprint"));
 	Result->SetStringField(TEXT("parentClass"), WidgetBP->ParentClass ? WidgetBP->ParentClass->GetName() : FString());
 	Result->SetStringField(TEXT("parentClassPath"), WidgetBP->ParentClass ? WidgetBP->ParentClass->GetPathName() : FString());
