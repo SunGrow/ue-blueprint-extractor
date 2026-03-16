@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
 	"Version": 2,
-	"VersionName": "1.2",
+	"VersionName": "2.0.0",
 	"FriendlyName": "Blueprint Extractor",
-	"Description": "Extracts Blueprint, AI, data, material, curve, and animation assets to structured JSON",
+	"Description": "Extracts and authors Blueprint, UI, Enhanced Input, AI, data, material, curve, and animation assets through structured JSON and MCP tools",
 	"Category": "Editor",
 	"CreatedBy": "",
 	"EnabledByDefault": true,
@@ -17,6 +17,10 @@
 		},
 		{
 			"Name": "PropertyBindingUtils",
+			"Enabled": true
+		},
+		{
+			"Name": "EnhancedInput",
 			"Enabled": true
 		},
 		{

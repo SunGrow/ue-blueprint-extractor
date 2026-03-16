@@ -14,14 +14,526 @@ import {
 
 export type UEClientLike = Pick<UEClient, 'callSubsystem'> & Partial<Pick<UEClient, 'checkConnection'>>;
 
+const serverInstructions = [
+  'Blueprint Extractor MCP v2 exposes explicit snake_case tool arguments, prompt workflows, and structured JSON tool results.',
+  'Use search_assets before extract_* tools when the exact asset path is not already known.',
+  'For UI redesign work, inspect the current HUD, transition widgets, and class defaults before replacing widget trees.',
+  'Write tools mutate the running editor but do not save automatically. Call save_assets after successful mutations you want to persist.',
+  'Prefer validate_only=true the first time you author a new asset family or payload shape.',
+  'Use the composable material tools for settings, node creation, node connection, and root-property binding. Treat modify_material and modify_material_function as advanced escape hatches.',
+  'Use create_input_action, modify_input_action, create_input_mapping_context, and modify_input_mapping_context for Enhanced Input authoring. Generic data asset mutation is intentionally rejected for those asset classes.',
+  'Successful tool results mirror the same JSON in structuredContent and text. Recoverable execution failures return isError=true with code, message, recoverable, and next_steps.',
+].join('\n');
+
+const taskAwareTools = new Set([
+  'compile_project_code',
+  'trigger_live_coding',
+  'restart_editor',
+  'sync_project_code',
+  'import_assets',
+  'reimport_assets',
+  'get_import_job',
+  'list_import_jobs',
+  'import_textures',
+  'import_meshes',
+]);
+
+type ToolExample = {
+  title: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+};
+
+type ExampleFamily = {
+  summary: string;
+  recommended_flow: string[];
+  examples: ToolExample[];
+};
+
+type PromptCatalogEntry = {
+  title: string;
+  description: string;
+  args: Record<string, z.ZodTypeAny>;
+  buildPrompt: (args: Record<string, unknown>) => string;
+};
+
+export const exampleCatalog: Record<string, ExampleFamily> = {
+  widget_blueprint: {
+    summary: 'Inspect the current widget, apply the smallest structural change that solves the layout problem, compile, then save.',
+    recommended_flow: [
+      'extract_widget_blueprint',
+      'modify_widget_blueprint',
+      'compile_widget_blueprint',
+      'save_assets',
+    ],
+    examples: [
+      {
+        title: 'patch_title_text',
+        tool: 'modify_widget_blueprint',
+        arguments: {
+          asset_path: '/Game/UI/WBP_Window',
+          operation: 'patch_widget',
+          widget_path: 'WindowRoot/TitleBar/TitleText',
+          properties: { Text: 'Window' },
+          compile_after: true,
+        },
+      },
+      {
+        title: 'insert_body_text',
+        tool: 'modify_widget_blueprint',
+        arguments: {
+          asset_path: '/Game/UI/WBP_Window',
+          operation: 'batch',
+          operations: [
+            {
+              operation: 'insert_child',
+              parent_widget_path: 'WindowRoot/ContentRoot',
+              child_widget: {
+                class: 'TextBlock',
+                name: 'BodyText',
+                is_variable: true,
+                properties: { Text: 'Hello' },
+              },
+            },
+          ],
+        },
+      },
+    ],
+  },
+  material: {
+    summary: 'Use the composable material tools first. They emit the same graph operations under the hood without exposing the full batch DSL.',
+    recommended_flow: [
+      'create_material',
+      'set_material_settings',
+      'add_material_expression',
+      'bind_material_property',
+      'extract_material',
+      'save_assets',
+    ],
+    examples: [
+      {
+        title: 'set_opaque_defaults',
+        tool: 'set_material_settings',
+        arguments: {
+          asset_path: '/Game/Materials/M_ButtonBase',
+          settings: {
+            blend_mode: 'BLEND_Opaque',
+            two_sided: false,
+          },
+        },
+      },
+      {
+        title: 'add_albedo_sampler',
+        tool: 'add_material_expression',
+        arguments: {
+          asset_path: '/Game/Materials/M_ButtonBase',
+          expression_class: '/Script/Engine.MaterialExpressionTextureSampleParameter2D',
+          expression_name: 'AlbedoSample',
+          expression_properties: {
+            ParameterName: 'Albedo',
+            Texture: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+          },
+          node_position: {
+            x: -480,
+            y: -120,
+          },
+        },
+      },
+      {
+        title: 'bind_base_color',
+        tool: 'bind_material_property',
+        arguments: {
+          asset_path: '/Game/Materials/M_ButtonBase',
+          from_expression: 'AlbedoSample',
+          from_output_name: 'RGB',
+          material_property: 'MP_BaseColor',
+        },
+      },
+    ],
+  },
+  enhanced_input: {
+    summary: 'Author InputAction and InputMappingContext assets through the dedicated Enhanced Input tools, not the generic DataAsset path.',
+    recommended_flow: [
+      'create_input_action',
+      'create_input_mapping_context',
+      'modify_input_mapping_context',
+      'save_assets',
+    ],
+    examples: [
+      {
+        title: 'create_jump_action',
+        tool: 'create_input_action',
+        arguments: {
+          asset_path: '/Game/Input/IA_Jump',
+          value_type: 'boolean',
+          properties: {
+            action_description: 'Jump action',
+            consume_input: true,
+          },
+        },
+      },
+      {
+        title: 'bind_spacebar_to_jump',
+        tool: 'modify_input_mapping_context',
+        arguments: {
+          asset_path: '/Game/Input/IMC_Player',
+          replace_mappings: true,
+          mappings: [
+            {
+              action: '/Game/Input/IA_Jump.IA_Jump',
+              key: 'SpaceBar',
+            },
+          ],
+        },
+      },
+    ],
+  },
+  window_ui_polish: {
+    summary: 'Use the thin sequencing helper when a screen change touches variable flags, class defaults, compile/save, and optional code sync in one flow.',
+    recommended_flow: [
+      'extract_widget_blueprint',
+      'apply_window_ui_changes',
+      'extract_widget_blueprint',
+    ],
+    examples: [
+      {
+        title: 'window_polish_pass',
+        tool: 'apply_window_ui_changes',
+        arguments: {
+          asset_path: '/Game/UI/WBP_Window',
+          variable_widgets: [
+            {
+              widget_path: 'WindowRoot/TitleBar/TitleText',
+              is_variable: true,
+            },
+          ],
+          class_defaults: {
+            ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
+          },
+          compile_after: true,
+          save_after: true,
+        },
+      },
+    ],
+  },
+  project_code: {
+    summary: 'Use explicit changed_paths so build-vs-live-coding decisions stay deterministic.',
+    recommended_flow: [
+      'get_project_automation_context',
+      'sync_project_code',
+    ],
+    examples: [
+      {
+        title: 'sync_cpp_change',
+        tool: 'sync_project_code',
+        arguments: {
+          changed_paths: [
+            'Source/MyGame/Private/MyActor.cpp',
+          ],
+          project_path: 'C:/Projects/MyGame/MyGame.uproject',
+          engine_root: 'C:/Program Files/Epic Games/UE_5.7',
+          target: 'MyGameEditor',
+        },
+      },
+    ],
+  },
+};
+
+export const promptCatalog: Record<string, PromptCatalogEntry> = {
+  design_menu_screen: {
+    title: 'Design Menu Screen',
+    description: 'Plan a safe WidgetBlueprint menu redesign that inspects the current UI before rewriting structure.',
+    args: {
+      widget_asset_path: z.string(),
+      design_goal: z.string(),
+      parent_class_path: z.string().optional(),
+      existing_hud_asset_path: z.string().optional(),
+      existing_transition_asset_path: z.string().optional(),
+    },
+    buildPrompt: ({
+      widget_asset_path,
+      design_goal,
+      parent_class_path,
+      existing_hud_asset_path,
+      existing_transition_asset_path,
+    }) => [
+      `Design a WidgetBlueprint menu screen for ${widget_asset_path}.`,
+      `Goal: ${design_goal}.`,
+      parent_class_path ? `Expected parent class: ${parent_class_path}.` : 'Choose the narrowest appropriate parent widget class.',
+      existing_hud_asset_path ? `Inspect the existing HUD first: ${existing_hud_asset_path}.` : 'Inspect the current HUD wiring before replacing the screen.',
+      existing_transition_asset_path ? `Inspect the transition asset first: ${existing_transition_asset_path}.` : 'Inspect transition widgets and activatable-window flow before redesigning layout.',
+      'Produce a concrete widget-tree plan, required BindWidget names, class-default changes, and compile/save steps.',
+      'Prefer centered_overlay, common_menu_shell, or activatable_window patterns over ad-hoc CanvasPanel placement.',
+    ].join('\n'),
+  },
+  author_material_button_style: {
+    title: 'Author Material Button Style',
+    description: 'Plan a composable material authoring pass for a button style using the v2 material tools.',
+    args: {
+      asset_path: z.string(),
+      visual_goal: z.string(),
+      texture_asset_path: z.string().optional(),
+    },
+    buildPrompt: ({ asset_path, visual_goal, texture_asset_path }) => [
+      `Author a button-style material at ${asset_path}.`,
+      `Visual goal: ${visual_goal}.`,
+      texture_asset_path ? `Use texture asset: ${texture_asset_path}.` : 'Only use engine-default texture assets if no project texture is available.',
+      'Prefer set_material_settings, add_material_expression, connect_material_expressions, and bind_material_property.',
+      'Only fall back to modify_material if the smaller tools cannot express the required graph operation.',
+    ].join('\n'),
+  },
+  wire_hud_widget_classes: {
+    title: 'Wire HUD Widget Classes',
+    description: 'Plan widget-class and class-default wiring for HUD-style assets.',
+    args: {
+      hud_asset_path: z.string(),
+      widget_class_path: z.string(),
+      class_default_property: z.string(),
+    },
+    buildPrompt: ({ hud_asset_path, widget_class_path, class_default_property }) => [
+      `Wire widget class defaults for ${hud_asset_path}.`,
+      `Target widget class: ${widget_class_path}.`,
+      `Class default property: ${class_default_property}.`,
+      'Inspect the current Blueprint members and class defaults first.',
+      'Return the smallest set of modify_blueprint_members or modify_widget_blueprint.patch_class_defaults calls needed to complete the wiring.',
+    ].join('\n'),
+  },
+  debug_widget_compile_errors: {
+    title: 'Debug Widget Compile Errors',
+    description: 'Turn WidgetBlueprint compile output into a concrete recovery plan.',
+    args: {
+      widget_asset_path: z.string(),
+      compile_summary_json: z.string().optional(),
+    },
+    buildPrompt: ({ widget_asset_path, compile_summary_json }) => [
+      `Debug WidgetBlueprint compile failures for ${widget_asset_path}.`,
+      compile_summary_json ? `Compile summary:\n${compile_summary_json}` : 'Start by compiling the widget blueprint and inspecting compile diagnostics.',
+      'Check for BindWidget type/name mismatches, abstract widget classes in the tree, and stale class-default references.',
+      'Return the minimal follow-up extract/modify/compile sequence needed to fix the compile state.',
+    ].join('\n'),
+  },
+};
+
 export function createBlueprintExtractorServer(
   client: UEClientLike = new UEClient(),
   projectController: ProjectControllerLike = new ProjectController(),
 ) {
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '1.14.1',
+    version: '2.0.0',
+  }, {
+    instructions: serverInstructions,
   });
+
+  const v2ToolResultSchema = z.object({
+    success: z.boolean(),
+    operation: z.string(),
+    code: z.string().optional(),
+    message: z.string().optional(),
+    recoverable: z.boolean().optional(),
+    next_steps: z.array(z.string()).optional(),
+    diagnostics: z.array(z.object({
+      severity: z.string().optional(),
+      code: z.string().optional(),
+      message: z.string().optional(),
+      path: z.string().optional(),
+    }).passthrough()).optional(),
+    execution: z.object({
+      mode: z.enum(['immediate', 'task_aware']),
+      task_support: z.enum(['optional', 'required', 'forbidden']),
+      status: z.string().optional(),
+      progress_message: z.string().optional(),
+    }).optional(),
+  }).passthrough();
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  function tryParseJsonText(text: string | undefined): unknown {
+    if (!text) {
+      return undefined;
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+  }
+
+  function extractTextContent(result: unknown): string | undefined {
+    if (!isRecord(result) || !Array.isArray(result.content)) {
+      return undefined;
+    }
+
+    const entry = result.content.find((candidate) => isRecord(candidate) && candidate.type === 'text');
+    return isRecord(entry) && typeof entry.text === 'string' ? entry.text : undefined;
+  }
+
+  function extractToolPayload(result: unknown): unknown {
+    if (isRecord(result) && 'structuredContent' in result) {
+      return result.structuredContent;
+    }
+
+    if (isRecord(result) && Array.isArray(result.content)) {
+      const text = extractTextContent(result);
+      const parsed = tryParseJsonText(text);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+
+      if (text) {
+        return { message: text };
+      }
+    }
+
+    return result;
+  }
+
+  function defaultNextSteps(toolName: string, payload?: Record<string, unknown>): string[] {
+    if (toolName === 'compile_widget_blueprint') {
+      return [
+        'Inspect compile.messages and diagnostics for the first failing widget or property.',
+        'Re-extract the widget blueprint before applying the next structural patch.',
+        'Check BindWidget names/types and any abstract classes referenced by the widget tree.',
+      ];
+    }
+
+    if (taskAwareTools.has(toolName)) {
+      return [
+        'Inspect the returned execution.status and diagnostics before retrying.',
+        'Poll the task-oriented status tool again if the operation is still running.',
+      ];
+    }
+
+    if (payload?.validateOnly === true) {
+      return [
+        'Fix the reported validation issues and rerun the same call.',
+      ];
+    }
+
+    return [
+      'Inspect diagnostics and validation details, then retry the same operation.',
+      'Use validate_only=true first if the tool supports it and you need more actionable failures.',
+    ];
+  }
+
+  function inferExecutionMetadata(toolName: string, payload?: Record<string, unknown>) {
+    const taskSupport = taskAwareTools.has(toolName) ? 'optional' : 'forbidden';
+    const mode = taskSupport === 'optional' ? 'task_aware' : 'immediate';
+    const status = typeof payload?.status === 'string'
+      ? payload.status
+      : typeof payload?.compileResult === 'string'
+        ? payload.compileResult
+        : payload?.terminal === false
+          ? 'running'
+          : 'completed';
+    const progressMessage = typeof payload?.reason === 'string'
+      ? payload.reason
+      : typeof payload?.summary === 'string'
+        ? payload.summary
+        : undefined;
+
+    return {
+      mode,
+      task_support: taskSupport,
+      status,
+      ...(progressMessage ? { progress_message: progressMessage } : {}),
+    };
+  }
+
+  function normalizeToolError(
+    toolName: string,
+    payloadOrError: unknown,
+    existingResult?: Record<string, unknown>,
+  ) {
+    const payload = isRecord(payloadOrError) ? { ...payloadOrError } : {};
+    const diagnostics = Array.isArray(payload.diagnostics)
+      ? payload.diagnostics
+      : [];
+    const firstDiagnostic = diagnostics.find((candidate) => (
+      isRecord(candidate)
+      && typeof candidate.message === 'string'
+      && candidate.message.length > 0
+    ));
+    const message = typeof payload.message === 'string'
+      ? payload.message
+      : typeof payload.error === 'string'
+        ? payload.error
+        : (isRecord(firstDiagnostic) && typeof firstDiagnostic.message === 'string')
+          ? firstDiagnostic.message
+        : payloadOrError instanceof Error
+          ? payloadOrError.message
+          : typeof payloadOrError === 'string'
+            ? payloadOrError.replace(/^Error:\s*/, '')
+            : `Tool '${toolName}' failed.`;
+    const envelope: Record<string, unknown> = {
+      ...payload,
+      success: false,
+      operation: typeof payload.operation === 'string' ? payload.operation : toolName,
+      code: typeof payload.code === 'string'
+        ? payload.code
+        : (isRecord(firstDiagnostic) && typeof firstDiagnostic.code === 'string' && firstDiagnostic.code.length > 0)
+          ? firstDiagnostic.code
+          : 'tool_execution_failed',
+      message,
+      recoverable: typeof payload.recoverable === 'boolean' ? payload.recoverable : true,
+      next_steps: Array.isArray(payload.next_steps) ? payload.next_steps : defaultNextSteps(toolName, payload),
+      execution: inferExecutionMetadata(toolName, payload),
+    };
+
+    if (diagnostics.length > 0) {
+      envelope.diagnostics = diagnostics;
+    }
+
+    return {
+      ...(existingResult ?? {}),
+      content: [{ type: 'text' as const, text: JSON.stringify(envelope) }],
+      structuredContent: envelope,
+      isError: true,
+    };
+  }
+
+  function normalizeToolSuccess(toolName: string, payload: unknown) {
+    const basePayload: Record<string, unknown> = isRecord(payload) ? { ...payload } : { data: payload };
+    const success = typeof basePayload.success === 'boolean' ? basePayload.success : true;
+
+    if (!success) {
+      return normalizeToolError(toolName, basePayload);
+    }
+
+    const envelope: Record<string, unknown> = {
+      ...basePayload,
+      success: true,
+      operation: typeof basePayload.operation === 'string' ? basePayload.operation : toolName,
+      execution: inferExecutionMetadata(toolName, basePayload),
+    };
+
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(envelope) }],
+      structuredContent: envelope,
+    };
+  }
+
+  const rawRegisterTool = server.registerTool.bind(server) as typeof server.registerTool;
+  (server as typeof server & { registerTool: typeof server.registerTool }).registerTool = ((name, config, cb) => {
+    return (rawRegisterTool as any)(name, {
+      ...config,
+      outputSchema: config.outputSchema ?? v2ToolResultSchema,
+    }, async (args: unknown, extra: unknown) => {
+      try {
+        const result = await (cb as (args: unknown, extra: unknown) => Promise<unknown> | unknown)(args, extra);
+        if (isRecord(result) && result.isError === true) {
+          return normalizeToolError(name, extractToolPayload(result), result);
+        }
+
+        return normalizeToolSuccess(name, extractToolPayload(result));
+      } catch (error) {
+        return normalizeToolError(name, error);
+      }
+    });
+  }) as typeof server.registerTool;
 
 // Shared scope enum with detailed descriptions
 const scopeEnum = z.enum([
@@ -41,6 +553,14 @@ const cascadeManifestEntrySchema = z.object({
   status: z.string(),
   error: z.string().optional(),
 });
+
+const CascadeResultSchema = v2ToolResultSchema.extend({
+  extracted_count: z.number().int().min(0),
+  skipped_count: z.number().int().min(0),
+  total_count: z.number().int().min(0),
+  output_directory: z.string(),
+  manifest: z.array(cascadeManifestEntrySchema),
+}).passthrough();
 
 // Resource: extraction scope reference (static docs — app-controlled read-only context)
 server.resource(
@@ -239,7 +759,7 @@ server.resource(
         '- Blueprint members: use variableName, componentName, and functionName.',
         '- Anim assets: prefer stable notifyId/notifyGuid and sampleIndex selectors over array-position assumptions.',
         '- When a tool supports both name and path selectors, path is the safer choice after structural edits.',
-        '- Common alias policy: snake_case is the canonical MCP shape; small ergonomic aliases are accepted only where documented.',
+        '- Public MCP inputs use one canonical snake_case shape. Do not rely on legacy aliases.',
         '- sync_project_code requires explicit changed_paths; it does not infer them from source control state.',
       ].join('\n'),
     }],
@@ -376,102 +896,6 @@ server.resource(
   }),
 );
 
-const exampleResourceBodies: Record<string, string[]> = {
-  widget_blueprint: [
-    'Family: widget_blueprint',
-    '',
-    'Recommended flow:',
-    '1. create_widget_blueprint',
-    '2. extract_widget_blueprint',
-    '3. modify_widget_blueprint',
-    '4. compile_widget_blueprint',
-    '5. save_assets',
-    '',
-    'Example patch:',
-    '{"operation":"patch_widget","widget_path":"WindowRoot/TitleBar/TitleText","properties":{"Text":"Window"},"compile_after":true}',
-    '',
-    'Example structural batch:',
-    '{"operation":"batch","operations":[{"operation":"insert_child","parent_widget_path":"WindowRoot/ContentRoot","child_widget":{"class":"TextBlock","name":"BodyText","is_variable":true,"properties":{"Text":"Hello"}}},{"operation":"wrap_widget","widget_path":"WindowRoot/ContentRoot/BodyText","wrapper_widget":{"class":"Border","name":"BodyFrame"}}]}',
-  ],
-  blueprint_members: [
-    'Family: blueprint_members',
-    '',
-    'Use create_blueprint for initial asset creation and modify_blueprint_members for targeted changes.',
-    '',
-    'Example patch:',
-    '{"operation":"patch_variable","variable_name":"Health","payload":{"defaultValue":120.0}}',
-  ],
-  import_assets: [
-    'Family: import_assets',
-    '',
-    'Recommended flow:',
-    '1. import_assets or import_textures/import_meshes',
-    '2. get_import_job until terminal=true',
-    '3. extract imported asset if needed',
-    '4. save_assets',
-    '',
-    'Example:',
-    '{"items":[{"file_path":"C:/Temp/T_Test.png","destination_path":"/Game/Imported","destination_name":"T_Test"}]}',
-  ],
-  material: [
-    'Family: material',
-    '',
-    'Recommended flow:',
-    '1. create_material',
-    '2. modify_material',
-    '3. extract_material',
-    '4. save_assets',
-    '',
-    'Example batch:',
-    '{"settings":{"blend_mode":"BLEND_Opaque","two_sided":false},"operations":[{"operation":"add_expression","temp_id":"tex","class":"/Script/Engine.MaterialExpressionTextureSampleParameter2D","properties":{"ParameterName":"Albedo","Texture":"/Engine/EngineResources/DefaultTexture.DefaultTexture"}},{"operation":"connect_material_property","temp_id":"tex","from_output_name":"RGB","property":"MP_BaseColor"}]}',
-  ],
-  material_function: [
-    'Family: material_function',
-    '',
-    'Use create_material_function with asset_kind=function, layer, or layer_blend.',
-    '',
-    'Example batch:',
-    '{"settings":{"description":"Example function"},"operations":[{"operation":"add_expression","temp_id":"input","class":"/Script/Engine.MaterialExpressionFunctionInput","properties":{"InputName":"Color"}},{"operation":"add_expression","temp_id":"output","class":"/Script/Engine.MaterialExpressionFunctionOutput","properties":{"OutputName":"Result"}},{"operation":"connect_expressions","from_temp_id":"input","to_temp_id":"output","to_input_name":"A"}]}',
-  ],
-  window_ui_polish: [
-    'Family: window_ui_polish',
-    '',
-    'Recommended flow:',
-    '1. modify_widget / modify_widget_blueprint.patch_widget with is_variable',
-    '2. modify_widget_blueprint with operation=patch_class_defaults',
-    '3. import_fonts',
-    '4. apply_widget_fonts',
-    '5. compile_widget_blueprint',
-    '6. save_assets',
-    '7. sync_project_code (optional)',
-  ],
-  project_code: [
-    'Family: project_code',
-    '',
-    'Use explicit changed_paths with sync_project_code.',
-    '',
-    'Example:',
-    '{"changed_paths":["Source/MyGame/Private/MyActor.cpp"],"project_path":"C:/Projects/MyGame/MyGame.uproject","engine_root":"C:/Program Files/Epic Games/UE_5.7","target":"MyGameEditor"}',
-  ],
-  data_asset: [
-    'Family: data_asset',
-    '',
-    'Example create:',
-    '{"asset_class_path":"/Script/MyGame.MyDataAsset","properties":{"Count":3}}',
-    '',
-    'Example modify:',
-    '{"properties":{"Count":5}}',
-  ],
-  behavior_tree: [
-    'Family: behavior_tree',
-    '',
-    'Use nodePath selectors for patch_node and patch_attachment operations.',
-    '',
-    'Example:',
-    '{"operation":"patch_node","payload":{"nodePath":"Root/Selector[0]/MoveTo","properties":{"AcceptableRadius":150.0}}}',
-  ],
-};
-
 const widgetPatternBodies: Record<string, string[]> = {
   activatable_window: [
     'Pattern: activatable_window',
@@ -506,6 +930,35 @@ const widgetPatternBodies: Record<string, string[]> = {
     '',
     'Common BindWidget names:',
     '- DialogTitle, BodyText, ConfirmButton, CancelButton',
+  ],
+  centered_overlay: [
+    'Pattern: centered_overlay',
+    '',
+    'Parent class:',
+    '- CommonActivatableWidget or UserWidget',
+    '',
+    'Recommended hierarchy:',
+    '- Overlay RootOverlay',
+    '- Image or Border Backdrop',
+    '- SizeBox CenteredFrame',
+    '- VerticalBox FrameBody',
+    '',
+    'Use this for menu shells that need a centered focal panel with dimmed background.',
+  ],
+  common_menu_shell: [
+    'Pattern: common_menu_shell',
+    '',
+    'Parent class:',
+    '- CommonActivatableWidget',
+    '',
+    'Recommended hierarchy:',
+    '- VerticalBox Root',
+    '- HorizontalBox HeaderRow',
+    '- Overlay MainContent',
+    '- HorizontalBox FooterActions',
+    '',
+    'Common BindWidget names:',
+    '- ScreenTitle, BackButton, PrimaryActionButton, SecondaryActionButton',
   ],
   settings_panel: [
     'Pattern: settings_panel',
@@ -550,7 +1003,7 @@ server.resource(
   'examples',
   new ResourceTemplate('blueprint://examples/{family}', {
     list: async () => ({
-      resources: Object.keys(exampleResourceBodies).map((family) => ({
+      resources: Object.keys(exampleCatalog).map((family) => ({
         uri: `blueprint://examples/${family}`,
         name: `Example: ${family}`,
         mimeType: 'text/plain',
@@ -558,12 +1011,12 @@ server.resource(
     }),
   }),
   {
-    description: 'Short example payloads and recommended flows for common write-capable families.',
+    description: 'Schema-backed v2 example payloads and recommended flows for common authoring families.',
   },
   async (uri, variables) => {
     const family = String(variables.family ?? '');
-    const lines = exampleResourceBodies[family];
-    if (!lines) {
+    const entry = exampleCatalog[family];
+    if (!entry) {
       return {
         contents: [{
           uri: uri.href,
@@ -572,6 +1025,21 @@ server.resource(
         }],
       };
     }
+
+    const lines = [
+      `Family: ${family}`,
+      '',
+      entry.summary,
+      '',
+      'Recommended flow:',
+      ...entry.recommended_flow.map((toolName, index) => `${index + 1}. ${toolName}`),
+      ...entry.examples.flatMap((example) => [
+        '',
+        `Example: ${example.title}`,
+        `tool: ${example.tool}`,
+        JSON.stringify(example.arguments, null, 2),
+      ]),
+    ];
 
     return {
       contents: [{
@@ -619,6 +1087,73 @@ server.resource(
     };
   },
 );
+
+server.registerResource(
+  'unsupported-surfaces',
+  'blueprint://unsupported-surfaces',
+  {
+    description: 'Explicit v2 unsupported or intentionally bounded surfaces.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor v2 Unsupported Surfaces',
+        '',
+        '- Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes. Use the dedicated InputAction/InputMappingContext tools instead.',
+        '- modify_material and modify_material_function remain available but are advanced escape hatches, not the primary authoring workflow.',
+        '- There is still no first-class Substrate graph DSL.',
+        '- Raw authored animation track synthesis is out of scope. Animation authoring remains metadata-oriented.',
+        '- World editing and runtime actor manipulation are out of scope for this server.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.registerResource(
+  'ui-redesign-workflow',
+  'blueprint://ui-redesign-workflow',
+  {
+    description: 'Safe workflow for redesigning a UI screen without losing existing wiring.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Safe UI Redesign Workflow',
+        '',
+        '1. search_assets and extract the current HUD, transition widgets, and target screen widgets.',
+        '2. Inspect class defaults, BindWidget names, and current activatable-window flow before replacing any widget tree.',
+        '3. Choose a preset layout pattern such as centered_overlay, common_menu_shell, activatable_window, or list_detail.',
+        '4. Apply the smallest modify_widget_blueprint patch possible. Only use build_widget_tree or replace_tree when broad structure must change.',
+        '5. Compile immediately after structural changes, then save only after the compile result is clean.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+for (const [name, prompt] of Object.entries(promptCatalog)) {
+  server.registerPrompt(
+    name,
+    {
+      title: prompt.title,
+      description: prompt.description,
+      argsSchema: prompt.args,
+    },
+    async (args) => ({
+      description: prompt.description,
+      messages: [{
+        role: 'user',
+        content: {
+          type: 'text',
+          text: prompt.buildPrompt(args),
+        },
+      }],
+    }),
+  );
+}
 
 async function callSubsystemJson(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const result = await client.callSubsystem(method, params);
@@ -1482,13 +2017,7 @@ RETURNS: Summary with extracted_count, output_directory path, and a per-asset ma
         'Filter to specific graphs by name. Use FunctionsShallow scope first to discover graph names, then pass the names you want here. Empty/omitted = extract all graphs. Example: ["EventGraph", "CalculateDamage"]',
       ),
     },
-    outputSchema: {
-      extracted_count: z.number().int().min(0),
-      skipped_count: z.number().int().min(0),
-      total_count: z.number().int().min(0),
-      output_directory: z.string(),
-      manifest: z.array(cascadeManifestEntrySchema),
-    },
+    outputSchema: CascadeResultSchema,
     annotations: {
       title: 'Extract Cascade',
       readOnlyHint: false, // writes files to disk
@@ -1826,6 +2355,41 @@ const MaterialGraphPayloadSchema = z.object({
   layout_after: z.boolean().optional(),
   operations: z.array(MaterialGraphOperationSchema).default([]),
 }).passthrough();
+const MaterialNodePositionSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+}).strict();
+const MaterialExpressionSelectorFieldsSchema = z.object({
+  expression_guid: z.string().optional(),
+  temp_id: z.string().optional(),
+}).strict();
+const MaterialExpressionSelectorSchema = MaterialExpressionSelectorFieldsSchema.refine(
+  (value) => Boolean(value.expression_guid || value.temp_id),
+  { message: 'expression_guid or temp_id is required' },
+);
+const MaterialConnectionSelectorFieldsSchema = z.object({
+  from_expression_guid: z.string().optional(),
+  from_temp_id: z.string().optional(),
+  to_expression_guid: z.string().optional(),
+  to_temp_id: z.string().optional(),
+  from_output_name: z.string().optional(),
+  from_output_index: z.number().int().min(0).optional(),
+  to_input_name: z.string().optional(),
+  to_input_index: z.number().int().min(0).optional(),
+}).strict();
+const MaterialConnectionSelectorSchema = MaterialConnectionSelectorFieldsSchema.refine(
+  (value) => Boolean(value.from_expression_guid || value.from_temp_id),
+  { message: 'from_expression_guid or from_temp_id is required' },
+).refine(
+  (value) => Boolean(value.to_expression_guid || value.to_temp_id),
+  { message: 'to_expression_guid or to_temp_id is required' },
+);
+
+const EnhancedInputValueTypeSchema = z.enum(['boolean', 'axis_1d', 'axis_2d', 'axis_3d']);
+const InputMappingSchema = z.object({
+  action: z.string(),
+  key: z.string(),
+}).strict();
 
 const ImportItemCommonSchema = z.object({
   file_path: z.string().optional(),
@@ -2078,11 +2642,8 @@ server.registerTool(
       asset_path: z.string().describe(
         'UE content path for the new WidgetBlueprint (e.g. /Game/UI/WBP_MyWidget)',
       ),
-      parent_class: z.string().default('UserWidget').describe(
-        'Compatibility alias for the parent widget class name or path (e.g. UserWidget, CommonActivatableWidget, /Script/MyModule.MyWidgetBase)',
-      ),
-      parent_class_path: z.string().optional().describe(
-        'Preferred explicit parent widget class path or short loaded class name.',
+      parent_class_path: z.string().default('UserWidget').describe(
+        'Parent widget class path or short loaded class name.',
       ),
     },
     annotations: {
@@ -2093,11 +2654,11 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  async ({ asset_path, parent_class, parent_class_path }) => {
+  async ({ asset_path, parent_class_path }) => {
     try {
       const parsed = await callSubsystemJson('CreateWidgetBlueprint', {
         AssetPath: asset_path,
-        ParentClass: parent_class_path ?? parent_class,
+        ParentClass: parent_class_path,
       });
       return jsonToolSuccess(parsed);
     } catch (e) {
@@ -2184,7 +2745,7 @@ server.registerTool(
   'modify_widget',
   {
     title: 'Modify Widget',
-    description: 'Patch one widget by widget_name or widget_path. Rename via properties.name/newName/new_name; variable flags are accepted as top-level aliases.',
+    description: 'Patch one widget by widget_name or widget_path. The v2 contract accepts only snake_case fields such as properties.new_name and is_variable.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint',
@@ -2202,13 +2763,7 @@ server.registerTool(
         'Slot properties to set',
       ),
       is_variable: z.boolean().optional().describe(
-        'Optional alias for toggling the widget variable flag.',
-      ),
-      isVariable: z.boolean().optional().describe(
-        'Optional alias for toggling the widget variable flag.',
-      ),
-      bIsVariable: z.boolean().optional().describe(
-        'Optional alias for toggling the widget variable flag.',
+        'Toggle the widget variable flag.',
       ),
       validate_only: z.boolean().default(false).describe(
         'When true, validate the patch without changing the asset.',
@@ -2222,7 +2777,7 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  async ({ asset_path, widget_name, widget_path, properties, slot, is_variable, isVariable, bIsVariable, validate_only }) => {
+  async ({ asset_path, widget_name, widget_path, properties, slot, is_variable, validate_only }) => {
     try {
       const widgetIdentifier = widget_path ?? widget_name;
       if (!widgetIdentifier) {
@@ -2230,7 +2785,7 @@ server.registerTool(
       }
 
       const widgetOptions: Record<string, unknown> = {};
-      const variableFlag = maybeBoolean(is_variable, isVariable, bIsVariable);
+      const variableFlag = maybeBoolean(is_variable);
       if (typeof variableFlag === 'boolean') {
         widgetOptions.is_variable = variableFlag;
       }
@@ -2383,6 +2938,178 @@ RETURNS: JSON with validation summary, dirtyPackages, and diagnostics. Changes a
       };
     } catch (e) {
       return { content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+    }
+  },
+);
+
+server.registerTool(
+  'create_input_action',
+  {
+    title: 'Create Input Action',
+    description: 'Create a dedicated Enhanced InputAction asset with a user-friendly value_type and optional editable properties.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new InputAction asset.',
+      ),
+      value_type: EnhancedInputValueTypeSchema.default('boolean').describe(
+        'Human-friendly input value type.',
+      ),
+      properties: JsonObjectSchema.optional().describe(
+        'Optional editable InputAction properties such as action_description, consume_input, trigger_when_paused, or reserve_all_mappings.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the create payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create Input Action',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, value_type, properties, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateInputAction', {
+        AssetPath: asset_path,
+        ValueType: value_type,
+        PropertiesJson: JSON.stringify(properties ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_input_action',
+  {
+    title: 'Modify Input Action',
+    description: 'Modify a dedicated Enhanced InputAction asset without using the generic DataAsset reflection path.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the InputAction asset.',
+      ),
+      value_type: EnhancedInputValueTypeSchema.optional().describe(
+        'Optional human-friendly input value type override.',
+      ),
+      properties: JsonObjectSchema.optional().describe(
+        'Optional editable InputAction properties such as action_description, consume_input, trigger_when_paused, or reserve_all_mappings.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the modification payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Input Action',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, value_type, properties, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyInputAction', {
+        AssetPath: asset_path,
+        ValueType: value_type ?? '',
+        PropertiesJson: JSON.stringify(properties ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_input_mapping_context',
+  {
+    title: 'Create Input Mapping Context',
+    description: 'Create an Enhanced InputMappingContext with dedicated mapping authoring instead of generic DataAsset reflection.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new InputMappingContext asset.',
+      ),
+      properties: JsonObjectSchema.optional().describe(
+        'Optional editable InputMappingContext properties such as context_description or registration_tracking_mode.',
+      ),
+      mappings: z.array(InputMappingSchema).default([]).describe(
+        'Optional initial action/key mappings.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the create payload without creating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create Input Mapping Context',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, properties, mappings, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateInputMappingContext', {
+        AssetPath: asset_path,
+        PropertiesJson: JSON.stringify(properties ?? {}),
+        MappingsJson: JSON.stringify(mappings),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_input_mapping_context',
+  {
+    title: 'Modify Input Mapping Context',
+    description: 'Modify an Enhanced InputMappingContext with explicit mappings instead of the generic DataAsset reflection path.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the InputMappingContext asset.',
+      ),
+      properties: JsonObjectSchema.optional().describe(
+        'Optional editable InputMappingContext properties such as context_description or registration_tracking_mode.',
+      ),
+      replace_mappings: z.boolean().default(false).describe(
+        'When true, clear existing mappings before applying the provided mappings.',
+      ),
+      mappings: z.array(InputMappingSchema).default([]).describe(
+        'Mappings to add to the context.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the modification payload without mutating the asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify Input Mapping Context',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, properties, replace_mappings, mappings, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyInputMappingContext', {
+        AssetPath: asset_path,
+        PropertiesJson: JSON.stringify(properties ?? {}),
+        ReplaceMappings: replace_mappings,
+        MappingsJson: JSON.stringify(mappings),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
     }
   },
 );
@@ -2900,10 +3627,214 @@ server.registerTool(
 );
 
 server.registerTool(
+  'set_material_settings',
+  {
+    title: 'Set Material Settings',
+    description: 'Primary v2 material-authoring tool for applying top-level material settings without using the full batch DSL.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Material asset.',
+      ),
+      settings: JsonObjectSchema.describe(
+        'Top-level material settings payload such as material_domain, blend_mode, shading_model, two_sided, or usage_flags.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the settings patch without mutating the material.',
+      ),
+    },
+    annotations: {
+      title: 'Set Material Settings',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, settings, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyMaterial', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify({
+          settings,
+          operations: [{
+            operation: 'set_material_settings',
+            settings,
+          }],
+        } satisfies z.infer<typeof MaterialGraphPayloadSchema>),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'add_material_expression',
+  {
+    title: 'Add Material Expression',
+    description: 'Primary v2 material-authoring tool for adding one expression node to a classic Material graph.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Material asset.',
+      ),
+      expression_class: z.string().describe(
+        'Loaded class path for the material expression, such as /Script/Engine.MaterialExpressionVectorParameter.',
+      ),
+      expression_name: z.string().optional().describe(
+        'Stable temporary id for the created expression within this call result. Reuse the returned expression_guid for later calls.',
+      ),
+      expression_properties: JsonObjectSchema.optional().describe(
+        'Optional reflected property patch applied to the new expression.',
+      ),
+      node_position: MaterialNodePositionSchema.optional().describe(
+        'Editor graph position for the new node.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the add-expression request without mutating the material.',
+      ),
+    },
+    annotations: {
+      title: 'Add Material Expression',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, expression_class, expression_name, expression_properties, node_position, validate_only }) => {
+    try {
+      const operation = {
+        operation: 'add_expression' as const,
+        expression_class,
+      } as Record<string, unknown> & { operation: 'add_expression' };
+      if (expression_name) {
+        operation.temp_id = expression_name;
+      }
+      if (expression_properties) {
+        operation.properties = expression_properties;
+      }
+      if (node_position) {
+        operation.node_pos_x = node_position.x;
+        operation.node_pos_y = node_position.y;
+      }
+
+      const parsed = await callSubsystemJson('ModifyMaterial', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify({
+          operations: [operation],
+        } satisfies z.infer<typeof MaterialGraphPayloadSchema>),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'connect_material_expressions',
+  {
+    title: 'Connect Material Expressions',
+    description: 'Primary v2 material-authoring tool for wiring one expression output into another expression input.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Material asset.',
+      ),
+      ...MaterialConnectionSelectorFieldsSchema.shape,
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the requested connection without mutating the material.',
+      ),
+    },
+    annotations: {
+      title: 'Connect Material Expressions',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, validate_only, ...connection }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyMaterial', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify({
+          operations: [{
+            operation: 'connect_expressions',
+            ...connection,
+          }],
+        } satisfies z.infer<typeof MaterialGraphPayloadSchema>),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'bind_material_property',
+  {
+    title: 'Bind Material Property',
+    description: 'Primary v2 material-authoring tool for binding one expression output to a root material property.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the Material asset.',
+      ),
+      from_expression_guid: z.string().optional().describe(
+        'Guid of the source expression from extract_material or a previous add_material_expression call.',
+      ),
+      from_temp_id: z.string().optional().describe(
+        'Temporary id returned by add_material_expression in the same authoring session.',
+      ),
+      from_output_name: z.string().optional().describe(
+        'Optional named output on the source expression.',
+      ),
+      from_output_index: z.number().int().min(0).optional().describe(
+        'Optional numeric output index on the source expression.',
+      ),
+      material_property: z.string().describe(
+        'Material property enum name such as MP_BaseColor or MP_Roughness.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the property binding without mutating the material.',
+      ),
+    },
+    annotations: {
+      title: 'Bind Material Property',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, validate_only, ...binding }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyMaterial', {
+        AssetPath: asset_path,
+        PayloadJson: JSON.stringify({
+          operations: [{
+            operation: 'connect_material_property',
+            ...binding,
+          }],
+        } satisfies z.infer<typeof MaterialGraphPayloadSchema>),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
   'modify_material',
   {
     title: 'Modify Material',
-    description: 'Apply compact graph and settings operations to a classic UMaterial asset.',
+    description: 'Advanced material escape hatch. Apply compact graph and settings operations to a classic UMaterial asset when the smaller v2 material tools are insufficient.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the Material asset.',
@@ -3123,13 +4054,7 @@ server.registerTool(
         'Generated-class default patch for operation="patch_class_defaults".',
       ),
       is_variable: z.boolean().optional().describe(
-        'Optional alias for toggling the widget variable flag during patch_widget.',
-      ),
-      isVariable: z.boolean().optional().describe(
-        'Optional alias for toggling the widget variable flag during patch_widget.',
-      ),
-      bIsVariable: z.boolean().optional().describe(
-        'Optional alias for toggling the widget variable flag during patch_widget.',
+        'Toggle the widget variable flag during patch_widget.',
       ),
       operations: z.array(z.record(z.string(), z.unknown())).optional().describe(
         'Nested operations for operation="batch".',
@@ -3168,8 +4093,6 @@ server.registerTool(
     slot,
     class_defaults,
     is_variable,
-    isVariable,
-    bIsVariable,
     operations,
     validate_only,
     compile_after,
@@ -3206,7 +4129,7 @@ server.registerTool(
         if (properties) payload.properties = properties;
         if (slot) payload.slot = slot;
         if (class_defaults) payload.class_defaults = class_defaults;
-        const variableFlag = maybeBoolean(is_variable, isVariable, bIsVariable);
+        const variableFlag = maybeBoolean(is_variable);
         if (typeof variableFlag === 'boolean') payload.is_variable = variableFlag;
         if (operations) payload.operations = operations;
 

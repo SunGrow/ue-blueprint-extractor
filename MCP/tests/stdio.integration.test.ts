@@ -222,13 +222,17 @@ describe('stdio integration', () => {
     expect(fontRoles.contents[0]?.text).toContain('Blueprint Extractor Font Roles');
     expect(projectAutomation.contents[0]?.text).toContain('Blueprint Extractor Project Automation');
     expect(widgetPattern.contents[0]?.text).toContain('Pattern: toolbar_header');
-    expect(JSON.parse(getTextContent(result))).toEqual([
-      {
-        path: '/Game/Test/BP_Player',
-        name: 'BP_Player',
-        class: 'Blueprint',
-      },
-    ]);
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      success: true,
+      operation: 'search_assets',
+      data: [
+        {
+          path: '/Game/Test/BP_Player',
+          name: 'BP_Player',
+          class: 'Blueprint',
+        },
+      ],
+    });
     expect(JSON.parse(getTextContent(importJobs))).toMatchObject({
       includeCompleted: true,
       jobs: [

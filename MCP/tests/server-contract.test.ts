@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createBlueprintExtractorServer, type UEClientLike } from '../src/index.js';
+import {
+  createBlueprintExtractorServer,
+  exampleCatalog,
+  promptCatalog,
+  type UEClientLike,
+} from '../src/index.js';
 import { connectInMemoryServer, getTextContent } from './test-helpers.js';
 
 class FakeUEClient implements UEClientLike {
@@ -9,7 +14,7 @@ class FakeUEClient implements UEClientLike {
     private readonly handler: (method: string, params: Record<string, unknown>) => Promise<string> | string = (
       method,
       params,
-    ) => JSON.stringify({ ok: true, method, params }),
+    ) => JSON.stringify({ success: true, operation: method, method, params }),
     private readonly connectionProbe: () => Promise<boolean> | boolean = () => true,
   ) {}
 
@@ -102,6 +107,16 @@ function makeImportJobResult(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function parseToolResult(result: { content?: Array<{ text?: string; type: string }> }) {
+  return JSON.parse(getTextContent(result));
+}
+
+function expectSchemaProperty(tool: { name: string; outputSchema?: unknown } | undefined, propertyName: string) {
+  expect(tool, `Expected tool for schema property '${propertyName}'`).toBeTruthy();
+  const schema = tool?.outputSchema as { properties?: Record<string, unknown> } | undefined;
+  expect(schema?.properties?.[propertyName], `Expected ${tool?.name} outputSchema.properties.${propertyName}`).toBeTruthy();
+}
+
 describe('createBlueprintExtractorServer', () => {
   const cleanups: Array<() => Promise<void>> = [];
 
@@ -111,12 +126,13 @@ describe('createBlueprintExtractorServer', () => {
     }
   });
 
-  it('registers the expected resources and tools', async () => {
+  it('registers the expected resources, tools, prompts, and output schemas', async () => {
     const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
     cleanups.push(harness.close);
 
     const resources = await harness.client.listResources();
     const resourceTemplates = await harness.client.listResourceTemplates();
+    const prompts = await harness.client.listPrompts();
     const resourceUris = resources.resources.map((resource) => resource.uri);
     const resourceTemplateUris = resourceTemplates.resourceTemplates.map((template) => template.uriTemplate);
     const tools = await harness.client.listTools();
@@ -124,12 +140,14 @@ describe('createBlueprintExtractorServer', () => {
     const extractWidgetBlueprint = tools.tools.find((tool) => tool.name === 'extract_widget_blueprint');
     const extractMaterial = tools.tools.find((tool) => tool.name === 'extract_material');
     const createBlueprint = tools.tools.find((tool) => tool.name === 'create_blueprint');
+    const extractCascade = tools.tools.find((tool) => tool.name === 'extract_cascade');
     const importAssets = tools.tools.find((tool) => tool.name === 'import_assets');
     const getImportJob = tools.tools.find((tool) => tool.name === 'get_import_job');
+    const listImportJobs = tools.tools.find((tool) => tool.name === 'list_import_jobs');
     const saveAssets = tools.tools.find((tool) => tool.name === 'save_assets');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(2);
-    expect(tools.tools).toHaveLength(72);
+    expect(tools.tools).toHaveLength(80);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -139,8 +157,11 @@ describe('createBlueprintExtractorServer', () => {
     expect(resourceUris).toContain('blueprint://material-graph-guidance');
     expect(resourceUris).toContain('blueprint://font-roles');
     expect(resourceUris).toContain('blueprint://project-automation');
+    expect(resourceUris).toContain('blueprint://unsupported-surfaces');
+    expect(resourceUris).toContain('blueprint://ui-redesign-workflow');
     expect(resourceTemplateUris).toContain('blueprint://examples/{family}');
     expect(resourceTemplateUris).toContain('blueprint://widget-patterns/{pattern}');
+    expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(Object.keys(promptCatalog).sort());
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'reimport_assets')).toBe(true);
@@ -149,6 +170,10 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'import_meshes')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'extract_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_material')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'set_material_settings')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'add_material_expression')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'connect_material_expressions')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'bind_material_property')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material_function')).toBe(true);
@@ -159,7 +184,17 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'create_input_action')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_input_action')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'create_input_mapping_context')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_input_mapping_context')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_blueprint_graphs')).toBe(true);
+    expect(tools.tools.every((tool) => tool.outputSchema)).toBe(true);
+    expectSchemaProperty(importAssets, 'jobId');
+    expectSchemaProperty(importAssets, 'terminal');
+    expectSchemaProperty(listImportJobs, 'jobs');
+    expectSchemaProperty(extractCascade, 'extracted_count');
+    expectSchemaProperty(extractCascade, 'manifest');
     expect(extractBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractWidgetBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractMaterial?.annotations?.readOnlyHint).toBe(true);
@@ -182,12 +217,15 @@ describe('createBlueprintExtractorServer', () => {
     const materialGraphGuidance = await harness.client.readResource({ uri: 'blueprint://material-graph-guidance' });
     const fontRoles = await harness.client.readResource({ uri: 'blueprint://font-roles' });
     const projectAutomation = await harness.client.readResource({ uri: 'blueprint://project-automation' });
+    const unsupportedSurfaces = await harness.client.readResource({ uri: 'blueprint://unsupported-surfaces' });
+    const uiRedesignWorkflow = await harness.client.readResource({ uri: 'blueprint://ui-redesign-workflow' });
     const widgetExample = await harness.client.readResource({ uri: 'blueprint://examples/widget_blueprint' });
     const materialExample = await harness.client.readResource({ uri: 'blueprint://examples/material' });
-    const materialFunctionExample = await harness.client.readResource({ uri: 'blueprint://examples/material_function' });
+    const enhancedInputExample = await harness.client.readResource({ uri: 'blueprint://examples/enhanced_input' });
     const windowPolishExample = await harness.client.readResource({ uri: 'blueprint://examples/window_ui_polish' });
     const projectCodeExample = await harness.client.readResource({ uri: 'blueprint://examples/project_code' });
     const widgetPattern = await harness.client.readResource({ uri: 'blueprint://widget-patterns/activatable_window' });
+    const centeredOverlayPattern = await harness.client.readResource({ uri: 'blueprint://widget-patterns/centered_overlay' });
 
     expect(scopes.contents[0]?.mimeType).toBe('text/plain');
     expect(scopes.contents[0]?.text).toContain('Blueprint Extraction Scopes');
@@ -204,12 +242,71 @@ describe('createBlueprintExtractorServer', () => {
     expect(materialGraphGuidance.contents[0]?.text).toContain('expression_guid');
     expect(fontRoles.contents[0]?.text).toContain('Blueprint Extractor Font Roles');
     expect(projectAutomation.contents[0]?.text).toContain('Blueprint Extractor Project Automation');
-    expect(widgetExample.contents[0]?.text).toContain('Example structural batch');
-    expect(materialExample.contents[0]?.text).toContain('connect_material_property');
-    expect(materialFunctionExample.contents[0]?.text).toContain('asset_kind=function, layer, or layer_blend');
-    expect(windowPolishExample.contents[0]?.text).toContain('modify_widget / modify_widget_blueprint.patch_widget with is_variable');
-    expect(projectCodeExample.contents[0]?.text).toContain('Use explicit changed_paths with sync_project_code');
+    expect(unsupportedSurfaces.contents[0]?.text).toContain('Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes');
+    expect(uiRedesignWorkflow.contents[0]?.text).toContain('Safe UI Redesign Workflow');
+    expect(widgetExample.contents[0]?.text).toContain('Example: insert_body_text');
+    expect(materialExample.contents[0]?.text).toContain('tool: bind_material_property');
+    expect(enhancedInputExample.contents[0]?.text).toContain('tool: modify_input_mapping_context');
+    expect(windowPolishExample.contents[0]?.text).toContain('tool: apply_window_ui_changes');
+    expect(projectCodeExample.contents[0]?.text).toContain('Use explicit changed_paths');
     expect(widgetPattern.contents[0]?.text).toContain('Pattern: activatable_window');
+    expect(centeredOverlayPattern.contents[0]?.text).toContain('Pattern: centered_overlay');
+  });
+
+  it('serves the prompt catalog with concrete workflow guidance', async () => {
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
+    cleanups.push(harness.close);
+
+    const promptNames = Object.keys(promptCatalog);
+    for (const promptName of promptNames) {
+      const argsByPrompt: Record<string, Record<string, string>> = {
+        design_menu_screen: {
+          widget_asset_path: '/Game/UI/WBP_Menu',
+          design_goal: 'Create a centered main menu',
+        },
+        author_material_button_style: {
+          asset_path: '/Game/Materials/M_Button',
+          visual_goal: 'Warm metallic CTA',
+        },
+        wire_hud_widget_classes: {
+          hud_asset_path: '/Game/UI/BP_HUD',
+          widget_class_path: '/Game/UI/WBP_Menu.WBP_Menu_C',
+          class_default_property: 'MainMenuClass',
+        },
+        debug_widget_compile_errors: {
+          widget_asset_path: '/Game/UI/WBP_Menu',
+          compile_summary_json: '{"status":"Error"}',
+        },
+      };
+
+      const prompt = await harness.client.getPrompt({
+        name: promptName,
+        arguments: argsByPrompt[promptName],
+      });
+
+      expect(prompt.messages).toHaveLength(1);
+      expect(prompt.messages[0]?.role).toBe('user');
+      expect(prompt.messages[0]?.content.type).toBe('text');
+    }
+  });
+
+  it('validates example catalog payloads against the live tool schemas', async () => {
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient(), new FakeProjectController()));
+    cleanups.push(harness.close);
+
+    for (const family of Object.values(exampleCatalog)) {
+      for (const example of family.examples) {
+        const result = await harness.client.callTool({
+          name: example.tool,
+          arguments: example.arguments,
+        });
+
+        expect(result.isError).not.toBe(true);
+        expect(parseToolResult(result)).toMatchObject({
+          success: true,
+        });
+      }
+    }
   });
 
   it('serializes arguments to subsystem calls and returns parsed JSON', async () => {
@@ -228,16 +325,20 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toEqual([
-      {
-        method: 'SearchAssets',
-        params: {
-          Query: 'Player',
-          ClassFilter: 'Blueprint',
-          MaxResults: 7,
+    expect(parseToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'search_assets',
+      data: [
+        {
+          method: 'SearchAssets',
+          params: {
+            Query: 'Player',
+            ClassFilter: 'Blueprint',
+            MaxResults: 7,
+          },
         },
-      },
-    ]);
+      ],
+    });
     expect(fakeClient.calls).toEqual([
       {
         method: 'SearchAssets',
@@ -422,7 +523,7 @@ describe('createBlueprintExtractorServer', () => {
     ]);
   });
 
-  it('routes widget variable aliases, widget-path patches, and widget class-default patches through the narrowed widget API', async () => {
+  it('routes snake_case widget variable flags, widget-path patches, and widget class-default patches through the narrowed widget API', async () => {
     const fakeClient = new FakeUEClient((method) => JSON.stringify({
       success: true,
       operation: method,
@@ -435,7 +536,7 @@ describe('createBlueprintExtractorServer', () => {
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
         widget_path: 'WindowRoot/TitleBar/TitleBarBg',
-        bIsVariable: true,
+        is_variable: true,
       },
     });
     const patchDefaults = await harness.client.callTool({

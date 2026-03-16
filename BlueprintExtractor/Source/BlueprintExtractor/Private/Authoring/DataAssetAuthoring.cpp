@@ -52,6 +52,32 @@ static bool ValidateProperties(UObject* Target,
 	return bValid;
 }
 
+static bool IsEnhancedInputDataAssetClass(const UClass* AssetClass)
+{
+	if (!AssetClass)
+	{
+		return false;
+	}
+
+	const FString ClassPath = AssetClass->GetPathName();
+	return ClassPath.StartsWith(TEXT("/Script/EnhancedInput."));
+}
+
+static void CleanupFailedCreate(UObject* CreatedObject, UPackage* Package)
+{
+	if (CreatedObject)
+	{
+		CreatedObject->ClearFlags(RF_Public | RF_Standalone);
+		CreatedObject->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional);
+		CreatedObject->MarkAsGarbage();
+	}
+
+	if (Package)
+	{
+		Package->SetDirtyFlag(false);
+	}
+}
+
 } // namespace DataAssetAuthoringInternal
 
 TSharedPtr<FJsonObject> FDataAssetAuthoring::Create(const FString& AssetPath,
@@ -77,6 +103,14 @@ TSharedPtr<FJsonObject> FDataAssetAuthoring::Create(const FString& AssetPath,
 		Context.AddError(TEXT("invalid_asset_class"),
 		                 FString::Printf(TEXT("Class '%s' is not a concrete UDataAsset subclass."), *AssetClass->GetName()),
 		                 AssetClassPath);
+		return Context.BuildResult(false);
+	}
+
+	if (IsEnhancedInputDataAssetClass(AssetClass))
+	{
+		Context.AddError(TEXT("unsupported_asset_class"),
+		                 TEXT("Generic DataAsset authoring does not support Enhanced Input assets. Use the dedicated InputAction/InputMappingContext tools."),
+		                 AssetClass->GetPathName());
 		return Context.BuildResult(false);
 	}
 
@@ -141,6 +175,7 @@ TSharedPtr<FJsonObject> FDataAssetAuthoring::Create(const FString& AssetPath,
 	}
 	if (!bApplySuccess)
 	{
+		CleanupFailedCreate(DataAsset, Package);
 		return Context.BuildResult(false);
 	}
 
@@ -163,6 +198,14 @@ TSharedPtr<FJsonObject> FDataAssetAuthoring::Modify(UDataAsset* DataAsset,
 	if (!DataAsset)
 	{
 		Context.AddError(TEXT("asset_not_found"), TEXT("DataAsset is null."));
+		return Context.BuildResult(false);
+	}
+
+	if (DataAssetAuthoringInternal::IsEnhancedInputDataAssetClass(DataAsset->GetClass()))
+	{
+		Context.AddError(TEXT("unsupported_asset_class"),
+		                 TEXT("Generic DataAsset mutation does not support Enhanced Input assets. Use the dedicated InputAction/InputMappingContext tools."),
+		                 DataAsset->GetClass()->GetPathName());
 		return Context.BuildResult(false);
 	}
 

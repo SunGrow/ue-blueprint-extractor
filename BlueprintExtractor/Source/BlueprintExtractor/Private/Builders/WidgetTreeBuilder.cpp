@@ -10,6 +10,7 @@
 #include "Animation/WidgetAnimation.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
+#include "Components/ListViewBase.h"
 #include "Components/NamedSlot.h"
 #include "Components/PanelWidget.h"
 #include "Components/PanelSlot.h"
@@ -187,6 +188,31 @@ static TSharedPtr<FJsonObject> MakeCompileResult(const bool bSuccess,
 	Result->SetNumberField(TEXT("errorCount"), ErrorCount);
 	Result->SetNumberField(TEXT("warningCount"), WarningCount);
 	return Result;
+}
+
+static TArray<TSharedPtr<FJsonValue>> BuildCompileRecoveryHints(const bool bBindWidgetIssue,
+                                                                const bool bAbstractClassIssue,
+                                                                const bool bListViewEntryIssue)
+{
+	TArray<TSharedPtr<FJsonValue>> Hints;
+
+	if (bBindWidgetIssue)
+	{
+		Hints.Add(MakeShared<FJsonValueString>(TEXT("Check that each native BindWidget property name matches the widget tree exactly and that the widget class is assignable to the native property type.")));
+		Hints.Add(MakeShared<FJsonValueString>(TEXT("Re-extract the widget blueprint and compare widget_path names against the parent class BindWidget properties before patching again.")));
+	}
+
+	if (bAbstractClassIssue)
+	{
+		Hints.Add(MakeShared<FJsonValueString>(TEXT("Replace abstract widget classes in the tree with concrete CommonUI/UMG classes before recompiling.")));
+	}
+
+	if (bListViewEntryIssue)
+	{
+		Hints.Add(MakeShared<FJsonValueString>(TEXT("Set entry_widget_class on ListView/ListViewBase widgets to a concrete UUserWidget that implements the required list entry interface.")));
+	}
+
+	return Hints;
 }
 
 struct FWidgetJsonNodeLocation
@@ -1016,6 +1042,23 @@ static TSharedPtr<FJsonObject> NormalizeWidgetPropertiesJson(const TSharedPtr<FJ
 				NormalizedProperties->RemoveField(VariableField);
 				break;
 			}
+		}
+	}
+
+	static const TCHAR* EntryWidgetClassFields[] = {
+		TEXT("entry_widget_class"),
+		TEXT("entry_widget_class_path"),
+	};
+
+	for (const TCHAR* EntryWidgetClassField : EntryWidgetClassFields)
+	{
+		if (const TSharedPtr<FJsonValue> EntryWidgetValue = NormalizedProperties->TryGetField(EntryWidgetClassField))
+		{
+			if (!NormalizedProperties->HasField(TEXT("EntryWidgetClass")))
+			{
+				NormalizedProperties->SetField(TEXT("EntryWidgetClass"), EntryWidgetValue);
+			}
+			NormalizedProperties->RemoveField(EntryWidgetClassField);
 		}
 	}
 
@@ -2609,10 +2652,30 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 	TArray<TSharedPtr<FJsonValue>> MessageArray;
 	int32 ErrorCount = CompileResults.NumErrors;
 	int32 WarningCount = CompileResults.NumWarnings;
+	bool bBindWidgetIssue = false;
+	bool bAbstractClassIssue = false;
+	bool bListViewEntryIssue = false;
 
 	for (const TSharedRef<FTokenizedMessage>& Message : CompileResults.Messages)
 	{
 		const FString MessageText = Message->ToText().ToString();
+		if (MessageText.Contains(TEXT("BindWidget"), ESearchCase::IgnoreCase)
+			|| MessageText.Contains(TEXT("bound widget"), ESearchCase::IgnoreCase))
+		{
+			bBindWidgetIssue = true;
+		}
+		if (MessageText.Contains(TEXT("abstract"), ESearchCase::IgnoreCase)
+			&& MessageText.Contains(TEXT("widget"), ESearchCase::IgnoreCase))
+		{
+			bAbstractClassIssue = true;
+		}
+		if ((MessageText.Contains(TEXT("EntryWidgetClass"), ESearchCase::IgnoreCase)
+			|| MessageText.Contains(TEXT("entry widget"), ESearchCase::IgnoreCase))
+			&& MessageText.Contains(TEXT("list"), ESearchCase::IgnoreCase))
+		{
+			bListViewEntryIssue = true;
+		}
+
 		switch (Message->GetSeverity())
 		{
 		case EMessageSeverity::Error:
@@ -2640,12 +2703,23 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CompileWidgetBlueprint(UWidgetBluepr
 
 	const bool bSuccess = (Status != BS_Error) && (ErrorCount == 0);
 	const TSharedPtr<FJsonObject> CompileResult = MakeCompileResult(bSuccess, StatusString, ErrorArray, WarningArray, MessageArray, ErrorCount, WarningCount);
+	const TArray<TSharedPtr<FJsonValue>> RecoveryHints = BuildCompileRecoveryHints(bBindWidgetIssue, bAbstractClassIssue, bListViewEntryIssue);
+	if (RecoveryHints.Num() > 0)
+	{
+		CompileResult->SetArrayField(TEXT("recoveryHints"), RecoveryHints);
+	}
 	Context.SetCompileSummary(CompileResult);
 	if (!bSuccess)
 	{
 		Context.AddError(TEXT("compile_failed"),
 		                 FString::Printf(TEXT("WidgetBlueprint compile failed with %d errors and %d warnings."), ErrorCount, WarningCount),
 		                 AssetPath);
+		if (bBindWidgetIssue)
+		{
+			Context.AddWarning(TEXT("bindwidget_recovery_hint"),
+			                   TEXT("Compile output suggests a BindWidget name or type mismatch. Re-extract the widget and compare it against the native parent properties."),
+			                   AssetPath);
+		}
 	}
 	else if (WarningCount > 0)
 	{

@@ -1,5 +1,6 @@
 .artifacts/
 .buildplugin-*/
+.uat-build-*/
 .vs/
 *.VC.db
 

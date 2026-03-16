@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.0
+- **Strict MCP v2 contract** — added server-level instructions, prompt catalog support, `outputSchema` on every public tool, schema-backed examples, and structured success/error envelopes with execution metadata.
+- **Composable material workflow** — added `set_material_settings`, `add_material_expression`, `connect_material_expressions`, and `bind_material_property` so common material authoring no longer depends on one large batch payload.
+- **Dedicated Enhanced Input authoring** — added `create_input_action`, `modify_input_action`, `create_input_mapping_context`, and `modify_input_mapping_context`, while generic DataAsset mutation now rejects Enhanced Input asset classes explicitly.
+- **UI recovery guidance** — added unsupported-surface and UI-redesign resources, stronger widget compile recovery hints for `BindWidget`, abstract-class, and `ListView` entry-class failures, and safer prompt-led redesign flows.
+- **Build and regression hardening** — fixed failed-create cleanup for DataAssets, declared the EnhancedInput plugin dependency, added contract validation for generated examples/prompts, and refreshed live MCP coverage for the new material and Enhanced Input flows.
+
 ## 1.14.1
 - **Project-control hardening** — `compile_project_code` and `sync_project_code` now fall back to editor-derived project automation context before environment variables, and Windows batch builds are launched in a `cmd.exe`-safe way.
 - **Contract alignment** — `trigger_live_coding` and `restart_editor` now match the current subsystem signatures while keeping the older MCP inputs as compatibility aliases with explicit diagnostics.

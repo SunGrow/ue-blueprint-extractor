@@ -173,6 +173,35 @@ public:
 	                        const FString& PropertiesJson,
 	                        const bool bValidateOnly = false);
 
+	/** Creates a dedicated Enhanced InputAction asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateInputAction(const FString& AssetPath,
+	                          const FString& ValueType = TEXT("boolean"),
+	                          const FString& PropertiesJson = TEXT(""),
+	                          const bool bValidateOnly = false);
+
+	/** Modifies a dedicated Enhanced InputAction asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyInputAction(const FString& AssetPath,
+	                          const FString& ValueType = TEXT(""),
+	                          const FString& PropertiesJson = TEXT(""),
+	                          const bool bValidateOnly = false);
+
+	/** Creates a dedicated Enhanced InputMappingContext asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateInputMappingContext(const FString& AssetPath,
+	                                  const FString& PropertiesJson = TEXT(""),
+	                                  const FString& MappingsJson = TEXT("[]"),
+	                                  const bool bValidateOnly = false);
+
+	/** Modifies a dedicated Enhanced InputMappingContext asset. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyInputMappingContext(const FString& AssetPath,
+	                                  const FString& PropertiesJson = TEXT(""),
+	                                  const bool bReplaceMappings = false,
+	                                  const FString& MappingsJson = TEXT("[]"),
+	                                  const bool bValidateOnly = false);
+
 	/** Creates a new DataTable with the specified row struct and optional rows. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CreateDataTable(const FString& AssetPath,

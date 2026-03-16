@@ -19,6 +19,7 @@
 #include "Authoring/StateTreeAuthoring.h"
 #include "Authoring/UserDefinedEnumAuthoring.h"
 #include "Authoring/UserDefinedStructAuthoring.h"
+#include "PropertySerializer.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimBlueprint.h"
@@ -31,6 +32,11 @@
 #include "Engine/DataAsset.h"
 #include "Engine/DataTable.h"
 #include "Engine/UserDefinedEnum.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "InputTriggers.h"
+#include "InputModifiers.h"
+#include "InputCoreTypes.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialFunctionInterface.h"
 #include "Materials/MaterialInstance.h"
@@ -129,6 +135,240 @@ static AssetType* LoadAssetByPath(const FString& AssetPath)
 
 	return nullptr;
 }
+
+namespace EnhancedInputAuthoringInternal
+{
+
+static bool ParseJsonObjectInput(const FString& RawJson, TSharedPtr<FJsonObject>& OutObject)
+{
+	if (RawJson.IsEmpty())
+	{
+		OutObject = MakeShared<FJsonObject>();
+		return true;
+	}
+
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(RawJson);
+	return FJsonSerializer::Deserialize(Reader, OutObject) && OutObject.IsValid();
+}
+
+static bool ParseJsonArrayInput(const FString& RawJson, TArray<TSharedPtr<FJsonValue>>& OutArray)
+{
+	if (RawJson.IsEmpty())
+	{
+		OutArray.Reset();
+		return true;
+	}
+
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(RawJson);
+	return FJsonSerializer::Deserialize(Reader, OutArray);
+}
+
+static TSharedPtr<FJsonObject> CloneJsonObject(const TSharedPtr<FJsonObject>& Source)
+{
+	if (!Source.IsValid())
+	{
+		return MakeShared<FJsonObject>();
+	}
+
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Source->Values)
+	{
+		Result->SetField(Pair.Key, Pair.Value);
+	}
+	return Result;
+}
+
+static void RemapField(const TSharedPtr<FJsonObject>& Object, const TCHAR* SourceField, const TCHAR* TargetField)
+{
+	if (!Object.IsValid() || !Object->HasField(SourceField))
+	{
+		return;
+	}
+
+	if (!Object->HasField(TargetField))
+	{
+		if (const TSharedPtr<FJsonValue> Existing = Object->TryGetField(SourceField))
+		{
+			Object->SetField(TargetField, Existing);
+		}
+	}
+
+	Object->RemoveField(SourceField);
+}
+
+static TSharedPtr<FJsonObject> NormalizeInputActionProperties(const TSharedPtr<FJsonObject>& Properties)
+{
+	const TSharedPtr<FJsonObject> Result = CloneJsonObject(Properties);
+	RemapField(Result, TEXT("action_description"), TEXT("ActionDescription"));
+	RemapField(Result, TEXT("trigger_when_paused"), TEXT("bTriggerWhenPaused"));
+	RemapField(Result, TEXT("consume_input"), TEXT("bConsumeInput"));
+	RemapField(Result, TEXT("consumes_action_and_axis_mappings"), TEXT("bConsumesActionAndAxisMappings"));
+	RemapField(Result, TEXT("reserve_all_mappings"), TEXT("bReserveAllMappings"));
+	RemapField(Result, TEXT("trigger_events_that_consume_legacy_keys"), TEXT("TriggerEventsThatConsumeLegacyKeys"));
+	RemapField(Result, TEXT("accumulation_behavior"), TEXT("AccumulationBehavior"));
+	return Result;
+}
+
+static TSharedPtr<FJsonObject> NormalizeInputMappingContextProperties(const TSharedPtr<FJsonObject>& Properties)
+{
+	const TSharedPtr<FJsonObject> Result = CloneJsonObject(Properties);
+	RemapField(Result, TEXT("context_description"), TEXT("ContextDescription"));
+	RemapField(Result, TEXT("registration_tracking_mode"), TEXT("RegistrationTrackingMode"));
+	RemapField(Result, TEXT("input_mode_filter_options"), TEXT("InputModeFilterOptions"));
+	return Result;
+}
+
+static bool ResolveInputActionValueType(const FString& ValueTypeName, EInputActionValueType& OutValueType)
+{
+	if (ValueTypeName.IsEmpty())
+	{
+		return true;
+	}
+
+	if (ValueTypeName.Equals(TEXT("boolean"), ESearchCase::IgnoreCase))
+	{
+		OutValueType = EInputActionValueType::Boolean;
+		return true;
+	}
+	if (ValueTypeName.Equals(TEXT("axis_1d"), ESearchCase::IgnoreCase))
+	{
+		OutValueType = EInputActionValueType::Axis1D;
+		return true;
+	}
+	if (ValueTypeName.Equals(TEXT("axis_2d"), ESearchCase::IgnoreCase))
+	{
+		OutValueType = EInputActionValueType::Axis2D;
+		return true;
+	}
+	if (ValueTypeName.Equals(TEXT("axis_3d"), ESearchCase::IgnoreCase))
+	{
+		OutValueType = EInputActionValueType::Axis3D;
+		return true;
+	}
+
+	return false;
+}
+
+static void CleanupFailedCreate(UObject* CreatedObject, UPackage* Package)
+{
+	if (CreatedObject)
+	{
+		CreatedObject->ClearFlags(RF_Public | RF_Standalone);
+		CreatedObject->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional);
+		CreatedObject->MarkAsGarbage();
+	}
+
+	if (Package)
+	{
+		Package->SetDirtyFlag(false);
+	}
+}
+
+static bool ApplyInputActionProperties(UInputAction* InputAction,
+                                       const FString& ValueTypeName,
+                                       const TSharedPtr<FJsonObject>& PropertiesJson,
+                                       TArray<FString>& OutErrors,
+                                       const bool bValidationOnly)
+{
+	EInputActionValueType ValueType = InputAction ? InputAction->ValueType : EInputActionValueType::Boolean;
+	if (!ResolveInputActionValueType(ValueTypeName, ValueType))
+	{
+		OutErrors.Add(FString::Printf(TEXT("Unsupported value_type '%s'. Expected boolean, axis_1d, axis_2d, or axis_3d."), *ValueTypeName));
+	}
+
+	const TSharedPtr<FJsonObject> NormalizedProperties = NormalizeInputActionProperties(PropertiesJson);
+	const bool bPropertiesApplied = FPropertySerializer::ApplyPropertiesFromJson(
+		InputAction,
+		NormalizedProperties,
+		OutErrors,
+		bValidationOnly,
+		true);
+
+	if (!bValidationOnly && InputAction)
+	{
+		InputAction->ValueType = ValueType;
+	}
+
+	return bPropertiesApplied && OutErrors.Num() == 0;
+}
+
+static bool ApplyInputMappingContextProperties(UInputMappingContext* MappingContext,
+                                               const TSharedPtr<FJsonObject>& PropertiesJson,
+                                               TArray<FString>& OutErrors,
+                                               const bool bValidationOnly)
+{
+	return FPropertySerializer::ApplyPropertiesFromJson(
+		MappingContext,
+		NormalizeInputMappingContextProperties(PropertiesJson),
+		OutErrors,
+		bValidationOnly,
+		true);
+}
+
+static bool ApplyMappings(UInputMappingContext* MappingContext,
+                          const TArray<TSharedPtr<FJsonValue>>& MappingValues,
+                          const bool bReplaceMappings,
+                          TArray<FString>& OutErrors,
+                          const bool bValidationOnly)
+{
+	if (!MappingContext)
+	{
+		OutErrors.Add(TEXT("InputMappingContext is null."));
+		return false;
+	}
+
+	if (!bValidationOnly && bReplaceMappings)
+	{
+		MappingContext->UnmapAll();
+	}
+
+	for (const TSharedPtr<FJsonValue>& Value : MappingValues)
+	{
+		const TSharedPtr<FJsonObject> MappingObject = Value.IsValid() ? Value->AsObject() : nullptr;
+		if (!MappingObject.IsValid())
+		{
+			OutErrors.Add(TEXT("Each mapping entry must be a JSON object."));
+			continue;
+		}
+
+		FString ActionPath;
+		if (!MappingObject->TryGetStringField(TEXT("action"), ActionPath) || ActionPath.IsEmpty())
+		{
+			OutErrors.Add(TEXT("Each mapping entry requires action."));
+			continue;
+		}
+
+		UInputAction* InputAction = LoadAssetByPath<UInputAction>(ActionPath);
+		if (!InputAction)
+		{
+			OutErrors.Add(FString::Printf(TEXT("InputAction not found: %s"), *ActionPath));
+			continue;
+		}
+
+		FString KeyName;
+		if (!MappingObject->TryGetStringField(TEXT("key"), KeyName) || KeyName.IsEmpty())
+		{
+			OutErrors.Add(TEXT("Each mapping entry requires key."));
+			continue;
+		}
+
+		const FKey Key(*KeyName);
+		if (!Key.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("Invalid input key: %s"), *KeyName));
+			continue;
+		}
+
+		if (!bValidationOnly)
+		{
+			MappingContext->MapKey(InputAction, Key);
+		}
+	}
+
+	return OutErrors.Num() == 0;
+}
+
+} // namespace EnhancedInputAuthoringInternal
 
 static bool ResolveAssetClassFilter(const FString& ClassFilter, FTopLevelAssetPath& OutClassPath, bool& bOutRecursiveClasses)
 {
@@ -1064,6 +1304,303 @@ FString UBlueprintExtractorSubsystem::ModifyDataAsset(const FString& AssetPath,
 		return MakeErrorJson(TEXT("Failed to modify DataAsset"));
 	}
 
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CreateInputAction(const FString& AssetPath,
+                                                        const FString& ValueType,
+                                                        const FString& PropertiesJson,
+                                                        const bool bValidateOnly)
+{
+	using namespace EnhancedInputAuthoringInternal;
+
+	TSharedPtr<FJsonObject> ParsedProperties;
+	if (!ParseJsonObjectInput(PropertiesJson, ParsedProperties))
+	{
+		return MakeErrorJson(TEXT("Invalid JSON for PropertiesJson"));
+	}
+
+	FAssetMutationContext Context(TEXT("create_input_action"), AssetPath, TEXT("InputAction"), bValidateOnly);
+	if (DoesAssetExist(AssetPath))
+	{
+		Context.AddError(TEXT("asset_exists"),
+		                 FString::Printf(TEXT("Asset already exists: %s"), *AssetPath),
+		                 AssetPath);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	UInputAction* PreviewAction = NewObject<UInputAction>(GetTransientPackage(), UInputAction::StaticClass());
+	TArray<FString> ValidationErrors;
+	ApplyInputActionProperties(PreviewAction, ValueType, ParsedProperties, ValidationErrors, true);
+	Context.SetValidationSummary(ValidationErrors.Num() == 0,
+	                             ValidationErrors.Num() == 0 ? TEXT("InputAction payload validated.") : TEXT("InputAction payload failed validation."),
+	                             ValidationErrors);
+	for (const FString& Error : ValidationErrors)
+	{
+		Context.AddError(TEXT("validation_error"), Error, AssetPath);
+	}
+	if (ValidationErrors.Num() > 0)
+	{
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	if (bValidateOnly)
+	{
+		return SerializeJsonObject(Context.BuildResult(true));
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Create InputAction")));
+	UPackage* Package = CreatePackage(*AssetPath);
+	if (!Package)
+	{
+		Context.AddError(TEXT("package_create_failed"),
+		                 FString::Printf(TEXT("Failed to create package: %s"), *AssetPath),
+		                 AssetPath);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	const FName AssetName = FPackageName::GetShortFName(AssetPath);
+	UInputAction* InputAction = NewObject<UInputAction>(Package, UInputAction::StaticClass(), AssetName, RF_Public | RF_Standalone);
+	if (!InputAction)
+	{
+		Context.AddError(TEXT("asset_create_failed"),
+		                 FString::Printf(TEXT("Failed to create InputAction asset: %s"), *AssetPath),
+		                 AssetPath);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	InputAction->Modify();
+	TArray<FString> ApplyErrors;
+	ApplyInputActionProperties(InputAction, ValueType, ParsedProperties, ApplyErrors, false);
+	for (const FString& Error : ApplyErrors)
+	{
+		Context.AddError(TEXT("apply_error"), Error, AssetPath);
+	}
+	if (ApplyErrors.Num() > 0)
+	{
+		CleanupFailedCreate(InputAction, Package);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	FAssetRegistryModule::AssetCreated(InputAction);
+	Package->MarkPackageDirty();
+	Context.TrackDirtyObject(InputAction);
+	return SerializeJsonObject(Context.BuildResult(true));
+}
+
+FString UBlueprintExtractorSubsystem::ModifyInputAction(const FString& AssetPath,
+                                                        const FString& ValueType,
+                                                        const FString& PropertiesJson,
+                                                        const bool bValidateOnly)
+{
+	using namespace EnhancedInputAuthoringInternal;
+
+	UInputAction* InputAction = LoadAssetByPath<UInputAction>(AssetPath);
+	if (!InputAction)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not an InputAction: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedProperties;
+	if (!ParseJsonObjectInput(PropertiesJson, ParsedProperties))
+	{
+		return MakeErrorJson(TEXT("Invalid JSON for PropertiesJson"));
+	}
+
+	FAssetMutationContext Context(TEXT("modify_input_action"), AssetPath, TEXT("InputAction"), bValidateOnly);
+	TArray<FString> ValidationErrors;
+	ApplyInputActionProperties(InputAction, ValueType, ParsedProperties, ValidationErrors, true);
+	Context.SetValidationSummary(ValidationErrors.Num() == 0,
+	                             ValidationErrors.Num() == 0 ? TEXT("InputAction payload validated.") : TEXT("InputAction payload failed validation."),
+	                             ValidationErrors);
+	for (const FString& Error : ValidationErrors)
+	{
+		Context.AddError(TEXT("validation_error"), Error, AssetPath);
+	}
+	if (ValidationErrors.Num() > 0)
+	{
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	if (bValidateOnly)
+	{
+		return SerializeJsonObject(Context.BuildResult(true));
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Modify InputAction")));
+	InputAction->Modify();
+	TArray<FString> ApplyErrors;
+	ApplyInputActionProperties(InputAction, ValueType, ParsedProperties, ApplyErrors, false);
+	for (const FString& Error : ApplyErrors)
+	{
+		Context.AddError(TEXT("apply_error"), Error, AssetPath);
+	}
+	if (ApplyErrors.Num() > 0)
+	{
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	InputAction->MarkPackageDirty();
+	Context.TrackDirtyObject(InputAction);
+	return SerializeJsonObject(Context.BuildResult(true));
+}
+
+FString UBlueprintExtractorSubsystem::CreateInputMappingContext(const FString& AssetPath,
+                                                                const FString& PropertiesJson,
+                                                                const FString& MappingsJson,
+                                                                const bool bValidateOnly)
+{
+	using namespace EnhancedInputAuthoringInternal;
+
+	TSharedPtr<FJsonObject> ParsedProperties;
+	if (!ParseJsonObjectInput(PropertiesJson, ParsedProperties))
+	{
+		return MakeErrorJson(TEXT("Invalid JSON for PropertiesJson"));
+	}
+
+	TArray<TSharedPtr<FJsonValue>> ParsedMappings;
+	if (!ParseJsonArrayInput(MappingsJson, ParsedMappings))
+	{
+		return MakeErrorJson(TEXT("Invalid JSON for MappingsJson"));
+	}
+
+	FAssetMutationContext Context(TEXT("create_input_mapping_context"), AssetPath, TEXT("InputMappingContext"), bValidateOnly);
+	if (DoesAssetExist(AssetPath))
+	{
+		Context.AddError(TEXT("asset_exists"),
+		                 FString::Printf(TEXT("Asset already exists: %s"), *AssetPath),
+		                 AssetPath);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	UInputMappingContext* PreviewContext = NewObject<UInputMappingContext>(GetTransientPackage(), UInputMappingContext::StaticClass());
+	TArray<FString> ValidationErrors;
+	ApplyInputMappingContextProperties(PreviewContext, ParsedProperties, ValidationErrors, true);
+	ApplyMappings(PreviewContext, ParsedMappings, true, ValidationErrors, true);
+	Context.SetValidationSummary(ValidationErrors.Num() == 0,
+	                             ValidationErrors.Num() == 0 ? TEXT("InputMappingContext payload validated.") : TEXT("InputMappingContext payload failed validation."),
+	                             ValidationErrors);
+	for (const FString& Error : ValidationErrors)
+	{
+		Context.AddError(TEXT("validation_error"), Error, AssetPath);
+	}
+	if (ValidationErrors.Num() > 0)
+	{
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	if (bValidateOnly)
+	{
+		return SerializeJsonObject(Context.BuildResult(true));
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Create InputMappingContext")));
+	UPackage* Package = CreatePackage(*AssetPath);
+	if (!Package)
+	{
+		Context.AddError(TEXT("package_create_failed"),
+		                 FString::Printf(TEXT("Failed to create package: %s"), *AssetPath),
+		                 AssetPath);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	const FName AssetName = FPackageName::GetShortFName(AssetPath);
+	UInputMappingContext* MappingContext = NewObject<UInputMappingContext>(Package, UInputMappingContext::StaticClass(), AssetName, RF_Public | RF_Standalone);
+	if (!MappingContext)
+	{
+		Context.AddError(TEXT("asset_create_failed"),
+		                 FString::Printf(TEXT("Failed to create InputMappingContext asset: %s"), *AssetPath),
+		                 AssetPath);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	MappingContext->Modify();
+	TArray<FString> ApplyErrors;
+	ApplyInputMappingContextProperties(MappingContext, ParsedProperties, ApplyErrors, false);
+	ApplyMappings(MappingContext, ParsedMappings, true, ApplyErrors, false);
+	for (const FString& Error : ApplyErrors)
+	{
+		Context.AddError(TEXT("apply_error"), Error, AssetPath);
+	}
+	if (ApplyErrors.Num() > 0)
+	{
+		CleanupFailedCreate(MappingContext, Package);
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	FAssetRegistryModule::AssetCreated(MappingContext);
+	Package->MarkPackageDirty();
+	Context.TrackDirtyObject(MappingContext);
+	TSharedPtr<FJsonObject> Result = Context.BuildResult(true);
+	Result->SetNumberField(TEXT("mappingCount"), MappingContext->GetMappings().Num());
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ModifyInputMappingContext(const FString& AssetPath,
+                                                                const FString& PropertiesJson,
+                                                                const bool bReplaceMappings,
+                                                                const FString& MappingsJson,
+                                                                const bool bValidateOnly)
+{
+	using namespace EnhancedInputAuthoringInternal;
+
+	UInputMappingContext* MappingContext = LoadAssetByPath<UInputMappingContext>(AssetPath);
+	if (!MappingContext)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not an InputMappingContext: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedProperties;
+	if (!ParseJsonObjectInput(PropertiesJson, ParsedProperties))
+	{
+		return MakeErrorJson(TEXT("Invalid JSON for PropertiesJson"));
+	}
+
+	TArray<TSharedPtr<FJsonValue>> ParsedMappings;
+	if (!ParseJsonArrayInput(MappingsJson, ParsedMappings))
+	{
+		return MakeErrorJson(TEXT("Invalid JSON for MappingsJson"));
+	}
+
+	FAssetMutationContext Context(TEXT("modify_input_mapping_context"), AssetPath, TEXT("InputMappingContext"), bValidateOnly);
+	TArray<FString> ValidationErrors;
+	ApplyInputMappingContextProperties(MappingContext, ParsedProperties, ValidationErrors, true);
+	ApplyMappings(MappingContext, ParsedMappings, bReplaceMappings, ValidationErrors, true);
+	Context.SetValidationSummary(ValidationErrors.Num() == 0,
+	                             ValidationErrors.Num() == 0 ? TEXT("InputMappingContext payload validated.") : TEXT("InputMappingContext payload failed validation."),
+	                             ValidationErrors);
+	for (const FString& Error : ValidationErrors)
+	{
+		Context.AddError(TEXT("validation_error"), Error, AssetPath);
+	}
+	if (ValidationErrors.Num() > 0)
+	{
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	if (bValidateOnly)
+	{
+		return SerializeJsonObject(Context.BuildResult(true));
+	}
+
+	Context.BeginTransaction(FText::FromString(TEXT("Modify InputMappingContext")));
+	MappingContext->Modify();
+	TArray<FString> ApplyErrors;
+	ApplyInputMappingContextProperties(MappingContext, ParsedProperties, ApplyErrors, false);
+	ApplyMappings(MappingContext, ParsedMappings, bReplaceMappings, ApplyErrors, false);
+	for (const FString& Error : ApplyErrors)
+	{
+		Context.AddError(TEXT("apply_error"), Error, AssetPath);
+	}
+	if (ApplyErrors.Num() > 0)
+	{
+		return SerializeJsonObject(Context.BuildResult(false));
+	}
+
+	MappingContext->MarkPackageDirty();
+	Context.TrackDirtyObject(MappingContext);
+	TSharedPtr<FJsonObject> Result = Context.BuildResult(true);
+	Result->SetNumberField(TEXT("mappingCount"), MappingContext->GetMappings().Num());
 	return SerializeJsonObject(Result);
 }
 

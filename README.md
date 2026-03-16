@@ -7,25 +7,29 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![UE 5.x](https://img.shields.io/badge/Unreal_Engine-5.6%20%7C%205.7-blue)](https://www.unrealengine.com/)
 
-A UE5 editor plugin + MCP server that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://openai.com/index/codex/) full read/write access to Unreal Engine assets. Extract Blueprints, materials, data tables, AI trees, animations, and more to structured JSON -- then create and modify them right back, all from your terminal.
+A UE5 editor plugin + MCP server that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://openai.com/index/codex/) full read/write access to Unreal Engine assets. Extract Blueprints, materials, data tables, AI trees, animations, widgets, and Enhanced Input assets to structured JSON, then create and modify them back through an explicit v2 MCP contract.
 
 > Recommended companion plugin for [ClaudeRules](https://github.com/SunGrow/ClaudeRules). Optional but highly recommended for Unreal Engine projects using Claude Code.
 
 ## Features at a Glance
 
-- **72 MCP tools** across 16 asset families -- the most comprehensive MCP server for Unreal Engine
+- **80 MCP tools**, **13 resources**, **2 resource templates**, and **4 prompts**
 - **Full round-trip** -- extract assets to JSON, then create and modify them back
+- **Strict v2 contract** -- snake_case inputs, `outputSchema` on every tool, and structured success/error envelopes
+- **Generated examples + prompts** -- schema-backed examples and reusable workflow prompts for UI, materials, HUD wiring, and compile debugging
 - **Explicit-save semantics** -- write operations mark packages dirty; you choose when to save
 - **Async imports** -- import textures and meshes from local files or HTTP/HTTPS URLs
+- **Composable material tools** -- use small focused tools before the advanced batch DSL
+- **Dedicated Enhanced Input authoring** -- InputAction and InputMappingContext have first-class tools instead of generic DataAsset reflection
 - **Compact output** -- LLM-optimized JSON reduces token usage by 50-70%
 - **Cascade extraction** -- follow asset references automatically with depth control
 - **Project automation** -- compile, live coding, editor restart, and code sync
 - **Editor-only** -- not included in packaged builds
 
 <details>
-<summary><strong>Supported asset families (16)</strong></summary>
+<summary><strong>Supported asset families (20)</strong></summary>
 
-Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, Material, MaterialFunction (incl. Layer/LayerBlend), MaterialInstance, AnimSequence, AnimMontage, BlendSpace
+Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, DataAsset, DataTable, UserDefinedStruct, UserDefinedEnum, Curve, CurveTable, Material, MaterialFunction (incl. Layer/LayerBlend), MaterialInstance, AnimSequence, AnimMontage, BlendSpace, InputAction, InputMappingContext
 
 </details>
 
@@ -36,6 +40,7 @@ Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, 
 
 - [Quick Start](#quick-start)
 - [Requirements](#requirements)
+- [V2 Contract](#v2-contract)
 - [MCP Tools](#mcp-tools)
 - [Usage](#usage)
 - [Settings](#settings)
@@ -57,7 +62,7 @@ Blueprint, AnimBlueprint, WidgetBlueprint, StateTree, BehaviorTree, Blackboard, 
 
 Copy `BlueprintExtractor/` into your project's `Plugins/` directory, then enable these plugin dependencies and rebuild:
 
-- **StateTree** and **PropertyBindingUtils** (required)
+- **StateTree**, **PropertyBindingUtils**, and **EnhancedInput** (required)
 - **Web Remote Control** (required for MCP access -- Edit > Plugins > search "Remote Control")
 
 ### 2. Register the MCP server
@@ -76,7 +81,7 @@ Run the install script for your client:
 
 ### 3. Verify
 
-Open a new Claude Code or Codex session. The 72 Blueprint Extractor tools will appear automatically.
+Open a new Claude Code or Codex session. The 80 Blueprint Extractor tools and 4 workflow prompts will appear automatically.
 
 <details>
 <summary><strong>Manual registration and local builds</strong></summary>
@@ -116,11 +121,29 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c n
 - **Unreal Engine 5.x** (tested on 5.6 and 5.7)
 - **Node.js 18+** (for the MCP server)
 - **Claude Code CLI** or **Codex CLI**
+- **EnhancedInput**, **StateTree**, **PropertyBindingUtils**, and **Remote Control** UE plugins enabled
 - Editor-only -- not included in packaged builds
+
+## V2 Contract
+
+Blueprint Extractor v2 is a breaking MCP contract aimed at model reliability.
+
+- Canonical public arguments use `snake_case`.
+- Every public tool exposes `outputSchema`.
+- Tool results are standardized into structured success/error envelopes.
+- Durable guidance moved into resources and generated examples.
+- Repeatable planning flows moved into prompts instead of prose-only docs.
+
+Reference docs:
+
+- [MCP v2 Reference](docs/mcp-v2-reference.md)
+- [Prompt Catalog](docs/prompt-catalog.md)
+- [Unsupported Surfaces](docs/unsupported-surfaces.md)
+- [Safe UI Redesign Workflow](docs/ui-redesign-workflow.md)
 
 ## MCP Tools
 
-72 tools organized by category. All tools declare `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations for safe auto-approval.
+80 tools organized by category. All tools declare `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations for safe auto-approval, and every public tool exposes `outputSchema`.
 
 <details>
 <summary><strong>Extraction Tools</strong> (17 tools) -- read-only, extract asset data to JSON</summary>
@@ -181,12 +204,16 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c n
 </details>
 
 <details>
-<summary><strong>Material Authoring</strong> (7 tools) -- material graph and instance operations</summary>
+<summary><strong>Material Authoring</strong> (11 tools) -- composable v2 material graph and instance operations</summary>
 
 | Tool | Description |
 |------|-------------|
 | `create_material` | Create a classic Material with optional initial texture and settings |
-| `modify_material` | Apply compact graph and settings operations to a Material |
+| `set_material_settings` | Apply top-level material settings with the primary v2 material workflow |
+| `add_material_expression` | Add one expression node to a Material graph |
+| `connect_material_expressions` | Wire one expression output into another expression input |
+| `bind_material_property` | Bind one expression output to a root material property |
+| `modify_material` | Advanced escape hatch for compact graph and settings operations |
 | `create_material_function` | Create a MaterialFunction, MaterialLayer, or MaterialLayerBlend |
 | `modify_material_function` | Apply graph and settings operations to a MaterialFunction-family asset |
 | `compile_material_asset` | Recompile or refresh a material-family asset without saving |
@@ -196,18 +223,30 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c n
 </details>
 
 <details>
-<summary><strong>Data Asset Authoring</strong> (8 tools) -- data tables, data assets, curves</summary>
+<summary><strong>Data Asset Authoring</strong> (8 tools) -- generic data tables, data assets, and curves</summary>
 
 | Tool | Description |
 |------|-------------|
-| `create_data_asset` | Create a DataAsset and optionally initialize editable properties |
-| `modify_data_asset` | Apply a reflected property patch to an existing DataAsset |
+| `create_data_asset` | Create a generic property-safe DataAsset and optionally initialize editable properties |
+| `modify_data_asset` | Apply a reflected property patch to an existing generic property-safe DataAsset |
 | `create_data_table` | Create a DataTable with a concrete row struct and optional initial rows |
 | `modify_data_table` | Upsert, delete, or replace rows in a DataTable |
 | `create_curve` | Create a CurveFloat, CurveVector, or CurveLinearColor with optional channel data |
 | `modify_curve` | Patch curve channels and upsert or delete individual keys |
 | `create_curve_table` | Create a CurveTable in rich or simple mode with optional initial rows |
 | `modify_curve_table` | Upsert, delete, or replace rows in a CurveTable |
+
+</details>
+
+<details>
+<summary><strong>Enhanced Input Authoring</strong> (4 tools) -- dedicated InputAction and InputMappingContext workflows</summary>
+
+| Tool | Description |
+|------|-------------|
+| `create_input_action` | Create a dedicated Enhanced InputAction asset with a human-friendly `value_type` |
+| `modify_input_action` | Modify a dedicated Enhanced InputAction without using generic DataAsset reflection |
+| `create_input_mapping_context` | Create an InputMappingContext with explicit action/key mappings |
+| `modify_input_mapping_context` | Replace or append explicit mappings on an InputMappingContext |
 
 </details>
 
@@ -260,7 +299,7 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c n
 </details>
 
 <details>
-<summary><strong>Import Tools</strong> (5 tools) -- async texture and mesh import</summary>
+<summary><strong>Import Tools</strong> (6 tools) -- async texture and mesh import</summary>
 
 | Tool | Description |
 |------|-------------|
@@ -545,9 +584,10 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
 
 ### Design Principles
 
-- **Right primitive** -- Live editor actions are exposed as 72 MCP **tools**. Static guidance lives in 9 resources plus 2 resource templates (`blueprint://scopes`, `blueprint://write-capabilities`, `blueprint://examples/{family}`, etc.).
-- **Small, distinct surface** -- 72 tools with non-overlapping purposes. Extraction tools are read-only; authoring and import tools are explicit write operations with separate save semantics.
+- **Right primitive** -- Live editor actions are exposed as 80 MCP **tools**. Static guidance lives in 13 resources, 2 resource templates, and 4 prompts (`blueprint://scopes`, `blueprint://unsupported-surfaces`, `blueprint://examples/{family}`, `design_menu_screen`, etc.).
+- **Small, distinct surface** -- extraction tools stay read-only, common material flows are decomposed into smaller tools, and Enhanced Input uses dedicated authoring tools instead of pretending generic DataAsset reflection is enough.
 - **Annotations** -- All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval.
+- **Structured results** -- every public tool exposes `outputSchema`, mirrors JSON in `structuredContent`, and returns machine-usable error envelopes when execution fails recoverably.
 - **Explicit save** -- Write and import operations mutate assets and mark packages dirty, but do not save automatically. Call `save_assets` to persist.
 - **Security** -- stdio transport, env-based credentials (`UE_REMOTE_CONTROL_PORT`), local-only by default.
 
@@ -568,7 +608,7 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
 - For box slots, `slot.Size.sizeRule` accepts `Automatic` or the shorthand `Auto`.
 
 **Widget authoring notes:**
-- `create_widget_blueprint` accepts `parent_class_path` as the preferred explicit parent reference and keeps `parent_class` as a compatibility alias.
+- `create_widget_blueprint` accepts `parent_class_path` as the canonical explicit parent reference.
 - Widget tools accept either package paths such as `/Game/UI/WBP_Window` or object paths such as `/Game/UI/WBP_Window.WBP_Window`.
 - Widget create and extract responses include additive `packagePath` and `objectPath` fields so follow-up tool calls can reuse the returned path form directly.
 
@@ -687,4 +727,4 @@ npm publish --access public
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
-**Latest: v1.14.1** -- project-control hardening, widget path ergonomics, Blueprint graph authoring.
+**Latest: v2.0.0** -- strict MCP contract, prompt catalog, composable material tools, dedicated Enhanced Input authoring, and safer UI redesign guidance.

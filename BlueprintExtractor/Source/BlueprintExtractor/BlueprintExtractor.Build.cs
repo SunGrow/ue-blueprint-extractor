@@ -34,6 +34,7 @@ public class BlueprintExtractor : ModuleRules
 			"Json",
 			"JsonUtilities",
 			"InputCore",
+			"EnhancedInput",
 			"AIModule",
 			"MaterialEditor",
 			"PropertyBindingUtils",
