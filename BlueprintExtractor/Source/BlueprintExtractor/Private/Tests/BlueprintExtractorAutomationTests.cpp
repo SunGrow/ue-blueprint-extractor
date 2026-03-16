@@ -1838,6 +1838,28 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 			false),
 		TEXT("ModifyWidgetBlueprintStructure patch_class_defaults"));
 
+	// Verify CDO values survive patch_class_defaults without an explicit compile.
+	// patch_class_defaults no longer triggers an internal compile, so values must
+	// be present on the CDO immediately after patching.
+	{
+		UWidgetBlueprint* PreCompileBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+		const UObject* PreCompileCDO = PreCompileBP && PreCompileBP->GeneratedClass
+			? PreCompileBP->GeneratedClass->GetDefaultObject(false) : nullptr;
+		Test.TestNotNull(TEXT("CDO exists after patch_class_defaults (before compile)"), PreCompileCDO);
+		if (PreCompileCDO)
+		{
+			const FObjectPropertyBase* PreActiveProp = CastField<FObjectPropertyBase>(
+				PreCompileCDO->GetClass()->FindPropertyByName(TEXT("ActiveTitleBarMaterial")));
+			Test.TestNotNull(TEXT("ActiveTitleBarMaterial property found before compile"), PreActiveProp);
+			if (PreActiveProp)
+			{
+				const UObject* PreActiveVal = PreActiveProp->GetObjectPropertyValue_InContainer(PreCompileCDO);
+				Test.TestEqual(TEXT("ActiveTitleBarMaterial survives patch without compile"),
+					GetPathNameSafe(PreActiveVal), FString(DefaultMaterialPath));
+			}
+		}
+	}
+
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),

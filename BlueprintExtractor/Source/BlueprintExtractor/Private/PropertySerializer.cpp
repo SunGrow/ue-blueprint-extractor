@@ -873,6 +873,18 @@ bool FPropertySerializer::ApplyPropertiesFromJson(UObject* Target,
 		FProperty* Property = TargetClass->FindPropertyByName(FName(*Pair.Key));
 		if (!Property)
 		{
+			// Generated class property chain may be stale if the native parent
+			// gained new UPROPERTYs after the Blueprint was compiled. Walk the
+			// super-class chain to locate properties on the native parent.
+			for (const UClass* Super = TargetClass->GetSuperClass();
+			     Super && !Property;
+			     Super = Super->GetSuperClass())
+			{
+				Property = Super->FindPropertyByName(FName(*Pair.Key));
+			}
+		}
+		if (!Property)
+		{
 			PropertySerializerInternal::AddError(
 				OutErrors,
 				FString::Printf(TEXT("Property '%s' not found on class '%s'"),

@@ -58,6 +58,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/EngineVersionComparison.h"
+#include "FileHelpers.h"
 #include "UnrealEdMisc.h"
 #include "UObject/UObjectIterator.h"
 
@@ -2759,7 +2760,7 @@ FString UBlueprintExtractorSubsystem::TriggerLiveCoding(const bool bEnableForSes
 #endif
 }
 
-FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn, const FString& AdditionalCommandLine)
+FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn, const FString& AdditionalCommandLine, const bool bSaveDirtyAssets)
 {
 	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 	Result->SetBoolField(TEXT("success"), true);
@@ -2769,6 +2770,17 @@ FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn, const FStr
 	{
 		Result->SetStringField(TEXT("additionalCommandLine"), AdditionalCommandLine);
 	}
+
+	if (bSaveDirtyAssets)
+	{
+		constexpr bool bPromptUserToSave = false;
+		constexpr bool bSaveMapPackages = true;
+		constexpr bool bSaveContentPackages = true;
+		const bool bSaved = FEditorFileUtils::SaveDirtyPackages(
+			bPromptUserToSave, bSaveMapPackages, bSaveContentPackages);
+		Result->SetBoolField(TEXT("dirtyPackagesSaved"), bSaved);
+	}
+
 	Result->SetStringField(TEXT("message"), TEXT("Editor restart scheduled."));
 
 	const FString CommandLineCopy = AdditionalCommandLine;

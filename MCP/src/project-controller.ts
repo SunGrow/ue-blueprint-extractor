@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { access, readdir, unlink } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
@@ -20,6 +20,7 @@ export interface CompileProjectCodeRequest {
   configuration?: BuildConfiguration;
   buildTimeoutMs?: number;
   includeOutput?: boolean;
+  clearUhtCache?: boolean;
 }
 
 export interface SyncProjectCodeRequest extends CompileProjectCodeRequest {
@@ -56,6 +57,7 @@ export interface CompileProjectCodeResult {
   outputIncluded: boolean;
   stdout?: string;
   stderr?: string;
+  uhtCacheFilesDeleted?: string[];
 }
 
 export interface RestartReconnectResult {
@@ -323,6 +325,37 @@ export function classifyChangedPaths(changedPaths: string[], forceRebuild = fals
   };
 }
 
+const UHT_CACHE_PATTERN = /\.(uhtpath|uhtsettings)$/i;
+
+async function walkAndDeleteMatching(dir: string, pattern: RegExp, deleted: string[]): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fullPath = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      await walkAndDeleteMatching(fullPath, pattern, deleted);
+    } else if (pattern.test(entry.name)) {
+      try {
+        await unlink(fullPath);
+        deleted.push(fullPath);
+      } catch {
+        // file may already be gone
+      }
+    }
+  }
+}
+
+async function clearUhtCacheFiles(projectDir: string): Promise<string[]> {
+  const deleted: string[] = [];
+  const intermediateDir = resolve(projectDir, 'Intermediate');
+  await walkAndDeleteMatching(intermediateDir, UHT_CACHE_PATTERN, deleted);
+  return deleted;
+}
+
 async function waitForState(
   probeConnection: ProbeConnection,
   expectedState: boolean,
@@ -400,6 +433,11 @@ export class ProjectController implements ProjectControllerLike {
 
     await access(buildScript, fsConstants.F_OK);
 
+    let uhtCacheFilesDeleted: string[] | undefined;
+    if (request.clearUhtCache) {
+      uhtCacheFilesDeleted = await clearUhtCacheFiles(dirname(projectPath));
+    }
+
     const args = [
       target,
       platform,
@@ -444,6 +482,9 @@ export class ProjectController implements ProjectControllerLike {
     }
     if (stderr) {
       result.stderr = stderr;
+    }
+    if (uhtCacheFilesDeleted && uhtCacheFilesDeleted.length > 0) {
+      result.uhtCacheFilesDeleted = uhtCacheFilesDeleted;
     }
 
     return result;

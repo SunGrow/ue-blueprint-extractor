@@ -1468,8 +1468,7 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 
 	if (Operation == TEXT("patch_class_defaults"))
 	{
-		OutMutationFlags |=
-			EBlueprintMutationFlags::Defaults | EBlueprintMutationFlags::Compile;
+		OutMutationFlags |= EBlueprintMutationFlags::Defaults;
 		return ApplyClassDefaults(
 			Blueprint,
 			GetClassDefaultsObject(Payload),

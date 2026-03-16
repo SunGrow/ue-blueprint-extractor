@@ -882,7 +882,7 @@ server.resource(
         '- compile_project_code runs an external UBT build from the MCP host.',
         '- compile_project_code and sync_project_code resolve engine_root, project_path, and target in this order: explicit args -> editor context -> environment.',
         '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups. changed_paths remains an accepted compatibility input but the current editor-side trigger ignores it.',
-        '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect. save_dirty_assets remains an accepted compatibility input; explicit save_assets is the reliable persistence path.',
+        '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect. When save_dirty_assets is true, all dirty packages are saved before the restart to prevent modal save dialogs.',
         '- sync_project_code requires explicit changed_paths and chooses Live Coding vs build_and_restart deterministically.',
         '',
         'build_and_restart is forced for:',
@@ -4208,6 +4208,9 @@ server.registerTool(
       include_output: z.boolean().default(false).describe(
         'When true, include full stdout and stderr in the result. Failure cases include output automatically.',
       ),
+      clear_uht_cache: z.boolean().default(false).describe(
+        'When true, delete UHT cache files (.uhtpath, .uhtsettings) from Intermediate/ before building so that Unreal Header Tool regenerates headers for any new or changed UPROPERTYs.',
+      ),
     },
     annotations: {
       title: 'Compile Project Code',
@@ -4217,7 +4220,7 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  async ({ engine_root, project_path, target, platform, configuration, build_timeout_seconds, include_output }) => {
+  async ({ engine_root, project_path, target, platform, configuration, build_timeout_seconds, include_output, clear_uht_cache }) => {
     try {
       const resolved = await resolveProjectInputs({ engine_root, project_path, target });
       const parsed = await projectController.compileProjectCode({
@@ -4228,6 +4231,7 @@ server.registerTool(
         configuration: configuration as BuildConfiguration | undefined,
         buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
         includeOutput: include_output,
+        clearUhtCache: clear_uht_cache,
       });
       return jsonToolSuccess({
         ...parsed,
@@ -4282,10 +4286,24 @@ server.registerTool(
         bEnableForSession: true,
         bWaitForCompletion: wait_for_completion,
       });
+
+      const headerChanges = (changed_paths ?? []).filter(
+        (p: string) => /\.(h|hpp|inl)$/i.test(p.replace(/\\/g, '/')),
+      );
+      const warnings: string[] = [];
+      if (headerChanges.length > 0) {
+        warnings.push(
+          'Live Coding cannot add, remove, or reorder UPROPERTYs or change class layouts. '
+          + 'Use compile_project_code + restart_editor for class layout changes.',
+        );
+      }
+
       return jsonToolSuccess({
         ...parsed,
         changedPathsAccepted: changed_paths ?? [],
         changedPathsAppliedByEditor: false,
+        headerChangesDetected: headerChanges,
+        warnings,
       });
     } catch (e) {
       return jsonToolError(e);
@@ -4324,6 +4342,7 @@ server.registerTool(
     try {
       const restartRequest = await callSubsystemJson('RestartEditor', {
         bWarn: false,
+        bSaveDirtyAssets: save_dirty_assets,
       });
 
       cachedProjectAutomationContext = null;
@@ -4332,7 +4351,7 @@ server.registerTool(
         return jsonToolSuccess({
           ...restartRequest,
           saveDirtyAssetsAccepted: save_dirty_assets,
-          saveDirtyAssetsAppliedByEditor: false,
+          saveDirtyAssetsAppliedByEditor: save_dirty_assets,
         });
       }
 
@@ -4344,7 +4363,7 @@ server.registerTool(
       return jsonToolSuccess({
         ...restartRequest,
         saveDirtyAssetsAccepted: save_dirty_assets,
-        saveDirtyAssetsAppliedByEditor: false,
+        saveDirtyAssetsAppliedByEditor: save_dirty_assets,
         reconnect,
         success: restartRequest.success !== false && reconnect.success,
       });
@@ -4399,6 +4418,9 @@ server.registerTool(
       include_output: z.boolean().default(false).describe(
         'When true, include full build stdout and stderr in the result. Failure cases include output automatically.',
       ),
+      clear_uht_cache: z.boolean().default(false).describe(
+        'When true, delete UHT cache files (.uhtpath, .uhtsettings) from Intermediate/ before building so that Unreal Header Tool regenerates headers for any new or changed UPROPERTYs.',
+      ),
     },
     annotations: {
       title: 'Sync Project Code',
@@ -4422,6 +4444,7 @@ server.registerTool(
     disconnect_timeout_seconds,
     reconnect_timeout_seconds,
     include_output,
+    clear_uht_cache,
   }) => {
     try {
       const plan = projectController.classifyChangedPaths(changed_paths, force_rebuild);
@@ -4480,6 +4503,7 @@ server.registerTool(
         configuration: configuration as BuildConfiguration | undefined,
         buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
         includeOutput: include_output,
+        clearUhtCache: clear_uht_cache,
       });
 
       structuredResult.strategy = 'build_and_restart';
@@ -4501,6 +4525,7 @@ server.registerTool(
 
       const restartRequest = await callSubsystemJson('RestartEditor', {
         bWarn: false,
+        bSaveDirtyAssets: save_dirty_assets,
       });
       cachedProjectAutomationContext = null;
       structuredResult.restartRequest = restartRequest;
@@ -4574,6 +4599,7 @@ server.registerTool(
         disconnect_timeout_seconds: z.number().int().positive().default(60).optional(),
         reconnect_timeout_seconds: z.number().int().positive().default(180).optional(),
         include_output: z.boolean().default(false).optional(),
+        clear_uht_cache: z.boolean().default(false).optional(),
       }).optional().describe(
         'Optional project-code sync step to run after the widget asset work succeeds.',
       ),
@@ -4785,6 +4811,7 @@ server.registerTool(
               ? sync_project_code.build_timeout_seconds * 1000
               : undefined,
             includeOutput: sync_project_code.include_output ?? false,
+            clearUhtCache: sync_project_code.clear_uht_cache ?? false,
           });
           steps.push({
             step: 'compile_project_code',
@@ -4807,6 +4834,7 @@ server.registerTool(
 
           const restartRequest = await callSubsystemJson('RestartEditor', {
             bWarn: false,
+            bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
           });
           cachedProjectAutomationContext = null;
           const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {

@@ -1006,6 +1006,7 @@ describe('createBlueprintExtractorServer', () => {
         configuration: 'Development',
         buildTimeoutMs: undefined,
         includeOutput: false,
+        clearUhtCache: false,
       },
     ]);
   });
@@ -1050,6 +1051,7 @@ describe('createBlueprintExtractorServer', () => {
         configuration: undefined,
         buildTimeoutMs: undefined,
         includeOutput: false,
+        clearUhtCache: false,
       },
     ]);
   });
@@ -1229,6 +1231,7 @@ describe('createBlueprintExtractorServer', () => {
         method: 'RestartEditor',
         params: {
           bWarn: false,
+          bSaveDirtyAssets: true,
         },
       },
     ]);
