@@ -112,6 +112,13 @@ static TSharedPtr<FJsonObject> GetClassDefaultsObject(
 		return *DefaultsObject;
 	}
 
+	if (Payload->TryGetObjectField(TEXT("class_defaults"), DefaultsObject)
+		&& DefaultsObject
+		&& DefaultsObject->IsValid())
+	{
+		return *DefaultsObject;
+	}
+
 	if (Payload->TryGetObjectField(TEXT("properties"), DefaultsObject)
 		&& DefaultsObject
 		&& DefaultsObject->IsValid())

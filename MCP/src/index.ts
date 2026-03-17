@@ -320,7 +320,7 @@ export function createBlueprintExtractorServer(
 ) {
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '2.0.0',
+    version: '2.1.0',
   }, {
     instructions: serverInstructions,
   });
@@ -4128,7 +4128,7 @@ server.registerTool(
         if (typeof index === 'number') payload.index = index;
         if (properties) payload.properties = properties;
         if (slot) payload.slot = slot;
-        if (class_defaults) payload.class_defaults = class_defaults;
+        if (class_defaults) payload.classDefaults = class_defaults;
         const variableFlag = maybeBoolean(is_variable);
         if (typeof variableFlag === 'boolean') payload.is_variable = variableFlag;
         if (operations) payload.operations = operations;
@@ -4659,7 +4659,7 @@ server.registerTool(
         const result = await callSubsystemJson('ModifyWidgetBlueprintStructure', {
           AssetPath: asset_path,
           Operation: 'patch_class_defaults',
-          PayloadJson: JSON.stringify({ class_defaults }),
+          PayloadJson: JSON.stringify({ classDefaults: class_defaults }),
           bValidateOnly: false,
         });
         steps.push({

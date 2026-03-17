@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 3,
-	"VersionName": "2.0.1",
+	"Version": 4,
+	"VersionName": "2.1.0",
 	"FriendlyName": "Blueprint Extractor",
 	"Description": "Extracts and authors Blueprint, UI, Enhanced Input, AI, data, material, curve, and animation assets through structured JSON and MCP tools",
 	"Category": "Editor",

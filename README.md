@@ -727,4 +727,4 @@ npm publish --access public
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
-**Latest: v2.0.0** -- strict MCP contract, prompt catalog, composable material tools, dedicated Enhanced Input authoring, and safer UI redesign guidance.
+**Latest: v2.1.0** -- direct material connection resolver with output/input index selectors, hardened widget class-defaults extraction, Overlay slot round-trip coverage.

@@ -23,6 +23,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/Image.h"
+#include "Components/OverlaySlot.h"
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
 #include "Components/VerticalBoxSlot.h"
@@ -1135,9 +1136,11 @@ static bool RunMaterialCoverage(FAutomationTestBase& Test)
 			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionVectorParameter","tempId":"baseColor","editorX":-420,"editorY":-80,"properties":{"ParameterName":"BaseColorTint","Group":"Surface","DefaultValue":{"r":0.25,"g":0.5,"b":0.75,"a":1.0}}},
 			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionScalarParameter","tempId":"roughness","editorX":-420,"editorY":120,"properties":{"ParameterName":"SurfaceRoughness","Group":"Surface","DefaultValue":0.35}},
 			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionAdd","tempId":"unusedAdd","editorX":-120,"editorY":220},
+			{"operation":"add_expression","expressionClass":"/Script/Engine.MaterialExpressionLinearInterpolate","tempId":"lerpNode","editorX":60,"editorY":20},
 			{"operation":"connect_material_property","fromTempId":"baseColor","materialProperty":"MP_BaseColor"},
-			{"operation":"connect_material_property","fromTempId":"roughness","materialProperty":"MP_Roughness"},
+			{"operation":"connect_material_property","fromTempId":"baseColor","fromOutputIndex":1,"materialProperty":"MP_Roughness"},
 			{"operation":"connect_expressions","fromTempId":"roughness","toTempId":"unusedAdd","toInputName":"A"},
+			{"operation":"connect_expressions","fromTempId":"roughness","toTempId":"lerpNode","toInputIndex":2},
 			{"operation":"disconnect_expression_input","tempId":"unusedAdd","inputName":"A"},
 			{"operation":"move_expression","tempId":"unusedAdd","editorX":-40,"editorY":260},
 			{"operation":"set_expression_properties","tempId":"roughness","properties":{"DefaultValue":0.45}},
@@ -1163,6 +1166,21 @@ static bool RunMaterialCoverage(FAutomationTestBase& Test)
 	{
 		TSharedPtr<FJsonObject> TempIdMap;
 		Test.TestTrue(TEXT("ModifyMaterial returns created expression tempId map"), TryGetObjectFieldCopy(ModifyMaterialResult, TEXT("tempIdMap"), TempIdMap) && TempIdMap.IsValid());
+		FString BaseColorGuid;
+		FString RoughnessGuid;
+		FString LerpNodeGuid;
+		Test.TestTrue(TEXT("ModifyMaterial tempId map contains baseColor"), TempIdMap.IsValid() && TempIdMap->TryGetStringField(TEXT("baseColor"), BaseColorGuid) && !BaseColorGuid.IsEmpty());
+		Test.TestTrue(TEXT("ModifyMaterial tempId map contains roughness"), TempIdMap.IsValid() && TempIdMap->TryGetStringField(TEXT("roughness"), RoughnessGuid) && !RoughnessGuid.IsEmpty());
+		Test.TestTrue(TEXT("ModifyMaterial tempId map contains lerpNode"), TempIdMap.IsValid() && TempIdMap->TryGetStringField(TEXT("lerpNode"), LerpNodeGuid) && !LerpNodeGuid.IsEmpty());
+
+		const FString ConflictPayload = FString::Printf(
+			TEXT(R"json({"operations":[{"operation":"connect_expressions","fromExpressionGuid":"%s","toExpressionGuid":"%s","toInputName":"A","toInputIndex":2}]})json"),
+			*RoughnessGuid,
+			*LerpNodeGuid);
+		ExpectFailureResult(
+			Test,
+			Subsystem->ModifyMaterial(MaterialObjectPath, ConflictPayload, true),
+			TEXT("ModifyMaterial selector conflict validate_only"));
 	}
 
 	ExpectSuccessfulResult(
@@ -1192,9 +1210,44 @@ static bool RunMaterialCoverage(FAutomationTestBase& Test)
 	Test.TestNotNull(
 		TEXT("ExtractMaterial reports BaseColor property connection"),
 		FindArrayObjectByStringField(MaterialJson, TEXT("propertyConnections"), TEXT("property"), TEXT("MP_BaseColor")).Get());
+	const TSharedPtr<FJsonObject> RoughnessConnection = FindArrayObjectByStringField(MaterialJson, TEXT("propertyConnections"), TEXT("property"), TEXT("MP_Roughness"));
+	Test.TestNotNull(TEXT("ExtractMaterial reports Roughness property connection"), RoughnessConnection.Get());
+	if (RoughnessConnection.IsValid())
+	{
+		double RoughnessOutputIndex = -1.0;
+		Test.TestTrue(TEXT("Roughness property connection reports output index"), RoughnessConnection->TryGetNumberField(TEXT("outputIndex"), RoughnessOutputIndex));
+		Test.TestEqual(TEXT("Roughness property connection preserves from_output_index"), static_cast<int32>(RoughnessOutputIndex), 1);
+	}
 	Test.TestNotNull(
 		TEXT("ExtractMaterial reports renamed parameter group"),
 		FindArrayObjectByStringField(MaterialJson, TEXT("parameterGroups"), TEXT("groupName"), TEXT("Shading")).Get());
+
+	TSharedPtr<FJsonObject> ModifyTempIdMap;
+	if (ModifyMaterialResult.IsValid())
+	{
+		Test.TestTrue(TEXT("ModifyMaterial result still exposes tempIdMap"), TryGetObjectFieldCopy(ModifyMaterialResult, TEXT("tempIdMap"), ModifyTempIdMap) && ModifyTempIdMap.IsValid());
+	}
+	if (ModifyTempIdMap.IsValid())
+	{
+		FString RoughnessGuid;
+		FString LerpNodeGuid;
+		Test.TestTrue(TEXT("Modify tempId map keeps roughness guid"), ModifyTempIdMap->TryGetStringField(TEXT("roughness"), RoughnessGuid));
+		Test.TestTrue(TEXT("Modify tempId map keeps lerp guid"), ModifyTempIdMap->TryGetStringField(TEXT("lerpNode"), LerpNodeGuid));
+
+		const TSharedPtr<FJsonObject> LerpNodeObject = FindArrayObjectByStringField(MaterialJson, TEXT("expressions"), TEXT("expressionGuid"), LerpNodeGuid);
+		Test.TestNotNull(TEXT("ExtractMaterial includes the Lerp node"), LerpNodeObject.Get());
+		if (LerpNodeObject.IsValid())
+		{
+			const TSharedPtr<FJsonObject> AlphaInput = FindArrayObjectByStringField(LerpNodeObject, TEXT("inputs"), TEXT("name"), TEXT("Alpha"));
+			Test.TestNotNull(TEXT("ExtractMaterial reports the Lerp Alpha input"), AlphaInput.Get());
+			if (AlphaInput.IsValid())
+			{
+				FString ConnectedExpressionGuid;
+				Test.TestTrue(TEXT("Lerp Alpha input reports source expression guid"), AlphaInput->TryGetStringField(TEXT("expressionGuid"), ConnectedExpressionGuid));
+				Test.TestEqual(TEXT("Lerp Alpha input preserves to_input_index wiring"), ConnectedExpressionGuid, RoughnessGuid);
+			}
+		}
+	}
 
 	ExpectSuccessfulResult(
 		Test,
@@ -1837,6 +1890,15 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 			TEXT(R"json({"classDefaults":{"ActiveTitleBarMaterial":"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial","InactiveTitleBarMaterial":"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"}})json"),
 			false),
 		TEXT("ModifyWidgetBlueprintStructure patch_class_defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("patch_class_defaults"),
+			TEXT(R"json({"class_defaults":{"ActiveTitleBarMaterial":"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"}})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure patch_class_defaults snake_case"));
 
 	// Verify CDO values survive patch_class_defaults without an explicit compile.
 	// patch_class_defaults no longer triggers an internal compile, so values must
@@ -2554,6 +2616,88 @@ static bool RunCommonUIWidgetCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunOverlaySlotRoundTripCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_OverlaySlotRoundTrip"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("/Script/UMG.UserWidget")),
+		TEXT("CreateWidgetBlueprint overlay slot round trip"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"Overlay","name":"OverlayRoot","is_variable":true,"children":[{"class":"TextBlock","name":"LeftText","is_variable":true,"slot":{"HorizontalAlignment":"HAlign_Left"},"properties":{"Text":"Overlay slot regression"}}]})json"),
+			false),
+		TEXT("BuildWidgetTree overlay slot round trip"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint overlay slot round trip"));
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Overlay slot widget blueprint exists"), WidgetBP);
+	if (!WidgetBP || !WidgetBP->WidgetTree)
+	{
+		return false;
+	}
+
+	UTextBlock* LeftText = Cast<UTextBlock>(WidgetBP->WidgetTree->FindWidget(TEXT("LeftText")));
+	Test.TestNotNull(TEXT("Overlay slot child exists"), LeftText);
+	UOverlaySlot* OverlaySlot = LeftText ? Cast<UOverlaySlot>(LeftText->Slot) : nullptr;
+	Test.TestNotNull(TEXT("Overlay slot child has an OverlaySlot"), OverlaySlot);
+	if (OverlaySlot)
+	{
+		Test.TestEqual(TEXT("BuildWidgetTree applies OverlaySlot HorizontalAlignment"), OverlaySlot->GetHorizontalAlignment(), HAlign_Left);
+	}
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath, false),
+		TEXT("ExtractWidgetBlueprint overlay slot round trip"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	Test.TestTrue(TEXT("Overlay slot extract returns a rootWidget"), TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid());
+	if (!RootWidgetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> LeftTextNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("OverlayRoot/LeftText"));
+	Test.TestNotNull(TEXT("Overlay slot extract includes the child node"), LeftTextNode.Get());
+	if (!LeftTextNode.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> SlotJson;
+	Test.TestTrue(TEXT("Overlay slot extract includes slot data"), TryGetObjectFieldCopy(LeftTextNode, TEXT("slot"), SlotJson) && SlotJson.IsValid());
+	if (SlotJson.IsValid())
+	{
+		FString HorizontalAlignment;
+		Test.TestTrue(TEXT("Overlay slot extract reports HorizontalAlignment"), SlotJson->TryGetStringField(TEXT("HorizontalAlignment"), HorizontalAlignment));
+		Test.TestEqual(TEXT("Overlay slot extract preserves HorizontalAlignment"), HorizontalAlignment, FString(TEXT("HAlign_Left")));
+	}
+
+	return true;
+}
+
 } // namespace BlueprintExtractorAutomation
 
 BEGIN_DEFINE_SPEC(
@@ -2594,6 +2738,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("MaterialGraphRoundTrip"), [this]()
 		{
 			TestTrue(TEXT("Material graph coverage completes"), RunMaterialCoverage(*this));
+		});
+
+		It(TEXT("OverlaySlotRoundTrip"), [this]()
+		{
+			TestTrue(TEXT("Overlay slot round-trip coverage completes"), RunOverlaySlotRoundTripCoverage(*this));
 		});
 
 		It(TEXT("ImportJobs"), [this]()

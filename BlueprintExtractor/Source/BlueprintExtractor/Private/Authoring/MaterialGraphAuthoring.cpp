@@ -1144,6 +1144,219 @@ static UMaterialExpression* ResolveExpressionRef(const FMaterialTarget& Target,
 	return nullptr;
 }
 
+struct FResolvedMaterialOutputSelector
+{
+	int32 OutputIndex = INDEX_NONE;
+	FString OutputName;
+	const FExpressionOutput* Output = nullptr;
+};
+
+struct FResolvedMaterialInputSelector
+{
+	int32 InputIndex = INDEX_NONE;
+	FString InputName;
+	FExpressionInput* Input = nullptr;
+};
+
+static bool ResolveMaterialOutputSelector(UMaterialExpression* Expression,
+                                          const TSharedPtr<FJsonObject>& Operation,
+                                          FResolvedMaterialOutputSelector& OutSelector,
+                                          TArray<FString>& OutErrors)
+{
+	if (!Expression)
+	{
+		OutErrors.Add(TEXT("connect_expressions requires a source expression."));
+		return false;
+	}
+
+	TArray<FExpressionOutput>& Outputs = Expression->GetOutputs();
+	if (Outputs.Num() == 0)
+	{
+		OutErrors.Add(FString::Printf(TEXT("Expression '%s' exposes no outputs."), *Expression->GetName()));
+		return false;
+	}
+
+	FString RequestedName;
+	const bool bHasRequestedName = TryGetStringFieldAny(Operation, {TEXT("fromOutputName"), TEXT("from_output_name")}, RequestedName)
+		&& !RequestedName.IsEmpty();
+
+	int32 RequestedIndex = INDEX_NONE;
+	double RequestedIndexValue = 0.0;
+	const bool bHasRequestedIndex = TryGetNumberFieldAny(Operation, {TEXT("fromOutputIndex"), TEXT("from_output_index")}, RequestedIndexValue);
+	if (bHasRequestedIndex)
+	{
+		RequestedIndex = static_cast<int32>(RequestedIndexValue);
+	}
+
+	int32 ResolvedIndexFromName = INDEX_NONE;
+	if (bHasRequestedName)
+	{
+		for (int32 OutputIndex = 0; OutputIndex < Outputs.Num(); ++OutputIndex)
+		{
+			if (Outputs[OutputIndex].OutputName.ToString().Equals(RequestedName, ESearchCase::IgnoreCase))
+			{
+				ResolvedIndexFromName = OutputIndex;
+				break;
+			}
+		}
+
+		if (ResolvedIndexFromName == INDEX_NONE)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Output '%s' not found on expression '%s'."), *RequestedName, *Expression->GetName()));
+			return false;
+		}
+	}
+
+	if (bHasRequestedIndex && !Outputs.IsValidIndex(RequestedIndex))
+	{
+		OutErrors.Add(FString::Printf(TEXT("Output index %d is out of range for expression '%s'."), RequestedIndex, *Expression->GetName()));
+		return false;
+	}
+
+	int32 ResolvedIndex = 0;
+	if (bHasRequestedName && bHasRequestedIndex)
+	{
+		if (ResolvedIndexFromName != RequestedIndex)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Source output selector conflict on expression '%s': name '%s' resolves to index %d but index %d was requested."),
+				*Expression->GetName(),
+				*RequestedName,
+				ResolvedIndexFromName,
+				RequestedIndex));
+			return false;
+		}
+		ResolvedIndex = RequestedIndex;
+	}
+	else if (bHasRequestedName)
+	{
+		ResolvedIndex = ResolvedIndexFromName;
+	}
+	else if (bHasRequestedIndex)
+	{
+		ResolvedIndex = RequestedIndex;
+	}
+
+	OutSelector.OutputIndex = ResolvedIndex;
+	OutSelector.Output = &Outputs[ResolvedIndex];
+	OutSelector.OutputName = Outputs[ResolvedIndex].OutputName.ToString();
+	return true;
+}
+
+static bool ResolveMaterialInputSelector(UMaterialExpression* Expression,
+                                         const TSharedPtr<FJsonObject>& Operation,
+                                         FResolvedMaterialInputSelector& OutSelector,
+                                         TArray<FString>& OutErrors)
+{
+	if (!Expression)
+	{
+		OutErrors.Add(TEXT("connect_expressions requires a destination expression."));
+		return false;
+	}
+
+	const int32 InputCount = Expression->CountInputs();
+	if (InputCount <= 0)
+	{
+		OutErrors.Add(FString::Printf(TEXT("Expression '%s' exposes no inputs."), *Expression->GetName()));
+		return false;
+	}
+
+	FString RequestedName;
+	const bool bHasRequestedName = TryGetStringFieldAny(Operation, {TEXT("toInputName"), TEXT("to_input_name")}, RequestedName)
+		&& !RequestedName.IsEmpty();
+
+	int32 RequestedIndex = INDEX_NONE;
+	double RequestedIndexValue = 0.0;
+	const bool bHasRequestedIndex = TryGetNumberFieldAny(Operation, {TEXT("toInputIndex"), TEXT("to_input_index")}, RequestedIndexValue);
+	if (bHasRequestedIndex)
+	{
+		RequestedIndex = static_cast<int32>(RequestedIndexValue);
+	}
+
+	int32 ResolvedIndexFromName = INDEX_NONE;
+	if (bHasRequestedName)
+	{
+		for (int32 InputIndex = 0; InputIndex < InputCount; ++InputIndex)
+		{
+			if (Expression->GetInputName(InputIndex).ToString().Equals(RequestedName, ESearchCase::IgnoreCase))
+			{
+				ResolvedIndexFromName = InputIndex;
+				break;
+			}
+		}
+
+		if (ResolvedIndexFromName == INDEX_NONE)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Input '%s' not found on expression '%s'."), *RequestedName, *Expression->GetName()));
+			return false;
+		}
+	}
+
+	if (bHasRequestedIndex && (RequestedIndex < 0 || RequestedIndex >= InputCount))
+	{
+		OutErrors.Add(FString::Printf(TEXT("Input index %d is out of range for expression '%s'."), RequestedIndex, *Expression->GetName()));
+		return false;
+	}
+
+	int32 ResolvedIndex = 0;
+	if (bHasRequestedName && bHasRequestedIndex)
+	{
+		if (ResolvedIndexFromName != RequestedIndex)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Destination input selector conflict on expression '%s': name '%s' resolves to index %d but index %d was requested."),
+				*Expression->GetName(),
+				*RequestedName,
+				ResolvedIndexFromName,
+				RequestedIndex));
+			return false;
+		}
+		ResolvedIndex = RequestedIndex;
+	}
+	else if (bHasRequestedName)
+	{
+		ResolvedIndex = ResolvedIndexFromName;
+	}
+	else if (bHasRequestedIndex)
+	{
+		ResolvedIndex = RequestedIndex;
+	}
+
+	FExpressionInput* Input = Expression->GetInput(ResolvedIndex);
+	if (!Input)
+	{
+		OutErrors.Add(FString::Printf(TEXT("Input index %d could not be resolved on expression '%s'."), ResolvedIndex, *Expression->GetName()));
+		return false;
+	}
+
+	OutSelector.InputIndex = ResolvedIndex;
+	OutSelector.InputName = Expression->GetInputName(ResolvedIndex).ToString();
+	OutSelector.Input = Input;
+	return true;
+}
+
+static void ApplyResolvedExpressionConnection(FExpressionInput& TargetInput,
+                                              UMaterialExpression* SourceExpression,
+                                              const FResolvedMaterialOutputSelector& OutputSelector)
+{
+	TargetInput.Expression = SourceExpression;
+	TargetInput.OutputIndex = OutputSelector.OutputIndex;
+	if (OutputSelector.Output)
+	{
+		TargetInput.Mask = OutputSelector.Output->Mask;
+		TargetInput.MaskR = OutputSelector.Output->MaskR;
+		TargetInput.MaskG = OutputSelector.Output->MaskG;
+		TargetInput.MaskB = OutputSelector.Output->MaskB;
+		TargetInput.MaskA = OutputSelector.Output->MaskA;
+	}
+	else
+	{
+		TargetInput.Mask = 0;
+		TargetInput.MaskR = 0;
+		TargetInput.MaskG = 0;
+		TargetInput.MaskB = 0;
+		TargetInput.MaskA = 0;
+	}
+}
+
 static bool DisconnectExpressionInput(UMaterialExpression* Expression,
                                       const TSharedPtr<FJsonObject>& Operation,
                                       TArray<FString>& OutErrors)
@@ -1477,16 +1690,22 @@ static bool ApplyOperations(const FMaterialTarget& Target,
 				continue;
 			}
 
-			FString FromOutputName;
-			TryGetStringFieldAny(Operation, {TEXT("fromOutputName"), TEXT("from_output_name")}, FromOutputName);
-			FString ToInputName;
-			TryGetStringFieldAny(Operation, {TEXT("toInputName"), TEXT("to_input_name")}, ToInputName);
-
-			if (!bValidationOnly && !UMaterialEditingLibrary::ConnectMaterialExpressions(FromExpression, FromOutputName, ToExpression, ToInputName))
+			FResolvedMaterialOutputSelector OutputSelector;
+			if (!ResolveMaterialOutputSelector(FromExpression, Operation, OutputSelector, ValidationErrors))
 			{
-				Context.AddError(TEXT("connect_expression_failed"),
-				                 TEXT("Failed to connect material expressions."),
-				                 Target.GetAssetPath());
+				continue;
+			}
+
+			FResolvedMaterialInputSelector InputSelector;
+			if (!ResolveMaterialInputSelector(ToExpression, Operation, InputSelector, ValidationErrors))
+			{
+				continue;
+			}
+
+			if (!bValidationOnly)
+			{
+				ApplyResolvedExpressionConnection(*InputSelector.Input, FromExpression, OutputSelector);
+				Context.TrackChangedObject(ToExpression);
 			}
 		}
 		else if (OperationName == TEXT("disconnect_expression_input"))
@@ -1535,14 +1754,25 @@ static bool ApplyOperations(const FMaterialTarget& Target,
 				continue;
 			}
 
-			FString FromOutputName;
-			TryGetStringFieldAny(Operation, {TEXT("fromOutputName"), TEXT("from_output_name")}, FromOutputName);
-
-			if (!bValidationOnly && !UMaterialEditingLibrary::ConnectMaterialProperty(FromExpression, FromOutputName, Property))
+			FResolvedMaterialOutputSelector OutputSelector;
+			if (!ResolveMaterialOutputSelector(FromExpression, Operation, OutputSelector, ValidationErrors))
 			{
-				Context.AddError(TEXT("connect_material_property_failed"),
-				                 TEXT("Failed to connect material property."),
-				                 Target.GetAssetPath());
+				continue;
+			}
+
+			if (!bValidationOnly)
+			{
+				if (FExpressionInput* Input = Target.Material->GetExpressionInputForProperty(Property))
+				{
+					ApplyResolvedExpressionConnection(*Input, FromExpression, OutputSelector);
+					Context.TrackChangedObject(Target.Material);
+				}
+				else
+				{
+					Context.AddError(TEXT("connect_material_property_failed"),
+					                 TEXT("Failed to resolve the requested material property input."),
+					                 Target.GetAssetPath());
+				}
 			}
 		}
 		else if (OperationName == TEXT("disconnect_material_property"))

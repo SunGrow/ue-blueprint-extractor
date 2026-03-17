@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.0
+- **Material selector precision** — material graph writes now resolve source outputs and destination inputs by index or name, preserve explicit output-index wiring on expression and property connections, and validate conflicting selectors before mutating assets.
+- **Widget class-default parity** — widget class-default patch flows now accept the canonical `classDefaults` payload shape while preserving `class_defaults` compatibility, and extraction hardens inherited generated-class default serialization.
+- **Regression coverage** — added material output or input selector coverage, an Overlay slot round-trip canary, and refreshed MCP contract and live tests for the updated release surface.
+
 ## 2.0.0
 - **Strict MCP v2 contract** — added server-level instructions, prompt catalog support, `outputSchema` on every public tool, schema-backed examples, and structured success/error envelopes with execution metadata.
 - **Composable material workflow** — added `set_material_settings`, `add_material_expression`, `connect_material_expressions`, and `bind_material_property` so common material authoring no longer depends on one large batch payload.

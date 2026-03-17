@@ -956,7 +956,7 @@ describeLive('live UE e2e', () => {
       'add_material_expression',
       {
         asset_path: materialPath,
-        expression_class: '/Script/Engine.MaterialExpressionAdd',
+        expression_class: '/Script/Engine.MaterialExpressionLinearInterpolate',
         expression_name: 'mixNode',
         node_position: { x: -60, y: 220 },
       },
@@ -972,7 +972,7 @@ describeLive('live UE e2e', () => {
         asset_path: materialPath,
         from_expression_guid: roughnessGuid,
         to_expression_guid: mixNodeGuid,
-        to_input_name: 'A',
+        to_input_index: 2,
       },
       'connect_material_expressions roughness->mixNode',
     );
@@ -993,7 +993,8 @@ describeLive('live UE e2e', () => {
       'bind_material_property',
       {
         asset_path: materialPath,
-        from_expression_guid: roughnessGuid,
+        from_expression_guid: baseColorGuid,
+        from_output_index: 1,
         material_property: 'MP_Roughness',
       },
       'bind_material_property roughness',
@@ -1013,6 +1014,24 @@ describeLive('live UE e2e', () => {
       material: {
         assetPath: materialObjectPath,
       },
+    });
+    const material = extractMaterial.material as {
+      expressions?: Array<{
+        expressionGuid?: string;
+        inputs?: Array<{ name?: string; expressionGuid?: string; outputIndex?: number }>;
+      }>;
+      propertyConnections?: Array<{ property?: string; expressionGuid?: string; outputIndex?: number }>;
+    } | undefined;
+    const mixNode = material?.expressions?.find((expression) => expression.expressionGuid === mixNodeGuid);
+    const alphaInput = mixNode?.inputs?.find((input) => input.name === 'Alpha');
+    expect(alphaInput).toMatchObject({
+      expressionGuid: roughnessGuid,
+      outputIndex: 0,
+    });
+    const roughnessConnection = material?.propertyConnections?.find((connection) => connection.property === 'MP_Roughness');
+    expect(roughnessConnection).toMatchObject({
+      expressionGuid: baseColorGuid,
+      outputIndex: 1,
     });
 
     await callToolJson<Record<string, unknown>>(

@@ -578,7 +578,7 @@ describe('createBlueprintExtractorServer', () => {
           AssetPath: '/Game/UI/WBP_Window',
           Operation: 'patch_class_defaults',
           PayloadJson: JSON.stringify({
-            class_defaults: {
+            classDefaults: {
               ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
             },
           }),
@@ -1296,6 +1296,16 @@ describe('createBlueprintExtractorServer', () => {
       'ImportFonts',
       'ApplyWidgetFonts',
     ]);
+    expect(fakeClient.calls[1]).toMatchObject({
+      method: 'ModifyWidgetBlueprintStructure',
+      params: {
+        PayloadJson: JSON.stringify({
+          classDefaults: {
+            ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
+          },
+        }),
+      },
+    });
   });
 
   it('compacts extract_blueprint responses when requested', async () => {
