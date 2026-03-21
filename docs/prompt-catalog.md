@@ -16,6 +16,7 @@ Blueprint Extractor v2 ships prompt entries for repeatable MCP workflows. Prompt
 - Starts with extraction of the current widget and any owning HUD or transition assets.
 - Prefers pattern-driven, minimal edits over full rewrites.
 - Reminds the model to compile after each structural pass.
+- Requires the plan to end with `capture_widget_preview` or an explicit `partial verification` fallback when rendering is blocked.
 
 ### `author_material_button_style`
 
@@ -31,3 +32,7 @@ Blueprint Extractor v2 ships prompt entries for repeatable MCP workflows. Prompt
 
 - Turns compile output into a short triage sequence.
 - Highlights likely `BindWidget`, abstract-class, and `ListView` entry-class issues before suggesting another patch.
+- Treats `rootWidget=null` plus `widgetTreeStatus` / `widgetTreeError` as a degraded recovery signal instead of assuming extraction completely failed.
+- Redirects CommonUI button-style failures away from raw `UButton` background/style fields and toward style assets or a project-owned material-backed button base.
+- Reminds the caller to verify paired `bOverride_*` flags when override-coupled widget properties appear to ignore a patch.
+- Keeps the flow open until a successful compile is followed by `capture_widget_preview` or explicit `partial verification`.

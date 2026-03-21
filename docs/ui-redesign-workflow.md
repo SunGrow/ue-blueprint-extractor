@@ -14,7 +14,8 @@ Use this flow before replacing or heavily restructuring a screen:
    - `build_widget_tree` only when the full tree truly needs replacement
 5. Compile immediately after any structural widget change.
 6. If compile fails, inspect `compile.recoveryHints` and rerun `debug_widget_compile_errors`.
-7. Save only after compile status is clean.
+7. Run `capture_widget_preview` after compile is clean so the rendered result is visually confirmed.
+8. Save only after capture succeeds, or report `partial verification` explicitly when the visual checkpoint is blocked.
 
 ## Common Failure Checks
 

@@ -191,6 +191,55 @@ static TSharedPtr<FJsonObject> MakeCompileResult(const bool bSuccess,
 	return Result;
 }
 
+static void CollectCompilerMessages(const FCompilerResultsLog& CompileResults,
+                                    TArray<TSharedPtr<FJsonValue>>& OutErrors,
+                                    TArray<TSharedPtr<FJsonValue>>& OutWarnings,
+                                    TArray<TSharedPtr<FJsonValue>>& OutMessages,
+                                    bool* bOutBindWidgetIssue = nullptr,
+                                    bool* bOutAbstractClassIssue = nullptr,
+                                    bool* bOutListViewEntryIssue = nullptr)
+{
+	for (const TSharedRef<FTokenizedMessage>& Message : CompileResults.Messages)
+	{
+		const FString MessageText = Message->ToText().ToString();
+		if (bOutBindWidgetIssue
+			&& (MessageText.Contains(TEXT("BindWidget"), ESearchCase::IgnoreCase)
+				|| MessageText.Contains(TEXT("bound widget"), ESearchCase::IgnoreCase)))
+		{
+			*bOutBindWidgetIssue = true;
+		}
+		if (bOutAbstractClassIssue
+			&& MessageText.Contains(TEXT("abstract"), ESearchCase::IgnoreCase)
+			&& MessageText.Contains(TEXT("widget"), ESearchCase::IgnoreCase))
+		{
+			*bOutAbstractClassIssue = true;
+		}
+		if (bOutListViewEntryIssue
+			&& (MessageText.Contains(TEXT("EntryWidgetClass"), ESearchCase::IgnoreCase)
+				|| MessageText.Contains(TEXT("entry widget"), ESearchCase::IgnoreCase))
+			&& MessageText.Contains(TEXT("list"), ESearchCase::IgnoreCase))
+		{
+			*bOutListViewEntryIssue = true;
+		}
+
+		switch (Message->GetSeverity())
+		{
+		case EMessageSeverity::Error:
+			OutErrors.Add(MakeShared<FJsonValueString>(MessageText));
+			OutMessages.Add(MakeMessageValue(TEXT("error"), MessageText));
+			break;
+		case EMessageSeverity::Warning:
+		case EMessageSeverity::PerformanceWarning:
+			OutWarnings.Add(MakeShared<FJsonValueString>(MessageText));
+			OutMessages.Add(MakeMessageValue(TEXT("warning"), MessageText));
+			break;
+		default:
+			OutMessages.Add(MakeMessageValue(TEXT("info"), MessageText));
+			break;
+		}
+	}
+}
+
 static TArray<TSharedPtr<FJsonValue>> BuildCompileRecoveryHints(const bool bBindWidgetIssue,
                                                                 const bool bAbstractClassIssue,
                                                                 const bool bListViewEntryIssue)
@@ -607,60 +656,148 @@ static void AnnotateWidgetPaths(const TSharedPtr<FJsonObject>& Node, const FStri
 	}
 }
 
+static TArray<FWidgetBlueprintEditor*> FindOpenWidgetBlueprintEditors(UWidgetBlueprint* WidgetBP)
+{
+	TArray<FWidgetBlueprintEditor*> Editors;
+	if (!WidgetBP || !GEditor)
+	{
+		return Editors;
+	}
+
+	if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+	{
+		for (IAssetEditorInstance* EditorInstance : AssetEditorSubsystem->FindEditorsForAsset(WidgetBP))
+		{
+			if (EditorInstance && EditorInstance->GetEditorName() == FName(TEXT("WidgetBlueprintEditor")))
+			{
+				Editors.Add(static_cast<FWidgetBlueprintEditor*>(EditorInstance));
+			}
+		}
+	}
+
+	return Editors;
+}
+
+static void DestroyOpenWidgetBlueprintPreviews(const TArray<FWidgetBlueprintEditor*>& Editors)
+{
+	for (FWidgetBlueprintEditor* Editor : Editors)
+	{
+		if (!Editor)
+		{
+			continue;
+		}
+
+		if (UUserWidget* PreviewWidget = Editor->GetPreview())
+		{
+			FWidgetBlueprintEditorUtils::DestroyUserWidget(PreviewWidget);
+			Editor->InvalidatePreview();
+		}
+	}
+}
+
+static void RefreshOpenWidgetBlueprintPreviews(const TArray<FWidgetBlueprintEditor*>& Editors)
+{
+	for (FWidgetBlueprintEditor* Editor : Editors)
+	{
+		if (!Editor)
+		{
+			continue;
+		}
+
+		Editor->RefreshPreview();
+	}
+}
+
+class FWidgetBlueprintPreviewGuard
+{
+public:
+	explicit FWidgetBlueprintPreviewGuard(UWidgetBlueprint* WidgetBP)
+		: Editors(FindOpenWidgetBlueprintEditors(WidgetBP))
+	{
+		DestroyOpenWidgetBlueprintPreviews(Editors);
+	}
+
+	~FWidgetBlueprintPreviewGuard()
+	{
+		RefreshOpenWidgetBlueprintPreviews(Editors);
+	}
+
+private:
+	TArray<FWidgetBlueprintEditor*> Editors;
+};
+
 static TSharedPtr<FJsonObject> BuildWidgetCompileSnapshot(UWidgetBlueprint* WidgetBP)
 {
-	const TSharedPtr<FJsonObject> Compile = MakeShared<FJsonObject>();
+	const TArray<TSharedPtr<FJsonValue>> EmptyArray;
 	if (!WidgetBP)
 	{
-		Compile->SetBoolField(TEXT("success"), false);
-		Compile->SetStringField(TEXT("status"), TEXT("Missing"));
-		Compile->SetBoolField(TEXT("dirty"), false);
-		Compile->SetBoolField(TEXT("hasGeneratedClass"), false);
-		return Compile;
+		const TSharedPtr<FJsonObject> MissingCompile = MakeCompileResult(false, TEXT("Missing"), EmptyArray, EmptyArray, EmptyArray, 0, 0);
+		MissingCompile->SetBoolField(TEXT("dirty"), false);
+		MissingCompile->SetBoolField(TEXT("hasGeneratedClass"), false);
+		MissingCompile->SetBoolField(TEXT("needsCompile"), true);
+		return MissingCompile;
 	}
 
 	const bool bDirty = WidgetBP->GetOutermost() && WidgetBP->GetOutermost()->IsDirty();
 	const bool bHasGeneratedClass = WidgetBP->GeneratedClass != nullptr;
 	const EBlueprintStatus Status = WidgetBP->Status;
-	Compile->SetBoolField(TEXT("success"), Status != BS_Error && bHasGeneratedClass);
-	Compile->SetStringField(TEXT("status"), GetBlueprintStatusString(Status));
-	Compile->SetBoolField(TEXT("dirty"), bDirty);
-	Compile->SetBoolField(TEXT("hasGeneratedClass"), bHasGeneratedClass);
-	Compile->SetBoolField(TEXT("needsCompile"), bDirty || Status == BS_Dirty || !bHasGeneratedClass);
+	const bool bNeedsCompile = bDirty || Status == BS_Dirty || !bHasGeneratedClass;
+	TArray<TSharedPtr<FJsonValue>> ErrorArray;
+	TArray<TSharedPtr<FJsonValue>> WarningArray;
+	TArray<TSharedPtr<FJsonValue>> MessageArray;
+	int32 ErrorCount = 0;
+	int32 WarningCount = 0;
+	bool bBindWidgetIssue = false;
+	bool bAbstractClassIssue = false;
+	bool bListViewEntryIssue = false;
 
-	// When status is Error, do a silent compile to gather error messages
 	if (Status == BS_Error)
 	{
 		FCompilerResultsLog CompileResults;
 		CompileResults.bSilentMode = true;
 		CompileResults.bAnnotateMentionedNodes = false;
+		FWidgetBlueprintPreviewGuard PreviewGuard(WidgetBP);
 		FKismetEditorUtilities::CompileBlueprint(WidgetBP, EBlueprintCompileOptions::SkipGarbageCollection, &CompileResults);
+		CollectCompilerMessages(CompileResults, ErrorArray, WarningArray, MessageArray, &bBindWidgetIssue, &bAbstractClassIssue, &bListViewEntryIssue);
+		ErrorCount = CompileResults.NumErrors;
+		WarningCount = CompileResults.NumWarnings;
 
-		TArray<TSharedPtr<FJsonValue>> ErrorArray;
-		TArray<TSharedPtr<FJsonValue>> WarningArray;
-		for (const TSharedRef<FTokenizedMessage>& Message : CompileResults.Messages)
+		if ((WidgetBP->GeneratedClass == nullptr) && ErrorCount == 0)
 		{
-			const FString MessageText = Message->ToText().ToString();
-			switch (Message->GetSeverity())
-			{
-			case EMessageSeverity::Error:
-				ErrorArray.Add(MakeShared<FJsonValueString>(MessageText));
-				break;
-			case EMessageSeverity::Warning:
-			case EMessageSeverity::PerformanceWarning:
-				WarningArray.Add(MakeShared<FJsonValueString>(MessageText));
-				break;
-			default:
-				break;
-			}
+			const FString GeneratedClassMessage = TEXT("GeneratedClass is null after compilation");
+			ErrorArray.Add(MakeShared<FJsonValueString>(GeneratedClassMessage));
+			MessageArray.Add(MakeMessageValue(TEXT("error"), GeneratedClassMessage));
+			ErrorCount++;
 		}
-		if (ErrorArray.Num() > 0)
+	}
+	else if (Status == BS_UpToDateWithWarnings)
+	{
+		const FString CachedWarningMessage = TEXT("Blueprint is up to date with warnings. Recompilation was skipped because the asset is clean.");
+		WarningArray.Add(MakeShared<FJsonValueString>(CachedWarningMessage));
+		MessageArray.Add(MakeMessageValue(TEXT("warning"), CachedWarningMessage));
+		WarningCount = 1;
+	}
+	else
+	{
+		MessageArray.Add(MakeMessageValue(TEXT("info"), TEXT("No compile was triggered while extracting the widget blueprint.")));
+	}
+
+	const TSharedPtr<FJsonObject> Compile = MakeCompileResult(Status != BS_Error && ErrorCount == 0 && bHasGeneratedClass,
+		GetBlueprintStatusString(Status),
+		ErrorArray,
+		WarningArray,
+		MessageArray,
+		ErrorCount,
+		WarningCount);
+	Compile->SetBoolField(TEXT("dirty"), bDirty);
+	Compile->SetBoolField(TEXT("hasGeneratedClass"), bHasGeneratedClass);
+	Compile->SetBoolField(TEXT("needsCompile"), bNeedsCompile);
+	if (Status == BS_Error)
+	{
+		const TArray<TSharedPtr<FJsonValue>> RecoveryHints = BuildCompileRecoveryHints(bBindWidgetIssue, bAbstractClassIssue, bListViewEntryIssue);
+		if (RecoveryHints.Num() > 0)
 		{
-			Compile->SetArrayField(TEXT("errors"), ErrorArray);
-		}
-		if (WarningArray.Num() > 0)
-		{
-			Compile->SetArrayField(TEXT("warnings"), WarningArray);
+			Compile->SetArrayField(TEXT("recoveryHints"), RecoveryHints);
 		}
 	}
 
@@ -1390,76 +1527,6 @@ static bool RenameWidgetTemplate(UWidgetBlueprint* WidgetBP,
 	return true;
 }
 
-static TArray<FWidgetBlueprintEditor*> FindOpenWidgetBlueprintEditors(UWidgetBlueprint* WidgetBP)
-{
-	TArray<FWidgetBlueprintEditor*> Editors;
-	if (!WidgetBP || !GEditor)
-	{
-		return Editors;
-	}
-
-	if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
-	{
-		for (IAssetEditorInstance* EditorInstance : AssetEditorSubsystem->FindEditorsForAsset(WidgetBP))
-		{
-			if (EditorInstance && EditorInstance->GetEditorName() == FName(TEXT("WidgetBlueprintEditor")))
-			{
-				Editors.Add(static_cast<FWidgetBlueprintEditor*>(EditorInstance));
-			}
-		}
-	}
-
-	return Editors;
-}
-
-static void DestroyOpenWidgetBlueprintPreviews(const TArray<FWidgetBlueprintEditor*>& Editors)
-{
-	for (FWidgetBlueprintEditor* Editor : Editors)
-	{
-		if (!Editor)
-		{
-			continue;
-		}
-
-		if (UUserWidget* PreviewWidget = Editor->GetPreview())
-		{
-			FWidgetBlueprintEditorUtils::DestroyUserWidget(PreviewWidget);
-			Editor->InvalidatePreview();
-		}
-	}
-}
-
-static void RefreshOpenWidgetBlueprintPreviews(const TArray<FWidgetBlueprintEditor*>& Editors)
-{
-	for (FWidgetBlueprintEditor* Editor : Editors)
-	{
-		if (!Editor)
-		{
-			continue;
-		}
-
-		Editor->RefreshPreview();
-	}
-}
-
-class FWidgetBlueprintPreviewGuard
-{
-public:
-	explicit FWidgetBlueprintPreviewGuard(UWidgetBlueprint* WidgetBP)
-		: Editors(FindOpenWidgetBlueprintEditors(WidgetBP))
-	{
-		DestroyOpenWidgetBlueprintPreviews(Editors);
-	}
-
-	~FWidgetBlueprintPreviewGuard()
-	{
-		RefreshOpenWidgetBlueprintPreviews(Editors);
-	}
-
-private:
-	TArray<FWidgetBlueprintEditor*> Editors;
-};
-
 static FString BuildWidgetPathFromLiveWidget(const UWidget* Widget)
 {
 	TArray<FString> Segments;
@@ -1821,6 +1888,8 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBluepr
 	Result->SetStringField(TEXT("assetClass"), TEXT("WidgetBlueprint"));
 	Result->SetStringField(TEXT("parentClass"), WidgetBP->ParentClass ? WidgetBP->ParentClass->GetName() : FString());
 	Result->SetStringField(TEXT("parentClassPath"), WidgetBP->ParentClass ? WidgetBP->ParentClass->GetPathName() : FString());
+	Result->SetField(TEXT("rootWidget"), MakeShared<FJsonValueNull>());
+	Result->SetStringField(TEXT("widgetTreeStatus"), TEXT("unknown"));
 
 	if (const TSharedPtr<FJsonObject> WidgetTreeJson = FWidgetTreeExtractor::Extract(WidgetBP))
 	{
@@ -1829,6 +1898,22 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBluepr
 		{
 			AnnotateWidgetPaths(RootWidgetJson);
 			Result->SetObjectField(TEXT("rootWidget"), RootWidgetJson);
+		}
+		else
+		{
+			Result->SetField(TEXT("rootWidget"), MakeShared<FJsonValueNull>());
+		}
+
+		FString WidgetTreeStatus;
+		if (WidgetTreeJson->TryGetStringField(TEXT("widgetTreeStatus"), WidgetTreeStatus))
+		{
+			Result->SetStringField(TEXT("widgetTreeStatus"), WidgetTreeStatus);
+		}
+
+		FString WidgetTreeError;
+		if (WidgetTreeJson->TryGetStringField(TEXT("widgetTreeError"), WidgetTreeError))
+		{
+			Result->SetStringField(TEXT("widgetTreeError"), WidgetTreeError);
 		}
 
 		TSharedPtr<FJsonObject> BindingsJson;
@@ -1839,12 +1924,9 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBluepr
 	}
 	else
 	{
-		// WidgetTree is null — return explicit null with diagnostic instead of silently omitting
 		Result->SetField(TEXT("rootWidget"), MakeShared<FJsonValueNull>());
-		Result->SetStringField(TEXT("widgetTreeError"),
-			WidgetBP->WidgetTree
-				? TEXT("WidgetTree exists but root widget is null. The widget tree may be empty.")
-				: TEXT("WidgetTree is null. The asset may need recompilation or manual repair in the editor."));
+		Result->SetStringField(TEXT("widgetTreeStatus"), TEXT("extractor_failed"));
+		Result->SetStringField(TEXT("widgetTreeError"), TEXT("Widget tree extraction returned no data."));
 	}
 
 	Result->SetArrayField(TEXT("animations"), ExtractWidgetAnimationSummaries(WidgetBP));

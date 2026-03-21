@@ -112,6 +112,120 @@ namespace
 		return true;
 	}
 
+	TArray<FString> JsonArrayToStringArray(const TArray<TSharedPtr<FJsonValue>>& Values)
+	{
+		TArray<FString> Result;
+		Result.Reserve(Values.Num());
+		for (const TSharedPtr<FJsonValue>& Value : Values)
+		{
+			FString StringValue;
+			if (Value.IsValid() && Value->TryGetString(StringValue) && !StringValue.IsEmpty())
+			{
+				Result.Add(StringValue);
+			}
+		}
+		return Result;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> StringArrayToJsonArray(const TArray<FString>& Values)
+	{
+		TArray<TSharedPtr<FJsonValue>> Result;
+		Result.Reserve(Values.Num());
+		for (const FString& Value : Values)
+		{
+			Result.Add(MakeShared<FJsonValueString>(Value));
+		}
+		return Result;
+	}
+
+	FString InferVerificationSurface(const FString& CaptureType)
+	{
+		if (CaptureType == TEXT("widget_preview") || CaptureType == TEXT("comparison_diff"))
+		{
+			return TEXT("editor_offscreen");
+		}
+
+		return TEXT("editor_offscreen");
+	}
+
+	FString BuildScenarioId(const FBlueprintExtractorCaptureMetadata& Metadata)
+	{
+		const FString Source = !Metadata.AssetPath.IsEmpty()
+			? Metadata.AssetPath
+			: (!Metadata.CaptureId.IsEmpty() ? Metadata.CaptureId : TEXT("capture"));
+		const FString Prefix = !Metadata.CaptureType.IsEmpty() ? Metadata.CaptureType : TEXT("capture");
+		return FString::Printf(TEXT("%s:%s"), *Prefix, *Source);
+	}
+
+	TSharedPtr<FJsonObject> BuildDefaultWorldContext(const FBlueprintExtractorCaptureMetadata& Metadata)
+	{
+		const TSharedPtr<FJsonObject> Context = MakeShared<FJsonObject>();
+		if (!Metadata.AssetPath.IsEmpty())
+		{
+			Context->SetStringField(TEXT("assetPath"), Metadata.AssetPath);
+		}
+		if (!Metadata.WidgetClass.IsEmpty())
+		{
+			Context->SetStringField(TEXT("widgetClass"), Metadata.WidgetClass);
+		}
+		if (Metadata.Surface == TEXT("editor_offscreen"))
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("widget_blueprint"));
+			Context->SetStringField(TEXT("renderLane"), TEXT("offscreen"));
+		}
+		else
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("capture"));
+		}
+
+		return Context;
+	}
+
+	TSharedPtr<FJsonObject> BuildDefaultCameraContext(const FBlueprintExtractorCaptureMetadata& Metadata)
+	{
+		const TSharedPtr<FJsonObject> Context = MakeShared<FJsonObject>();
+		Context->SetStringField(TEXT("contextType"), Metadata.Surface == TEXT("editor_offscreen")
+			? TEXT("offscreen_widget")
+			: TEXT("capture_frame"));
+		if (Metadata.Width > 0)
+		{
+			Context->SetNumberField(TEXT("width"), Metadata.Width);
+		}
+		if (Metadata.Height > 0)
+		{
+			Context->SetNumberField(TEXT("height"), Metadata.Height);
+		}
+		return Context;
+	}
+
+	void EnsureVerificationArtifactDefaults(FBlueprintExtractorCaptureMetadata& Metadata)
+	{
+		if (Metadata.AssetPaths.Num() == 0 && !Metadata.AssetPath.IsEmpty())
+		{
+			Metadata.AssetPaths.Add(Metadata.AssetPath);
+		}
+		if (Metadata.AssetPath.IsEmpty() && Metadata.AssetPaths.Num() > 0)
+		{
+			Metadata.AssetPath = Metadata.AssetPaths[0];
+		}
+		if (Metadata.Surface.IsEmpty())
+		{
+			Metadata.Surface = InferVerificationSurface(Metadata.CaptureType);
+		}
+		if (Metadata.ScenarioId.IsEmpty())
+		{
+			Metadata.ScenarioId = BuildScenarioId(Metadata);
+		}
+		if (!Metadata.WorldContext.IsValid())
+		{
+			Metadata.WorldContext = BuildDefaultWorldContext(Metadata);
+		}
+		if (!Metadata.CameraContext.IsValid())
+		{
+			Metadata.CameraContext = BuildDefaultCameraContext(Metadata);
+		}
+	}
+
 	bool ReadCaptureMetadata(const FString& MetadataPath, FBlueprintExtractorCaptureMetadata& OutMetadata)
 	{
 		const TSharedPtr<FJsonObject> Parsed = ParseJsonFile(MetadataPath);
@@ -130,6 +244,8 @@ namespace
 		}
 
 		Parsed->TryGetStringField(TEXT("captureType"), OutMetadata.CaptureType);
+		Parsed->TryGetStringField(TEXT("surface"), OutMetadata.Surface);
+		Parsed->TryGetStringField(TEXT("scenarioId"), OutMetadata.ScenarioId);
 		Parsed->TryGetStringField(TEXT("assetPath"), OutMetadata.AssetPath);
 		Parsed->TryGetStringField(TEXT("widgetClass"), OutMetadata.WidgetClass);
 		Parsed->TryGetStringField(TEXT("captureDirectory"), OutMetadata.CaptureDirectory);
@@ -140,6 +256,26 @@ namespace
 		Parsed->TryGetNumberField(TEXT("width"), Width);
 		Parsed->TryGetNumberField(TEXT("height"), Height);
 		Parsed->TryGetNumberField(TEXT("fileSizeBytes"), FileSize);
+		const TArray<TSharedPtr<FJsonValue>>* AssetPathArray = nullptr;
+		if (Parsed->TryGetArrayField(TEXT("assetPaths"), AssetPathArray) && AssetPathArray)
+		{
+			OutMetadata.AssetPaths = JsonArrayToStringArray(*AssetPathArray);
+		}
+		const TSharedPtr<FJsonObject>* WorldContext = nullptr;
+		if (Parsed->TryGetObjectField(TEXT("worldContext"), WorldContext) && WorldContext)
+		{
+			OutMetadata.WorldContext = *WorldContext;
+		}
+		const TSharedPtr<FJsonObject>* CameraContext = nullptr;
+		if (Parsed->TryGetObjectField(TEXT("cameraContext"), CameraContext) && CameraContext)
+		{
+			OutMetadata.CameraContext = *CameraContext;
+		}
+		const TSharedPtr<FJsonObject>* Comparison = nullptr;
+		if (Parsed->TryGetObjectField(TEXT("comparison"), Comparison) && Comparison)
+		{
+			OutMetadata.Comparison = *Comparison;
+		}
 		OutMetadata.Width = FMath::Max(0, FMath::RoundToInt(Width));
 		OutMetadata.Height = FMath::Max(0, FMath::RoundToInt(Height));
 		OutMetadata.FileSizeBytes = FMath::Max<int64>(0, FMath::RoundToInt64(FileSize));
@@ -153,6 +289,8 @@ namespace
 		{
 			OutMetadata.CaptureDirectory = FPaths::GetPath(MetadataPath);
 		}
+
+		EnsureVerificationArtifactDefaults(OutMetadata);
 
 		return true;
 	}
@@ -240,25 +378,43 @@ namespace
 
 TSharedPtr<FJsonObject> CaptureMetadataToJson(const FBlueprintExtractorCaptureMetadata& Metadata)
 {
+	FBlueprintExtractorCaptureMetadata Normalized = Metadata;
+	EnsureVerificationArtifactDefaults(Normalized);
+
 	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 	Result->SetBoolField(TEXT("success"), true);
-	Result->SetStringField(TEXT("captureId"), Metadata.CaptureId);
-	Result->SetStringField(TEXT("captureType"), Metadata.CaptureType);
-	Result->SetStringField(TEXT("assetPath"), Metadata.AssetPath);
-	if (!Metadata.WidgetClass.IsEmpty())
+	Result->SetStringField(TEXT("captureId"), Normalized.CaptureId);
+	Result->SetStringField(TEXT("captureType"), Normalized.CaptureType);
+	Result->SetStringField(TEXT("surface"), Normalized.Surface);
+	Result->SetStringField(TEXT("scenarioId"), Normalized.ScenarioId);
+	Result->SetStringField(TEXT("assetPath"), Normalized.AssetPath);
+	Result->SetArrayField(TEXT("assetPaths"), StringArrayToJsonArray(Normalized.AssetPaths));
+	if (!Normalized.WidgetClass.IsEmpty())
 	{
-		Result->SetStringField(TEXT("widgetClass"), Metadata.WidgetClass);
+		Result->SetStringField(TEXT("widgetClass"), Normalized.WidgetClass);
 	}
-	Result->SetStringField(TEXT("captureDirectory"), Metadata.CaptureDirectory);
-	Result->SetStringField(TEXT("artifactPath"), Metadata.ArtifactPath);
-	Result->SetStringField(TEXT("metadataPath"), Metadata.MetadataPath);
-	Result->SetNumberField(TEXT("width"), Metadata.Width);
-	Result->SetNumberField(TEXT("height"), Metadata.Height);
-	Result->SetNumberField(TEXT("fileSizeBytes"), static_cast<double>(Metadata.FileSizeBytes));
-	Result->SetStringField(TEXT("createdAt"), Metadata.CreatedAt);
-	if (!Metadata.ProjectDir.IsEmpty())
+	Result->SetStringField(TEXT("captureDirectory"), Normalized.CaptureDirectory);
+	Result->SetStringField(TEXT("artifactPath"), Normalized.ArtifactPath);
+	Result->SetStringField(TEXT("metadataPath"), Normalized.MetadataPath);
+	Result->SetNumberField(TEXT("width"), Normalized.Width);
+	Result->SetNumberField(TEXT("height"), Normalized.Height);
+	Result->SetNumberField(TEXT("fileSizeBytes"), static_cast<double>(Normalized.FileSizeBytes));
+	Result->SetStringField(TEXT("createdAt"), Normalized.CreatedAt);
+	if (!Normalized.ProjectDir.IsEmpty())
 	{
-		Result->SetStringField(TEXT("projectDir"), Metadata.ProjectDir);
+		Result->SetStringField(TEXT("projectDir"), Normalized.ProjectDir);
+	}
+	if (Normalized.WorldContext.IsValid())
+	{
+		Result->SetObjectField(TEXT("worldContext"), Normalized.WorldContext);
+	}
+	if (Normalized.CameraContext.IsValid())
+	{
+		Result->SetObjectField(TEXT("cameraContext"), Normalized.CameraContext);
+	}
+	if (Normalized.Comparison.IsValid())
+	{
+		Result->SetObjectField(TEXT("comparison"), Normalized.Comparison);
 	}
 	return Result;
 }
@@ -356,7 +512,10 @@ bool CaptureWidgetPreview(UWidgetBlueprint* WidgetBlueprint,
 	OutMetadata.CaptureId = MakeCaptureId(AssetName, TEXT("widget_preview"));
 	OutMetadata.CaptureType = TEXT("widget_preview");
 	OutMetadata.AssetPath = WidgetBlueprint->GetPathName();
+	OutMetadata.AssetPaths = { OutMetadata.AssetPath };
 	OutMetadata.WidgetClass = WidgetClass->GetPathName();
+	OutMetadata.Surface = TEXT("editor_offscreen");
+	OutMetadata.ScenarioId = FString::Printf(TEXT("widget_preview:%s"), *OutMetadata.AssetPath);
 	OutMetadata.CaptureDirectory = BuildCaptureDirectory(OutMetadata.CaptureId);
 	OutMetadata.ArtifactPath = BuildCaptureArtifactPath(OutMetadata.CaptureId);
 	OutMetadata.MetadataPath = BuildCaptureMetadataPath(OutMetadata.CaptureId);
@@ -364,6 +523,8 @@ bool CaptureWidgetPreview(UWidgetBlueprint* WidgetBlueprint,
 	OutMetadata.Height = CapturedImage.SizeY;
 	OutMetadata.CreatedAt = FDateTime::UtcNow().ToIso8601();
 	OutMetadata.ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	OutMetadata.WorldContext = BuildDefaultWorldContext(OutMetadata);
+	OutMetadata.CameraContext = BuildDefaultCameraContext(OutMetadata);
 
 	if (!EnsureDirectory(OutMetadata.CaptureDirectory, OutError))
 	{
@@ -477,23 +638,6 @@ bool CompareCaptureToReference(const FString& CaptureIdOrPath,
 		return false;
 	}
 
-	FBlueprintExtractorCaptureMetadata DiffMetadata;
-	DiffMetadata.CaptureId = DiffCaptureId;
-	DiffMetadata.CaptureType = TEXT("comparison_diff");
-	DiffMetadata.AssetPath = !ActualMetadata.AssetPath.IsEmpty() ? ActualMetadata.AssetPath : CapturePath;
-	DiffMetadata.CaptureDirectory = DiffDirectory;
-	DiffMetadata.ArtifactPath = DiffArtifactPath;
-	DiffMetadata.MetadataPath = DiffMetadataPath;
-	DiffMetadata.Width = DiffImage.SizeX;
-	DiffMetadata.Height = DiffImage.SizeY;
-	DiffMetadata.FileSizeBytes = FMath::Max<int64>(0, IFileManager::Get().FileSize(*DiffArtifactPath));
-	DiffMetadata.CreatedAt = FDateTime::UtcNow().ToIso8601();
-	DiffMetadata.ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
-	if (!WriteCaptureMetadata(DiffMetadata, OutError))
-	{
-		return false;
-	}
-
 	OutResult.CapturePath = CapturePath;
 	OutResult.ReferencePath = ReferencePath;
 	OutResult.Tolerance = FMath::Max(0.0, Tolerance);
@@ -504,6 +648,40 @@ bool CompareCaptureToReference(const FString& CaptureIdOrPath,
 	OutResult.MismatchPercentage = MismatchPercentage;
 	OutResult.DiffCaptureId = DiffCaptureId;
 	OutResult.DiffArtifactPath = DiffArtifactPath;
+
+	FBlueprintExtractorCaptureMetadata DiffMetadata;
+	DiffMetadata.CaptureId = DiffCaptureId;
+	DiffMetadata.CaptureType = TEXT("comparison_diff");
+	DiffMetadata.AssetPath = !ActualMetadata.AssetPath.IsEmpty() ? ActualMetadata.AssetPath : CapturePath;
+	DiffMetadata.AssetPaths = ActualMetadata.AssetPaths;
+	DiffMetadata.WidgetClass = ActualMetadata.WidgetClass;
+	DiffMetadata.Surface = !ActualMetadata.Surface.IsEmpty() ? ActualMetadata.Surface : TEXT("editor_offscreen");
+	DiffMetadata.ScenarioId = ActualMetadata.ScenarioId;
+	DiffMetadata.CaptureDirectory = DiffDirectory;
+	DiffMetadata.ArtifactPath = DiffArtifactPath;
+	DiffMetadata.MetadataPath = DiffMetadataPath;
+	DiffMetadata.Width = DiffImage.SizeX;
+	DiffMetadata.Height = DiffImage.SizeY;
+	DiffMetadata.FileSizeBytes = FMath::Max<int64>(0, IFileManager::Get().FileSize(*DiffArtifactPath));
+	DiffMetadata.CreatedAt = FDateTime::UtcNow().ToIso8601();
+	DiffMetadata.ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	DiffMetadata.WorldContext = ActualMetadata.WorldContext;
+	DiffMetadata.CameraContext = ActualMetadata.CameraContext;
+	DiffMetadata.Comparison = MakeShared<FJsonObject>();
+	DiffMetadata.Comparison->SetStringField(TEXT("capturePath"), OutResult.CapturePath);
+	DiffMetadata.Comparison->SetStringField(TEXT("referencePath"), OutResult.ReferencePath);
+	DiffMetadata.Comparison->SetNumberField(TEXT("tolerance"), OutResult.Tolerance);
+	DiffMetadata.Comparison->SetBoolField(TEXT("pass"), OutResult.bPass);
+	DiffMetadata.Comparison->SetNumberField(TEXT("rmse"), OutResult.Rmse);
+	DiffMetadata.Comparison->SetNumberField(TEXT("maxPixelDelta"), OutResult.MaxPixelDelta);
+	DiffMetadata.Comparison->SetNumberField(TEXT("mismatchPixelCount"), static_cast<double>(OutResult.MismatchPixelCount));
+	DiffMetadata.Comparison->SetNumberField(TEXT("mismatchPercentage"), OutResult.MismatchPercentage);
+	DiffMetadata.Comparison->SetStringField(TEXT("diffCaptureId"), OutResult.DiffCaptureId);
+	DiffMetadata.Comparison->SetStringField(TEXT("diffArtifactPath"), OutResult.DiffArtifactPath);
+	if (!WriteCaptureMetadata(DiffMetadata, OutError))
+	{
+		return false;
+	}
 	return true;
 }
 

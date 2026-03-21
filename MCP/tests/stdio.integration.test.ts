@@ -336,6 +336,9 @@ describe('stdio integration', () => {
     expect(JSON.parse(getTextContent(captureWidgetPreview))).toMatchObject({
       captureId: 'capture-123',
       resourceUri: 'blueprint://captures/capture-123',
+      surface: 'editor_offscreen',
+      scenarioId: 'widget_preview:/Game/Test/WBP_Window',
+      assetPaths: ['/Game/Test/WBP_Window'],
     });
     expect(captureWidgetPreview.content?.some((entry) => entry.type === 'resource_link')).toBe(true);
     expect(captureResource.contents[0]?.mimeType).toBe('image/png');

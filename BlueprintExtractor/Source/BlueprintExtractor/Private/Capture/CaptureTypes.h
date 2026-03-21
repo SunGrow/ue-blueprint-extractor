@@ -9,7 +9,10 @@ struct FBlueprintExtractorCaptureMetadata
 {
 	FString CaptureId;
 	FString CaptureType;
+	FString Surface;
+	FString ScenarioId;
 	FString AssetPath;
+	TArray<FString> AssetPaths;
 	FString WidgetClass;
 	FString CaptureDirectory;
 	FString ArtifactPath;
@@ -19,6 +22,9 @@ struct FBlueprintExtractorCaptureMetadata
 	int64 FileSizeBytes = 0;
 	FString CreatedAt;
 	FString ProjectDir;
+	TSharedPtr<FJsonObject> WorldContext;
+	TSharedPtr<FJsonObject> CameraContext;
+	TSharedPtr<FJsonObject> Comparison;
 };
 
 struct FBlueprintExtractorCaptureCompareResult

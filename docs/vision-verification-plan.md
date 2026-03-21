@@ -10,6 +10,11 @@ The goal is not a widget-only vision feature. The goal is a verification platfor
 
 The implementation in this repository now follows that split.
 
+Follow-up planning note:
+
+- The current phase-1 implementation proved that widget capture works technically, but it did not fully solve model adoption of verification in widget workflows.
+- The next implementation pass should use [General Visual Verification Platform Follow-Up](D:\Development\llm-tools\ue-blueprint-extractor\docs\plans\2026-03-22-general-visual-verification-platform.md) as the controlling plan for anti-skip guidance, helper-flow behavior, and verification-specific regression tests.
+
 ## Verification Lanes
 
 ### 1. Semantic verification
@@ -47,6 +52,7 @@ Implementation details:
 - Each capture directory contains:
   - `capture.png`
   - `metadata.json`
+- Widget preview and diff captures now normalize to the shared `verification_artifact` shape with `surface`, `scenarioId`, `assetPaths`, `worldContext`, `cameraContext`, and optional `comparison` metadata.
 - The subsystem returns JSON metadata only.
 - The MCP host reads the PNG from disk and returns:
   - the normal text/structured v2 envelope;
@@ -66,6 +72,8 @@ Gameplay verification is host-side and async:
 This is intentionally separate from the live editor subsystem. The host launches `UnrealEditor-Cmd` automation runs, indexes reports, stdout, stderr, and exported artifacts, and exposes them through:
 
 - `blueprint://test-runs/{run_id}/{artifact}`
+
+The MCP runtime lane now also lifts image-based automation report outputs into `verificationArtifacts`, so the model receives typed visual artifacts in the shared verification shape instead of only generic report-file links.
 
 This is the primary verification lane for:
 

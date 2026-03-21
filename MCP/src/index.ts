@@ -12,6 +12,7 @@ import {
   type ProjectControllerLike,
   type BuildConfiguration,
   type BuildPlatform,
+  type CompileProjectCodeResult,
 } from './project-controller.js';
 import {
   AutomationController,
@@ -29,7 +30,7 @@ const serverInstructions = [
   'Use the composable material tools for settings, node creation, node connection, and root-property binding. Treat modify_material and modify_material_function as advanced escape hatches.',
   'Use create_input_action, modify_input_action, create_input_mapping_context, and modify_input_mapping_context for Enhanced Input authoring. Generic data asset mutation is intentionally rejected for those asset classes.',
   'Verify blueprint wiring, layout data, and authored values semantically with the existing extract_* tools before relying on screenshots.',
-  'After widget or UI-heavy mutations, use capture_widget_preview for visual confirmation in addition to extract_widget_blueprint.',
+  'After widget or other user-facing UI mutations, treat the task as incomplete until capture_widget_preview succeeds or you explicitly report partial verification with the blocking reason.',
   'Use run_automation_tests for gameplay or runtime verification. If no Automation Spec or Functional Test exists for a mechanic, report verification as partial instead of inferring success from structure alone.',
   'Successful tool results mirror the same JSON in structuredContent and text. Recoverable execution failures return isError=true with code, message, recoverable, and next_steps.',
 ].join('\n');
@@ -71,11 +72,12 @@ type PromptCatalogEntry = {
 
 export const exampleCatalog: Record<string, ExampleFamily> = {
   widget_blueprint: {
-    summary: 'Inspect the current widget, apply the smallest structural change that solves the layout problem, compile, then save.',
+    summary: 'Inspect the current widget, apply the smallest structural change that solves the layout problem, compile, visually confirm the rendered result, then save.',
     recommended_flow: [
       'extract_widget_blueprint',
       'modify_widget_blueprint',
       'compile_widget_blueprint',
+      'capture_widget_preview',
       'save_assets',
     ],
     examples: [
@@ -201,11 +203,12 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
     ],
   },
   window_ui_polish: {
-    summary: 'Use the thin sequencing helper when a screen change touches variable flags, class defaults, compile/save, and optional code sync in one flow.',
+    summary: 'Use the thin sequencing helper when a screen change touches variable flags, class defaults, compile, and optional code sync in one flow, then gate persistence on visual confirmation.',
     recommended_flow: [
       'extract_widget_blueprint',
       'apply_window_ui_changes',
-      'extract_widget_blueprint',
+      'capture_widget_preview',
+      'save_assets',
     ],
     examples: [
       {
@@ -223,7 +226,7 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
             ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
           },
           compile_after: true,
-          save_after: true,
+          save_after: false,
         },
       },
     ],
@@ -274,7 +277,8 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
       parent_class_path ? `Expected parent class: ${parent_class_path}.` : 'Choose the narrowest appropriate parent widget class.',
       existing_hud_asset_path ? `Inspect the existing HUD first: ${existing_hud_asset_path}.` : 'Inspect the current HUD wiring before replacing the screen.',
       existing_transition_asset_path ? `Inspect the transition asset first: ${existing_transition_asset_path}.` : 'Inspect transition widgets and activatable-window flow before redesigning layout.',
-      'Produce a concrete widget-tree plan, required BindWidget names, class-default changes, and compile/save steps.',
+      'Produce a concrete widget-tree plan, required BindWidget names, class-default changes, and compile/capture/save steps.',
+      'The plan is not complete until it includes capture_widget_preview or an explicit partial verification fallback with a blocking reason.',
       'Prefer centered_overlay, common_menu_shell, or activatable_window patterns over ad-hoc CanvasPanel placement.',
     ].join('\n'),
   },
@@ -320,8 +324,10 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
     buildPrompt: ({ widget_asset_path, compile_summary_json }) => [
       `Debug WidgetBlueprint compile failures for ${widget_asset_path}.`,
       compile_summary_json ? `Compile summary:\n${compile_summary_json}` : 'Start by compiling the widget blueprint and inspecting compile diagnostics.',
-      'Check for BindWidget type/name mismatches, abstract widget classes in the tree, and stale class-default references.',
-      'Return the minimal follow-up extract/modify/compile sequence needed to fix the compile state.',
+      'Check for BindWidget type/name mismatches, abstract widget classes in the tree, stale class-default references, and degraded extraction states such as rootWidget=null with widgetTreeStatus/widgetTreeError.',
+      'If the failure is tied to CommonUI button styling, treat raw UButton background/style fields as unsupported wrapper surfaces and redirect to CommonUI style assets or a project-owned material-backed button base.',
+      'If the patch touched WidthOverride, HeightOverride, MinDesiredHeight, or similar overrides, verify the paired bOverride_* flags are enabled before assuming the write failed.',
+      'Return the minimal follow-up extract/modify/compile sequence needed to fix the compile state, then finish with capture_widget_preview or explicit partial verification if rendering is blocked.',
     ].join('\n'),
   },
 };
@@ -331,9 +337,12 @@ export function createBlueprintExtractorServer(
   projectController: ProjectControllerLike = new ProjectController(),
   automationController: AutomationControllerLike = new AutomationController(),
 ) {
+  let cachedProjectAutomationContext: ProjectAutomationContext | null = null;
+  let lastExternalBuildContext: Record<string, unknown> | null = null;
+
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '2.1.0',
+    version: '2.3.0',
   }, {
     instructions: serverInstructions,
   });
@@ -359,8 +368,291 @@ export function createBlueprintExtractorServer(
     }).optional(),
   }).passthrough();
 
+  const windowUiVerificationSchema = z.object({
+    required: z.boolean(),
+    status: z.enum(['compile_pending', 'unverified']),
+    surface: z.literal('editor_offscreen'),
+    recommendedTool: z.literal('capture_widget_preview'),
+    partialAllowed: z.boolean(),
+    reason: z.string(),
+  });
+
+  const applyWindowUiChangesResultSchema = v2ToolResultSchema.extend({
+    stoppedAt: z.string().optional(),
+    failedAfterStep: z.string().optional(),
+    steps: z.array(z.record(z.string(), z.unknown())).optional(),
+    verification: windowUiVerificationSchema.optional(),
+  }).passthrough();
+
   function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  function isVerificationSurface(value: unknown): value is z.infer<typeof verificationSurfaceSchema> {
+    return value === 'editor_offscreen'
+      || value === 'pie_runtime'
+      || value === 'editor_tool_viewport'
+      || value === 'external_packaged';
+  }
+
+  function inferVerificationSurface(captureType: unknown): z.infer<typeof verificationSurfaceSchema> {
+    if (isVerificationSurface(captureType)) {
+      return captureType;
+    }
+
+    switch (captureType) {
+      case 'widget_preview':
+      case 'comparison_diff':
+      default:
+        return 'editor_offscreen';
+    }
+  }
+
+  function unknownToStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+  }
+
+  function buildDefaultArtifactScenarioId(payload: Record<string, unknown>) {
+    const captureType = typeof payload.captureType === 'string' && payload.captureType.length > 0
+      ? payload.captureType
+      : 'capture';
+    const source = typeof payload.assetPath === 'string' && payload.assetPath.length > 0
+      ? payload.assetPath
+      : typeof payload.captureId === 'string' && payload.captureId.length > 0
+        ? payload.captureId
+        : 'capture';
+    return `${captureType}:${source}`;
+  }
+
+  function buildDefaultWorldContext(payload: Record<string, unknown>, surface: z.infer<typeof verificationSurfaceSchema>) {
+    if (isRecord(payload.worldContext)) {
+      return payload.worldContext;
+    }
+
+    if (surface === 'editor_offscreen') {
+      const context: Record<string, unknown> = {
+        contextType: 'widget_blueprint',
+        renderLane: 'offscreen',
+      };
+      if (typeof payload.assetPath === 'string' && payload.assetPath.length > 0) {
+        context.assetPath = payload.assetPath;
+      }
+      if (typeof payload.widgetClass === 'string' && payload.widgetClass.length > 0) {
+        context.widgetClass = payload.widgetClass;
+      }
+      return context;
+    }
+
+    return undefined;
+  }
+
+  function buildDefaultCameraContext(payload: Record<string, unknown>, surface: z.infer<typeof verificationSurfaceSchema>) {
+    if (isRecord(payload.cameraContext)) {
+      return payload.cameraContext;
+    }
+
+    const width = typeof payload.width === 'number' ? payload.width : undefined;
+    const height = typeof payload.height === 'number' ? payload.height : undefined;
+    if (surface === 'editor_offscreen' && (typeof width === 'number' || typeof height === 'number')) {
+      return {
+        contextType: 'offscreen_widget',
+        ...(typeof width === 'number' ? { width } : {}),
+        ...(typeof height === 'number' ? { height } : {}),
+      };
+    }
+
+    return undefined;
+  }
+
+  function normalizeVerificationArtifact(payload: unknown): Record<string, unknown> {
+    const basePayload: Record<string, unknown> = isRecord(payload) ? { ...payload } : { data: payload };
+    const assetPaths = unknownToStringArray(basePayload.assetPaths);
+    const assetPath = typeof basePayload.assetPath === 'string'
+      ? basePayload.assetPath
+      : assetPaths[0] ?? '';
+    const mergedAssetPaths = assetPaths.length > 0
+      ? assetPaths
+      : assetPath
+        ? [assetPath]
+        : [];
+    const surface = isVerificationSurface(basePayload.surface)
+      ? basePayload.surface
+      : inferVerificationSurface(basePayload.captureType);
+    const worldContext = buildDefaultWorldContext(basePayload, surface);
+    const cameraContext = buildDefaultCameraContext(basePayload, surface);
+
+    return {
+      ...basePayload,
+      assetPath,
+      assetPaths: mergedAssetPaths,
+      surface,
+      scenarioId: typeof basePayload.scenarioId === 'string' && basePayload.scenarioId.length > 0
+        ? basePayload.scenarioId
+        : buildDefaultArtifactScenarioId({
+          ...basePayload,
+          assetPath,
+        }),
+      ...(worldContext ? { worldContext } : {}),
+      ...(cameraContext ? { cameraContext } : {}),
+    };
+  }
+
+  function normalizeVerificationComparison(payload: unknown): Record<string, unknown> {
+    const basePayload: Record<string, unknown> = isRecord(payload) ? payload : {};
+    const nested = isRecord(basePayload.comparison) ? basePayload.comparison : {};
+    const result: Record<string, unknown> = { ...nested };
+
+    const assignString = (key: string) => {
+      const value = typeof nested[key] === 'string'
+        ? nested[key]
+        : typeof basePayload[key] === 'string'
+          ? basePayload[key]
+          : undefined;
+      if (typeof value === 'string' && value.length > 0) {
+        result[key] = value;
+      }
+    };
+
+    const assignNumber = (key: string) => {
+      const value = typeof nested[key] === 'number'
+        ? nested[key]
+        : typeof basePayload[key] === 'number'
+          ? basePayload[key]
+          : undefined;
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        result[key] = value;
+      }
+    };
+
+    const assignBoolean = (key: string) => {
+      const value = typeof nested[key] === 'boolean'
+        ? nested[key]
+        : typeof basePayload[key] === 'boolean'
+          ? basePayload[key]
+          : undefined;
+      if (typeof value === 'boolean') {
+        result[key] = value;
+      }
+    };
+
+    assignString('capturePath');
+    assignString('referencePath');
+    assignString('diffCaptureId');
+    assignString('diffArtifactPath');
+    assignNumber('tolerance');
+    assignBoolean('pass');
+    assignNumber('rmse');
+    assignNumber('maxPixelDelta');
+    assignNumber('mismatchPixelCount');
+    assignNumber('mismatchPercentage');
+
+    return result;
+  }
+
+  function isImageMimeType(value: unknown): value is string {
+    return typeof value === 'string' && value.startsWith('image/');
+  }
+
+  function inferAutomationArtifactCaptureType(name: string, relativePath?: string): string {
+    const lower = `${name} ${relativePath ?? ''}`.toLowerCase();
+    if (lower.includes('diff')) {
+      return 'automation_diff';
+    }
+    if (lower.includes('screenshot') || lower.includes('capture')) {
+      return 'automation_screenshot';
+    }
+    return 'automation_image_artifact';
+  }
+
+  function normalizeAutomationVerificationArtifacts(payload: Record<string, unknown>): Record<string, unknown>[] {
+    const createdAt = firstDefinedString(payload.completedAt, payload.startedAt) ?? '';
+    const runId = firstDefinedString(payload.runId) ?? 'automation';
+    const automationFilter = firstDefinedString(payload.automationFilter) ?? runId;
+    const target = firstDefinedString(payload.target);
+    const projectDir = firstDefinedString(payload.projectDir);
+
+    const existing = Array.isArray(payload.verificationArtifacts)
+      ? payload.verificationArtifacts.filter(isRecord)
+      : [];
+    if (existing.length > 0) {
+      return existing.map((artifact) => {
+        const normalized = normalizeVerificationArtifact({
+          ...artifact,
+          surface: isVerificationSurface(artifact.surface) ? artifact.surface : 'pie_runtime',
+          captureType: typeof artifact.captureType === 'string' && artifact.captureType.length > 0
+            ? artifact.captureType
+            : 'automation_image_artifact',
+          createdAt: typeof artifact.createdAt === 'string' && artifact.createdAt.length > 0
+            ? artifact.createdAt
+            : createdAt,
+        });
+
+        return {
+          ...normalized,
+          resourceUri: typeof artifact.resourceUri === 'string' ? artifact.resourceUri : '',
+          ...(typeof artifact.mimeType === 'string' ? { mimeType: artifact.mimeType } : {}),
+          ...(typeof artifact.relativePath === 'string' ? { relativePath: artifact.relativePath } : {}),
+        };
+      });
+    }
+
+    const artifacts = Array.isArray(payload.artifacts)
+      ? payload.artifacts.filter(isRecord)
+      : [];
+
+    return artifacts
+      .filter((artifact) => isImageMimeType(artifact.mimeType) && typeof artifact.path === 'string')
+      .map((artifact, index) => {
+        const relativePath = typeof artifact.relativePath === 'string' ? artifact.relativePath : undefined;
+        const name = typeof artifact.name === 'string' && artifact.name.length > 0
+          ? artifact.name
+          : `automation_artifact_${index}`;
+        const normalized = normalizeVerificationArtifact({
+          captureId: `${runId}:${name}`,
+          captureType: inferAutomationArtifactCaptureType(name, relativePath),
+          surface: 'pie_runtime',
+          scenarioId: `automation:${automationFilter}:${name}`,
+          assetPath: '',
+          assetPaths: [],
+          artifactPath: artifact.path,
+          createdAt,
+          worldContext: {
+            contextType: 'automation_run',
+            runId,
+            automationFilter,
+            ...(target ? { target } : {}),
+            ...(projectDir ? { projectDir } : {}),
+            ...(typeof payload.nullRhi === 'boolean' ? { nullRhi: payload.nullRhi } : {}),
+            reportArtifactName: name,
+            ...(relativePath ? { relativePath } : {}),
+          },
+          cameraContext: {
+            contextType: 'automation_report_artifact',
+            captureLane: 'automation',
+            ...(relativePath ? { relativePath } : {}),
+          },
+          ...(projectDir ? { projectDir } : {}),
+        });
+
+        return {
+          ...normalized,
+          resourceUri: typeof artifact.resourceUri === 'string' ? artifact.resourceUri : '',
+          mimeType: artifact.mimeType,
+          ...(relativePath ? { relativePath } : {}),
+        };
+      });
+  }
+
+  function normalizeAutomationRunResult(payload: unknown): Record<string, unknown> {
+    const basePayload: Record<string, unknown> = isRecord(payload) ? { ...payload } : { data: payload };
+    return {
+      ...basePayload,
+      verificationArtifacts: normalizeAutomationVerificationArtifacts(basePayload),
+    };
   }
 
   function tryParseJsonText(text: string | undefined): unknown {
@@ -618,10 +910,35 @@ const CascadeResultSchema = v2ToolResultSchema.extend({
   manifest: z.array(cascadeManifestEntrySchema),
 }).passthrough();
 
-const captureMetadataSchema = z.object({
+const verificationSurfaceSchema = z.enum([
+  'editor_offscreen',
+  'pie_runtime',
+  'editor_tool_viewport',
+  'external_packaged',
+]);
+
+const verificationContextSchema = z.record(z.string(), z.unknown());
+
+const verificationComparisonSchema = z.object({
+  capturePath: z.string().optional(),
+  referencePath: z.string().optional(),
+  tolerance: z.number().min(0).optional(),
+  pass: z.boolean().optional(),
+  rmse: z.number().min(0).optional(),
+  maxPixelDelta: z.number().int().min(0).optional(),
+  mismatchPixelCount: z.number().int().min(0).optional(),
+  mismatchPercentage: z.number().min(0).optional(),
+  diffCaptureId: z.string().optional(),
+  diffArtifactPath: z.string().optional(),
+}).passthrough();
+
+const verificationArtifactSchema = z.object({
   captureId: z.string(),
-  captureType: z.enum(['widget_preview', 'comparison_diff']),
+  captureType: z.string().min(1),
+  surface: verificationSurfaceSchema,
+  scenarioId: z.string(),
   assetPath: z.string(),
+  assetPaths: z.array(z.string()),
   widgetClass: z.string().optional(),
   captureDirectory: z.string(),
   artifactPath: z.string(),
@@ -630,12 +947,39 @@ const captureMetadataSchema = z.object({
   height: z.number().int().min(1),
   fileSizeBytes: z.number().int().min(0),
   createdAt: z.string(),
+  worldContext: verificationContextSchema.optional(),
+  cameraContext: verificationContextSchema.optional(),
+  comparison: verificationComparisonSchema.optional(),
   projectDir: z.string().optional(),
+}).passthrough();
+
+const verificationArtifactReferenceSchema = z.object({
+  captureId: z.string(),
+  captureType: z.string().min(1),
+  surface: verificationSurfaceSchema,
+  scenarioId: z.string(),
+  assetPath: z.string().optional(),
+  assetPaths: z.array(z.string()),
+  artifactPath: z.string(),
+  resourceUri: z.string(),
+  createdAt: z.string(),
+  metadataPath: z.string().optional(),
+  captureDirectory: z.string().optional(),
+  width: z.number().int().min(1).optional(),
+  height: z.number().int().min(1).optional(),
+  fileSizeBytes: z.number().int().min(0).optional(),
+  widgetClass: z.string().optional(),
+  worldContext: verificationContextSchema.optional(),
+  cameraContext: verificationContextSchema.optional(),
+  comparison: verificationComparisonSchema.optional(),
+  projectDir: z.string().optional(),
+  mimeType: z.string().optional(),
+  relativePath: z.string().optional(),
 }).passthrough();
 
 const CaptureResultSchema = v2ToolResultSchema.extend({
   resourceUri: z.string(),
-}).merge(captureMetadataSchema).passthrough();
+}).merge(verificationArtifactSchema).passthrough();
 
 const CompareCaptureResultSchema = v2ToolResultSchema.extend({
   capturePath: z.string(),
@@ -649,12 +993,13 @@ const CompareCaptureResultSchema = v2ToolResultSchema.extend({
   diffCaptureId: z.string(),
   diffArtifactPath: z.string(),
   diffResourceUri: z.string(),
+  comparison: verificationComparisonSchema,
 }).passthrough();
 
 const ListCapturesResultSchema = v2ToolResultSchema.extend({
   assetPathFilter: z.string(),
   captureCount: z.number().int().min(0),
-  captures: z.array(captureMetadataSchema),
+  captures: z.array(verificationArtifactSchema),
 }).passthrough();
 
 const CleanupCapturesResultSchema = v2ToolResultSchema.extend({
@@ -703,6 +1048,7 @@ const automationRunSchema = v2ToolResultSchema.extend({
   timeoutMs: z.number().int().positive(),
   nullRhi: z.boolean(),
   artifacts: z.array(automationArtifactSchema),
+  verificationArtifacts: z.array(verificationArtifactReferenceSchema).optional(),
   summary: automationRunSummarySchema.optional(),
 }).passthrough();
 
@@ -804,7 +1150,7 @@ server.resource(
         '- modify_widget supports direct widget_name or widget_path patches for one widget.',
         '- modify_widget_blueprint is the primary structural API: replace_tree, patch_widget, patch_class_defaults, insert_child, remove_widget, move_widget, wrap_widget, replace_widget_class, batch, or compile.',
         '- compile_widget_blueprint validates the asset but still does not save it.',
-        '- apply_window_ui_changes is a thin MCP helper that sequences variable-flag updates, class defaults, optional font work, compile/save, and optional code sync.',
+        '- apply_window_ui_changes is a thin MCP helper that sequences variable-flag updates, class defaults, optional font work, compile, optional save, and optional code sync.',
         '',
         'Explicit deferrals:',
         '- Blueprint graph authoring is explicit and opt-in via modify_blueprint_graphs; generic arbitrary graph synthesis is still intentionally bounded to targeted graph operations.',
@@ -883,7 +1229,8 @@ server.resource(
         '- Use the narrowest mutation tool that fits: patch one widget/member first, replace whole trees only when structure is changing broadly.',
         '- Keep payloads small by sending only changed fields, not full extracted objects, unless the tool explicitly expects a full replacement payload.',
         '- Re-extract after mutation when you need confirmation; do not assume UE normalized fields exactly as sent.',
-        '- For multi-step widget work, prefer extract_widget_blueprint -> modify_widget_blueprint -> compile_widget_blueprint -> save_assets.',
+        '- For multi-step widget work, prefer extract_widget_blueprint -> modify_widget_blueprint -> compile_widget_blueprint -> capture_widget_preview -> save_assets.',
+        '- If widget preview capture is blocked, report partial verification explicitly instead of treating compile/save as visual proof.',
         '- For code orchestration, pass explicit changed_paths to sync_project_code instead of relying on source-control inference.',
       ].join('\n'),
     }],
@@ -934,6 +1281,11 @@ server.resource(
         '- Prefer CommonActivatableWidget as the root parent for CommonUI screens and windows.',
         '- Prefer VerticalBox, HorizontalBox, Overlay, Border, SizeBox, ScrollBox, and NamedSlot over CanvasPanel unless absolute positioning is required.',
         '- Keep styling centralized. Reuse fonts, colors, and button classes instead of repeating large inline property blobs.',
+        '- CommonButtonBase is not a raw UButton surface. Do not target UButton background/style fields through patch_class_defaults or patch_widget on CommonUI wrappers; use a CommonUI style asset or a project-owned material-backed button base.',
+        '- When extract_widget_blueprint reports rootWidget=null, inspect widgetTreeStatus, widgetTreeError, and compile.errors before attempting structural rewrites. A degraded snapshot is still useful for recovery.',
+        '- WidthOverride, HeightOverride, MinDesiredHeight, and similar fields may require paired bOverride_* flags. The write path now enables those flags automatically, but re-extract after patching to confirm the authored value landed where expected.',
+        '- For long multi-step UI flows, use apply_window_ui_changes.checkpoint_after_mutation_steps=true so later compile/debug interruptions do not discard earlier successful edits.',
+        '- For user-facing widget changes, compile/save is not the terminal checkpoint. Finish with capture_widget_preview or return partial verification with the blocking reason.',
         '- Prefer event-driven updates and explicit setter functions over heavy property bindings or per-frame tick work.',
         '- Use TSubclassOf + CreateWidget only for truly dynamic repeated elements. Keep authored static layout in the Widget Blueprint tree.',
       ].join('\n'),
@@ -1031,9 +1383,11 @@ server.resource(
         '- get_project_automation_context returns the editor-derived engine root, project file path, and editor target that project-control tools use as their first fallback.',
         '- compile_project_code runs an external UBT build from the MCP host.',
         '- compile_project_code and sync_project_code resolve engine_root, project_path, and target in this order: explicit args -> editor context -> environment.',
-        '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups. changed_paths remains an accepted compatibility input but the current editor-side trigger ignores it.',
+        '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups. changed_paths remains an accepted compatibility input but the current editor-side trigger ignores it. When Live Coding reports NoChanges or another fallback state, the result includes fallbackRecommended, reason, and the last external build context when available.',
         '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect. When save_dirty_assets is true, all dirty packages are saved before the restart to prevent modal save dialogs.',
         '- sync_project_code requires explicit changed_paths and chooses Live Coding vs build_and_restart deterministically.',
+        '- sync_project_code.restart_first now means shutdown-first: save/checkpoint if requested, ask the editor to close without relaunching, build with the DLL unlocked, then launch the editor from the MCP host and wait for reconnect.',
+        '- apply_window_ui_changes can checkpoint after each mutation step without changing the low-level explicit-save contract. Use that when debugging editor ensures or breakpoint-heavy UI iterations.',
         '',
         'build_and_restart is forced for:',
         '- .h/.hpp/.inl/.generated.h changes',
@@ -1071,6 +1425,7 @@ server.resource(
         '- Gameplay mechanics, scripted interactions, runtime flows: automation tests first.',
         '',
         'Guardrail:',
+        '- User-facing widget work is not complete until capture_widget_preview succeeds or the response explicitly reports partial verification with a blocking reason.',
         '- If no Automation Spec or Functional Test exists for a gameplay mechanic, report verification as partial instead of inferring success from structure or screenshots alone.',
       ].join('\n'),
     }],
@@ -1178,6 +1533,21 @@ const widgetPatternBodies: Record<string, string[]> = {
     'Common BindWidget names:',
     '- TitleText, SubtitleText, PrimaryButton, SecondaryButton',
   ],
+  material_button_base: [
+    'Pattern: material_button_base',
+    '',
+    'Parent class:',
+    '- Project-owned CommonButtonBase subclass or project-owned UserWidget wrapper',
+    '',
+    'Recommended hierarchy:',
+    '- Overlay Root',
+    '- Image or Border MaterialPlate',
+    '- NamedSlot or Overlay Content',
+    '- Optional SizeBox HitTarget',
+    '',
+    'Use this when the project wants button visuals driven by a material-backed plate instead of raw UButton style fields.',
+    'Keep hover, pressed, and disabled visuals centralized in the material instance or style asset, then expose only the project-owned tuning knobs through class defaults.',
+  ],
 };
 
 server.resource(
@@ -1275,13 +1645,15 @@ server.resource(
     list: undefined,
   }),
   {
-    description: 'Read a widget preview or diff capture PNG by capture id.',
+    description: 'Read a visual verification capture PNG by capture id.',
     mimeType: 'image/png',
   },
   async (uri, variables) => {
     const captureId = String(variables.capture_id ?? '');
     const listed = await callSubsystemJson('ListCaptures', { AssetPathFilter: '' });
-    const captures = Array.isArray(listed.captures) ? listed.captures : [];
+    const captures = Array.isArray(listed.captures)
+      ? listed.captures.map((capture) => normalizeVerificationArtifact(capture))
+      : [];
     const capture = captures.find((candidate) => (
       isRecord(candidate)
       && typeof candidate.captureId === 'string'
@@ -1348,6 +1720,7 @@ server.registerResource(
         '- Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes. Use the dedicated InputAction/InputMappingContext tools instead.',
         '- modify_material and modify_material_function remain available but are advanced escape hatches, not the primary authoring workflow.',
         '- There is still no first-class Substrate graph DSL.',
+        '- CommonUI wrapper widgets are not a backdoor into internal Slate/UButton background or style fields. For CommonButtonBase-family widgets, treat raw UButton background/style properties as unsupported and use CommonUI style assets or a project-owned material-backed button base.',
         '- Raw authored animation track synthesis is out of scope. Animation authoring remains metadata-oriented.',
         '- World editing and runtime actor manipulation are out of scope for this server.',
       ].join('\n'),
@@ -1372,7 +1745,9 @@ server.registerResource(
         '2. Inspect class defaults, BindWidget names, and current activatable-window flow before replacing any widget tree.',
         '3. Choose a preset layout pattern such as centered_overlay, common_menu_shell, activatable_window, or list_detail.',
         '4. Apply the smallest modify_widget_blueprint patch possible. Only use build_widget_tree or replace_tree when broad structure must change.',
-        '5. Compile immediately after structural changes, then save only after the compile result is clean.',
+        '5. Compile immediately after structural changes. If compile fails, inspect compile diagnostics and rerun the smallest recovery patch first.',
+        '6. Run capture_widget_preview after the compile result is clean so the rendered result is visually confirmed.',
+        '7. Save after capture succeeds, or report partial verification explicitly when the visual checkpoint is blocked.',
       ].join('\n'),
     }],
   }),
@@ -1542,7 +1917,72 @@ type ResolvedProjectInputs = {
   };
 };
 
-let cachedProjectAutomationContext: ProjectAutomationContext | null = null;
+function rememberExternalBuild(result: CompileProjectCodeResult): void {
+  lastExternalBuildContext = {
+    success: result.success === true,
+    operation: result.operation,
+    strategy: result.strategy,
+    engineRoot: result.engineRoot,
+    projectPath: result.projectPath,
+    target: result.target,
+    platform: result.platform,
+    configuration: result.configuration,
+    exitCode: result.exitCode,
+    durationMs: result.durationMs,
+    restartRequired: result.restartRequired,
+    restartReasons: result.restartReasons,
+    errorCategory: result.errorCategory,
+    errorSummary: result.errorSummary,
+    lockedFiles: result.lockedFiles,
+  };
+}
+
+function deriveLiveCodingFallbackReason(result: Record<string, unknown>): string | undefined {
+  const status = typeof result.status === 'string' ? result.status.toLowerCase() : '';
+  const compileResult = typeof result.compileResult === 'string' ? result.compileResult.toLowerCase() : '';
+  const existingReason = typeof result.reason === 'string' ? result.reason : undefined;
+
+  if (compileResult === 'nochanges' || result.noOp === true) {
+    return 'live_coding_reported_nochanges';
+  }
+  if (status === 'unsupported' || compileResult === 'unsupported') {
+    return 'live_coding_unsupported';
+  }
+  if (status === 'unavailable' || compileResult === 'unavailable') {
+    return 'live_coding_unavailable';
+  }
+
+  return existingReason;
+}
+
+function enrichLiveCodingResult(result: Record<string, unknown>, changedPaths: string[] = []): Record<string, unknown> {
+  const headerChanges = changedPaths.filter(
+    (path) => /\.(h|hpp|inl)$/i.test(path.replace(/\\/g, '/')),
+  );
+  const warnings = Array.isArray(result.warnings)
+    ? [...result.warnings.filter((value): value is string => typeof value === 'string')]
+    : [];
+  if (headerChanges.length > 0) {
+    warnings.push(
+      'Live Coding cannot add, remove, or reorder UPROPERTYs or change class layouts. '
+      + 'Use compile_project_code + restart_editor for class layout changes.',
+    );
+  }
+
+  const fallbackRecommended = canFallbackFromLiveCoding(result);
+  const reason = deriveLiveCodingFallbackReason(result);
+
+  return {
+    ...result,
+    fallbackRecommended,
+    ...(reason ? { reason } : {}),
+    ...(fallbackRecommended && lastExternalBuildContext ? { lastExternalBuild: lastExternalBuildContext } : {}),
+    changedPathsAccepted: changedPaths,
+    changedPathsAppliedByEditor: false,
+    headerChangesDetected: headerChanges,
+    warnings,
+  };
+}
 
 function firstDefinedString(...values: Array<unknown>): string | undefined {
   for (const value of values) {
@@ -3136,7 +3576,7 @@ server.registerTool(
   'capture_widget_preview',
   {
     title: 'Capture Widget Preview',
-    description: 'Render a WidgetBlueprint offscreen, write a PNG capture under Saved/BlueprintExtractor/Captures, and return metadata plus visual artifacts.',
+    description: 'Render a WidgetBlueprint offscreen, write a PNG capture under Saved/BlueprintExtractor/Captures, and return a verification artifact plus visual artifacts.',
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint to preview.',
@@ -3164,7 +3604,8 @@ server.registerTool(
         Width: width,
         Height: height,
       });
-      const captureId = typeof parsed.captureId === 'string' ? parsed.captureId : '';
+      const artifact = normalizeVerificationArtifact(parsed);
+      const captureId = typeof artifact.captureId === 'string' ? artifact.captureId : '';
       const resourceUri = `blueprint://captures/${encodeURIComponent(captureId)}`;
       const extraContent: ContentBlock[] = [];
       if (captureId) {
@@ -3176,13 +3617,15 @@ server.registerTool(
         ));
       }
 
-      const inlineImage = await maybeBuildInlineImageContent(parsed.artifactPath);
+      const inlineImage = await maybeBuildInlineImageContent(
+        typeof artifact.artifactPath === 'string' ? artifact.artifactPath : undefined,
+      );
       if (inlineImage) {
         extraContent.push(inlineImage);
       }
 
       return jsonToolSuccess({
-        ...parsed,
+        ...artifact,
         resourceUri,
       }, { extraContent });
     } catch (e) {
@@ -3195,7 +3638,7 @@ server.registerTool(
   'compare_capture_to_reference',
   {
     title: 'Compare Capture To Reference',
-    description: 'Compare a saved capture id or PNG path against another capture or reference PNG and produce a diff capture.',
+    description: 'Compare a saved verification capture or PNG path against another capture or reference PNG and produce a diff verification artifact.',
     inputSchema: {
       capture: z.string().describe(
         'Capture id or absolute PNG path for the actual result.',
@@ -3223,6 +3666,7 @@ server.registerTool(
         ReferenceIdOrPath: reference,
         Tolerance: tolerance,
       });
+      const comparison = normalizeVerificationComparison(parsed);
       const diffCaptureId = typeof parsed.diffCaptureId === 'string' ? parsed.diffCaptureId : '';
       const diffResourceUri = `blueprint://captures/${encodeURIComponent(diffCaptureId)}`;
       const extraContent: ContentBlock[] = [];
@@ -3243,6 +3687,7 @@ server.registerTool(
       return jsonToolSuccess({
         ...parsed,
         diffResourceUri,
+        comparison,
       }, { extraContent });
     } catch (e) {
       return jsonToolError(e);
@@ -3254,7 +3699,7 @@ server.registerTool(
   'list_captures',
   {
     title: 'List Captures',
-    description: 'List saved widget preview and comparison captures recorded by the editor-side verification lane.',
+    description: 'List saved visual verification captures recorded by the editor-side verification lane.',
     inputSchema: {
       asset_path_filter: z.string().default('').describe(
         'Optional exact asset path filter for captures created from one asset.',
@@ -3274,7 +3719,14 @@ server.registerTool(
       const parsed = await callSubsystemJson('ListCaptures', {
         AssetPathFilter: asset_path_filter,
       });
-      return jsonToolSuccess(parsed);
+      const captures = Array.isArray(parsed.captures)
+        ? parsed.captures.map((capture) => normalizeVerificationArtifact(capture))
+        : [];
+      return jsonToolSuccess({
+        ...parsed,
+        captureCount: captures.length,
+        captures,
+      });
     } catch (e) {
       return jsonToolError(e);
     }
@@ -4715,18 +5167,27 @@ server.registerTool(
         timeoutMs: timeout_seconds * 1000,
         nullRhi: null_rhi,
       });
+      const normalized = normalizeAutomationRunResult(parsed);
 
-      const extraContent = parsed.artifacts
+      const extraContent: ContentBlock[] = ((Array.isArray(normalized.artifacts) ? normalized.artifacts : []) as Record<string, unknown>[])
         .slice(0, 6)
         .map((artifact) => buildResourceLinkContent(
-          artifact.resourceUri,
-          `Automation ${artifact.name}`,
-          artifact.mimeType,
-          artifact.relativePath ?? artifact.path,
+          String(artifact.resourceUri ?? ''),
+          `Automation ${String(artifact.name ?? 'artifact')}`,
+          String(artifact.mimeType ?? 'application/octet-stream'),
+          typeof artifact.relativePath === 'string' ? artifact.relativePath : String(artifact.path ?? ''),
         ));
+      for (const artifact of ((Array.isArray(normalized.verificationArtifacts) ? normalized.verificationArtifacts : []) as Record<string, unknown>[]).slice(0, 2)) {
+        const inlineImage = await maybeBuildInlineImageContent(
+          typeof artifact.artifactPath === 'string' ? artifact.artifactPath : undefined,
+        );
+        if (inlineImage) {
+          extraContent.push(inlineImage);
+        }
+      }
 
       return jsonToolSuccess({
-        ...parsed,
+        ...normalized,
         inputResolution: {
           engineRoot: resolved.sources.engineRoot,
           projectPath: resolved.sources.projectPath,
@@ -4765,17 +5226,26 @@ server.registerTool(
       if (!parsed) {
         return jsonToolError(new Error(`Automation test run '${run_id}' was not found.`));
       }
+      const normalized = normalizeAutomationRunResult(parsed);
 
-      const extraContent = parsed.artifacts
+      const extraContent: ContentBlock[] = ((Array.isArray(normalized.artifacts) ? normalized.artifacts : []) as Record<string, unknown>[])
         .slice(0, 6)
         .map((artifact) => buildResourceLinkContent(
-          artifact.resourceUri,
-          `Automation ${artifact.name}`,
-          artifact.mimeType,
-          artifact.relativePath ?? artifact.path,
+          String(artifact.resourceUri ?? ''),
+          `Automation ${String(artifact.name ?? 'artifact')}`,
+          String(artifact.mimeType ?? 'application/octet-stream'),
+          typeof artifact.relativePath === 'string' ? artifact.relativePath : String(artifact.path ?? ''),
         ));
+      for (const artifact of ((Array.isArray(normalized.verificationArtifacts) ? normalized.verificationArtifacts : []) as Record<string, unknown>[]).slice(0, 2)) {
+        const inlineImage = await maybeBuildInlineImageContent(
+          typeof artifact.artifactPath === 'string' ? artifact.artifactPath : undefined,
+        );
+        if (inlineImage) {
+          extraContent.push(inlineImage);
+        }
+      }
 
-      return jsonToolSuccess(parsed, { extraContent });
+      return jsonToolSuccess(normalized, { extraContent });
     } catch (e) {
       return jsonToolError(e);
     }
@@ -4804,7 +5274,12 @@ server.registerTool(
   async ({ include_completed }) => {
     try {
       const parsed = await automationController.listAutomationTestRuns(include_completed);
-      return jsonToolSuccess(parsed);
+      return jsonToolSuccess({
+        ...parsed,
+        runs: Array.isArray(parsed.runs)
+          ? parsed.runs.map((run) => normalizeAutomationRunResult(run))
+          : [],
+      });
     } catch (e) {
       return jsonToolError(e);
     }
@@ -4863,6 +5338,7 @@ server.registerTool(
         includeOutput: include_output,
         clearUhtCache: clear_uht_cache,
       });
+      rememberExternalBuild(parsed);
       return jsonToolSuccess({
         ...parsed,
         inputResolution: {
@@ -4917,24 +5393,7 @@ server.registerTool(
         bWaitForCompletion: wait_for_completion,
       });
 
-      const headerChanges = (changed_paths ?? []).filter(
-        (p: string) => /\.(h|hpp|inl)$/i.test(p.replace(/\\/g, '/')),
-      );
-      const warnings: string[] = [];
-      if (headerChanges.length > 0) {
-        warnings.push(
-          'Live Coding cannot add, remove, or reorder UPROPERTYs or change class layouts. '
-          + 'Use compile_project_code + restart_editor for class layout changes.',
-        );
-      }
-
-      return jsonToolSuccess({
-        ...parsed,
-        changedPathsAccepted: changed_paths ?? [],
-        changedPathsAppliedByEditor: false,
-        headerChangesDetected: headerChanges,
-        warnings,
-      });
+      return jsonToolSuccess(enrichLiveCodingResult(parsed, changed_paths ?? []));
     } catch (e) {
       return jsonToolError(e);
     }
@@ -4973,6 +5432,7 @@ server.registerTool(
       const restartRequest = await callSubsystemJson('RestartEditor', {
         bWarn: false,
         bSaveDirtyAssets: save_dirty_assets,
+        bRelaunch: true,
       });
 
       cachedProjectAutomationContext = null;
@@ -5052,7 +5512,7 @@ server.registerTool(
         'When true, delete UHT cache files (.uhtpath, .uhtsettings) from Intermediate/ before building so that Unreal Header Tool regenerates headers for any new or changed UPROPERTYs.',
       ),
       restart_first: z.boolean().default(false).describe(
-        'When true, restart the editor BEFORE building to release locked DLLs. Use this when a previous build failed due to a locked DLL (errorCategory: locked_file). Sequence: restart editor → build → restart editor again to load new binaries.',
+        'When true, shut the editor down before building to release locked DLLs, then launch it from the MCP host after the build finishes. Use this when a previous build failed due to a locked DLL (errorCategory: locked_file).',
       ),
     },
     annotations: {
@@ -5104,10 +5564,10 @@ server.registerTool(
             reasons: ['live_coding_unsupported_on_host'],
           };
         } else {
-          const liveCoding = await callSubsystemJson('TriggerLiveCoding', {
+          const liveCoding = enrichLiveCodingResult(await callSubsystemJson('TriggerLiveCoding', {
             bEnableForSession: true,
             bWaitForCompletion: true,
-          });
+          }), changed_paths);
 
           if (!canFallbackFromLiveCoding(liveCoding)) {
             return jsonToolSuccess({
@@ -5141,6 +5601,7 @@ server.registerTool(
         const preRestart = await callSubsystemJson('RestartEditor', {
           bWarn: false,
           bSaveDirtyAssets: save_dirty_assets,
+          bRelaunch: false,
         });
         cachedProjectAutomationContext = null;
         structuredResult.preRestart = preRestart;
@@ -5149,14 +5610,15 @@ server.registerTool(
           return jsonToolSuccess(structuredResult);
         }
 
-        const preReconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+        const preDisconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
           disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
           reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+          waitForReconnect: false,
         });
-        structuredResult.preReconnect = preReconnect;
-        if (!preReconnect.reconnected) {
-          // Editor is down — build without it running (DLL is free)
-          structuredResult.editorDownForBuild = true;
+        structuredResult.preDisconnect = preDisconnect;
+        if (!preDisconnect.success) {
+          structuredResult.strategy = 'restart_first';
+          return jsonToolSuccess(structuredResult);
         }
       }
 
@@ -5170,6 +5632,7 @@ server.registerTool(
         includeOutput: include_output,
         clearUhtCache: clear_uht_cache,
       });
+      rememberExternalBuild(build);
 
       structuredResult.strategy = restart_first ? 'restart_first' : 'build_and_restart';
       structuredResult.build = build;
@@ -5188,27 +5651,41 @@ server.registerTool(
         }
       }
 
-      // If restart_first, editor may already be running (preReconnect succeeded) or down.
-      // Either way, restart to pick up new binaries.
-      const restartRequest = restart_first && structuredResult.editorDownForBuild
-        ? { success: true, message: 'Editor was already down during build; starting fresh.' }
-        : await callSubsystemJson('RestartEditor', {
-          bWarn: false,
-          bSaveDirtyAssets: restart_first ? false : save_dirty_assets,
+      let reconnect: Awaited<ReturnType<ProjectControllerLike['waitForEditorRestart']>>;
+      if (restart_first) {
+        const launch = await projectController.launchEditor({
+          engineRoot: resolvedProjectInputs.engineRoot,
+          projectPath: resolvedProjectInputs.projectPath,
         });
-      cachedProjectAutomationContext = null;
-      structuredResult.restartRequest = restartRequest;
-      structuredResult.restartRequestSaveDirtyAssetsAccepted = restart_first ? false : save_dirty_assets;
-      if (restartRequest.success === false) {
-        return jsonToolSuccess(structuredResult);
+        cachedProjectAutomationContext = null;
+        structuredResult.editorLaunch = launch;
+        if (!launch.success) {
+          return jsonToolSuccess(structuredResult);
+        }
+        reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+          disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+          reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+          waitForDisconnect: false,
+        });
+      } else {
+        const restartRequest = await callSubsystemJson('RestartEditor', {
+          bWarn: false,
+          bSaveDirtyAssets: save_dirty_assets,
+          bRelaunch: true,
+        });
+        cachedProjectAutomationContext = null;
+        structuredResult.restartRequest = restartRequest;
+        structuredResult.restartRequestSaveDirtyAssetsAccepted = save_dirty_assets;
+        if (restartRequest.success === false) {
+          return jsonToolSuccess(structuredResult);
+        }
+        reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+          disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+          reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+        });
       }
-
-      const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
-        disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
-        reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
-      });
       structuredResult.reconnect = reconnect;
-      structuredResult.success = reconnect.success;
+      structuredResult.success = reconnect.success === true;
       return jsonToolSuccess(structuredResult);
     } catch (e) {
       const resolved = await resolveProjectInputs({ engine_root, project_path, target });
@@ -5221,7 +5698,8 @@ server.registerTool(
   'apply_window_ui_changes',
   {
     title: 'Apply Window UI Changes',
-    description: 'Thin helper that applies variable flags, class defaults, font work, compile/save, and optional code sync in one ordered flow.',
+    description: 'Thin helper that applies variable flags, class defaults, font work, compile, optional save, and optional code sync in one ordered flow. It does not replace the final visual verification step.',
+    outputSchema: applyWindowUiChangesResultSchema,
     inputSchema: {
       asset_path: z.string().describe(
         'UE content path to the WidgetBlueprint to update.',
@@ -5249,8 +5727,11 @@ server.registerTool(
       compile_after: z.boolean().default(true).describe(
         'When true, compile the widget Blueprint after the requested mutations.',
       ),
-      save_after: z.boolean().default(true).describe(
-        'When true, save the widget asset and any explicit extra save paths after a successful compile.',
+      save_after: z.boolean().default(false).describe(
+        'When true, save the widget asset and any explicit extra save paths after a successful compile. Leave false to keep visual verification ahead of final persistence.',
+      ),
+      checkpoint_after_mutation_steps: z.boolean().default(false).describe(
+        'When true, save checkpoint assets after each successful mutation step so multi-step UI flows can recover from later interruptions.',
       ),
       save_asset_paths: z.array(z.string()).optional().describe(
         'Optional extra asset paths to save with the widget asset.',
@@ -5290,11 +5771,77 @@ server.registerTool(
     font_applications,
     compile_after,
     save_after,
+    checkpoint_after_mutation_steps,
     save_asset_paths,
     sync_project_code,
   }) => {
     try {
       const steps: Array<Record<string, unknown>> = [];
+      const buildVerification = (): z.infer<typeof windowUiVerificationSchema> => {
+        const status: z.infer<typeof windowUiVerificationSchema>['status'] = compile_after ? 'unverified' : 'compile_pending';
+        return {
+          required: true,
+          status,
+          surface: 'editor_offscreen' as const,
+          recommendedTool: 'capture_widget_preview' as const,
+          partialAllowed: true,
+          reason: compile_after
+            ? 'apply_window_ui_changes completed the mutation flow but did not perform the final rendered-widget verification step.'
+            : 'apply_window_ui_changes completed the mutation flow without compiling the widget, so compile and visual verification are still pending.',
+        };
+      };
+      const buildVerificationNextSteps = (status: 'compile_pending' | 'unverified') => {
+        if (status === 'compile_pending') {
+          return [
+            'Compile the widget blueprint or rerun apply_window_ui_changes with compile_after=true before visual verification.',
+            `Run capture_widget_preview for ${asset_path} after the compile result is clean.`,
+            'If preview capture is blocked, report partial verification explicitly with the blocking reason.',
+          ];
+        }
+
+        return [
+          `Run capture_widget_preview for ${asset_path} to visually confirm the rendered widget before calling the change verified.`,
+          'If preview capture is blocked, report partial verification explicitly with the blocking reason.',
+        ];
+      };
+      const collectCheckpointAssetPaths = (extraPaths: string[] = []) => {
+        const assetPaths = new Set<string>([asset_path]);
+        for (const extraPath of save_asset_paths ?? []) {
+          assetPaths.add(extraPath);
+        }
+        if (font_import?.font_asset_path) {
+          assetPaths.add(font_import.font_asset_path);
+        }
+        for (const extraPath of extraPaths) {
+          assetPaths.add(extraPath);
+        }
+        return Array.from(assetPaths);
+      };
+      const checkpointMutationStep = async (stepName: string, extraPaths: string[] = []) => {
+        if (!checkpoint_after_mutation_steps) {
+          return null;
+        }
+
+        const result = await callSubsystemJson('SaveAssets', {
+          AssetPathsJson: JSON.stringify(collectCheckpointAssetPaths(extraPaths)),
+        });
+        steps.push({
+          step: 'checkpoint_after_mutation_step',
+          afterStep: stepName,
+          result,
+        });
+        if (result.success === false) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'apply_window_ui_changes',
+            stoppedAt: 'checkpoint_after_mutation_step',
+            failedAfterStep: stepName,
+            steps,
+          });
+        }
+
+        return null;
+      };
 
       for (const selector of variable_widgets) {
         const widgetIdentifier = getWidgetIdentifier(selector.widget_name, selector.widget_path);
@@ -5323,6 +5870,10 @@ server.registerTool(
             steps,
           });
         }
+        const checkpointResult = await checkpointMutationStep('mark_widget_variable');
+        if (checkpointResult) {
+          return checkpointResult;
+        }
       }
 
       if (class_defaults) {
@@ -5344,6 +5895,10 @@ server.registerTool(
             steps,
           });
         }
+        const checkpointResult = await checkpointMutationStep('patch_class_defaults');
+        if (checkpointResult) {
+          return checkpointResult;
+        }
       }
 
       if (font_import) {
@@ -5362,6 +5917,15 @@ server.registerTool(
             stoppedAt: 'import_fonts',
             steps,
           });
+        }
+        const importedAssetPaths = Array.isArray(result.importedObjects)
+          ? result.importedObjects
+            .map((value) => (typeof value === 'object' && value !== null && typeof value.assetPath === 'string' ? value.assetPath : null))
+            .filter((value): value is string => value !== null)
+          : [];
+        const checkpointResult = await checkpointMutationStep('import_fonts', importedAssetPaths);
+        if (checkpointResult) {
+          return checkpointResult;
         }
       }
 
@@ -5383,6 +5947,10 @@ server.registerTool(
             steps,
           });
         }
+        const checkpointResult = await checkpointMutationStep('apply_widget_fonts');
+        if (checkpointResult) {
+          return checkpointResult;
+        }
       }
 
       if (compile_after) {
@@ -5400,6 +5968,10 @@ server.registerTool(
             stoppedAt: 'compile_widget_blueprint',
             steps,
           });
+        }
+        const checkpointResult = await checkpointMutationStep('compile_widget_blueprint');
+        if (checkpointResult) {
+          return checkpointResult;
         }
       }
 
@@ -5442,10 +6014,10 @@ server.registerTool(
         let needsBuildRestart = syncPlan.strategy === 'build_and_restart' || !projectController.liveCodingSupported;
 
         if (syncPlan.strategy === 'live_coding' && projectController.liveCodingSupported) {
-          const liveCoding = await callSubsystemJson('TriggerLiveCoding', {
+          const liveCoding = enrichLiveCodingResult(await callSubsystemJson('TriggerLiveCoding', {
             bEnableForSession: true,
             bWaitForCompletion: true,
-          });
+          }), sync_project_code.changed_paths);
           if (!canFallbackFromLiveCoding(liveCoding)) {
             steps.push({
               step: 'sync_project_code',
@@ -5478,19 +6050,21 @@ server.registerTool(
             const preRestart = await callSubsystemJson('RestartEditor', {
               bWarn: false,
               bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
+              bRelaunch: false,
             });
             cachedProjectAutomationContext = null;
-            const preReconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+            const preDisconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
               disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
               reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
+              waitForReconnect: false,
             });
             steps.push({
               step: 'sync_project_code_pre_restart',
               strategy: 'restart_first',
               restartRequest: preRestart,
-              reconnect: preReconnect,
+              disconnect: preDisconnect,
             });
-            if (preRestart.success === false) {
+            if (preRestart.success === false || !preDisconnect.success) {
               return jsonToolSuccess({
                 success: false,
                 operation: 'apply_window_ui_changes',
@@ -5512,6 +6086,7 @@ server.registerTool(
             includeOutput: sync_project_code.include_output ?? false,
             clearUhtCache: sync_project_code.clear_uht_cache ?? false,
           });
+          rememberExternalBuild(build);
           steps.push({
             step: 'compile_project_code',
             result: build,
@@ -5531,37 +6106,68 @@ server.registerTool(
             });
           }
 
-          const restartRequest = await callSubsystemJson('RestartEditor', {
-            bWarn: false,
-            bSaveDirtyAssets: useRestartFirst ? false : (sync_project_code.save_dirty_assets ?? true),
-          });
-          cachedProjectAutomationContext = null;
-          const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
-            disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
-            reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
-          });
-          steps.push({
-            step: 'sync_project_code',
-            strategy: useRestartFirst ? 'restart_first' : 'build_and_restart',
-            restartRequest,
-            saveDirtyAssetsAccepted: useRestartFirst ? false : (sync_project_code.save_dirty_assets ?? true),
-            reconnect,
-          });
-          if (restartRequest.success === false || !reconnect.success) {
-            return jsonToolSuccess({
-              success: false,
-              operation: 'apply_window_ui_changes',
-              stoppedAt: 'sync_project_code',
-              steps,
+          if (useRestartFirst) {
+            const editorLaunch = await projectController.launchEditor({
+              engineRoot: resolvedProjectInputs.engineRoot,
+              projectPath: resolvedProjectInputs.projectPath,
             });
+            cachedProjectAutomationContext = null;
+            const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+              disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
+              reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
+              waitForDisconnect: false,
+            });
+            steps.push({
+              step: 'sync_project_code',
+              strategy: 'restart_first',
+              editorLaunch,
+              reconnect,
+            });
+            if (!editorLaunch.success || !reconnect.success) {
+              return jsonToolSuccess({
+                success: false,
+                operation: 'apply_window_ui_changes',
+                stoppedAt: 'sync_project_code',
+                steps,
+              });
+            }
+          } else {
+            const restartRequest = await callSubsystemJson('RestartEditor', {
+              bWarn: false,
+              bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
+              bRelaunch: true,
+            });
+            cachedProjectAutomationContext = null;
+            const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+              disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
+              reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
+            });
+            steps.push({
+              step: 'sync_project_code',
+              strategy: 'build_and_restart',
+              restartRequest,
+              saveDirtyAssetsAccepted: sync_project_code.save_dirty_assets ?? true,
+              reconnect,
+            });
+            if (restartRequest.success === false || !reconnect.success) {
+              return jsonToolSuccess({
+                success: false,
+                operation: 'apply_window_ui_changes',
+                stoppedAt: 'sync_project_code',
+                steps,
+              });
+            }
           }
         }
       }
 
+      const verification = buildVerification();
       return jsonToolSuccess({
         success: true,
         operation: 'apply_window_ui_changes',
         steps,
+        verification,
+        next_steps: buildVerificationNextSteps(verification.status),
       });
     } catch (e) {
       return jsonToolError(e);
