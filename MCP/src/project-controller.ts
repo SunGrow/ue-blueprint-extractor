@@ -23,6 +23,12 @@ export interface CompileProjectCodeRequest {
   clearUhtCache?: boolean;
 }
 
+export interface LaunchEditorRequest {
+  engineRoot?: string;
+  projectPath?: string;
+  additionalArgs?: string[];
+}
+
 export interface SyncProjectCodeRequest extends CompileProjectCodeRequest {
   changedPaths: string[];
   forceRebuild?: boolean;
@@ -75,6 +81,20 @@ export interface RestartReconnectResult {
   diagnostics: string[];
 }
 
+export interface LaunchEditorResult {
+  success: boolean;
+  operation: 'launch_editor';
+  engineRoot: string;
+  projectPath: string;
+  projectDir: string;
+  command: {
+    executable: string;
+    args: string[];
+  };
+  detached: boolean;
+  diagnostics: string[];
+}
+
 export type ProbeConnection = (() => Promise<boolean>) | null;
 
 export interface CommandInvocation {
@@ -98,6 +118,7 @@ export interface ProjectControllerOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
+  spawnProcess?: typeof spawn;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -105,11 +126,14 @@ export interface ProjectControllerLike {
   readonly liveCodingSupported: boolean;
   classifyChangedPaths(changedPaths: string[], forceRebuild?: boolean): SyncStrategyPlan;
   compileProjectCode(request: CompileProjectCodeRequest): Promise<CompileProjectCodeResult>;
+  launchEditor(request: LaunchEditorRequest): Promise<LaunchEditorResult>;
   waitForEditorRestart(
     probeConnection: ProbeConnection,
     options?: {
       disconnectTimeoutMs?: number;
       reconnectTimeoutMs?: number;
+      waitForDisconnect?: boolean;
+      waitForReconnect?: boolean;
     },
   ): Promise<RestartReconnectResult>;
 }
@@ -157,6 +181,24 @@ export function resolveCommandInvocation(
     executable: env.ComSpec || 'cmd.exe',
     args: ['/d', '/s', '/c', commandLine],
   };
+}
+
+export async function resolveEditorExecutable(
+  engineRoot: string,
+  platform: NodeJS.Platform,
+  mode: 'editor' | 'commandlet' = 'editor',
+): Promise<string> {
+  const executableName = mode === 'commandlet'
+    ? (platform === 'win32' ? 'UnrealEditor-Cmd.exe' : 'UnrealEditor-Cmd')
+    : (platform === 'win32' ? 'UnrealEditor.exe' : 'UnrealEditor');
+  const executable = platform === 'win32'
+    ? resolve(engineRoot, 'Engine', 'Binaries', 'Win64', executableName)
+    : platform === 'darwin'
+      ? resolve(engineRoot, 'Engine', 'Binaries', 'Mac', executableName)
+      : resolve(engineRoot, 'Engine', 'Binaries', 'Linux', executableName);
+
+  await access(executable, fsConstants.F_OK);
+  return executable;
 }
 
 async function defaultRunCommand(
@@ -461,12 +503,14 @@ export class ProjectController implements ProjectControllerLike {
   private readonly env: NodeJS.ProcessEnv;
   private readonly platform: NodeJS.Platform;
   private readonly runCommand: CommandRunner;
+  private readonly spawnProcess: typeof spawn;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(options: ProjectControllerOptions = {}) {
     this.env = options.env ?? process.env;
     this.platform = parsePlatform(options.platform, process.platform);
     this.runCommand = options.runCommand ?? defaultRunCommand;
+    this.spawnProcess = options.spawnProcess ?? spawn;
     this.sleep = options.sleep ?? defaultSleep;
   }
 
@@ -575,19 +619,66 @@ export class ProjectController implements ProjectControllerLike {
     return result;
   }
 
+  async launchEditor(request: LaunchEditorRequest): Promise<LaunchEditorResult> {
+    const engineRoot = request.engineRoot ?? this.env.UE_ENGINE_ROOT;
+    const projectPath = request.projectPath ?? this.env.UE_PROJECT_PATH;
+    const diagnostics: string[] = [];
+
+    if (!engineRoot) {
+      throw new Error('launch_editor requires engine_root or UE_ENGINE_ROOT');
+    }
+
+    if (!projectPath) {
+      throw new Error('launch_editor requires project_path or UE_PROJECT_PATH');
+    }
+
+    const executable = await resolveEditorExecutable(engineRoot, this.platform, 'editor');
+    const args = [projectPath, ...(request.additionalArgs ?? [])];
+    const invocation = resolveCommandInvocation(executable, args, this.platform, this.env);
+    const child = this.spawnProcess(invocation.executable, invocation.args, {
+      cwd: dirname(projectPath),
+      env: this.env,
+      shell: false,
+      windowsVerbatimArguments: isWindowsBatchScript(executable, this.platform),
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    return {
+      success: true,
+      operation: 'launch_editor',
+      engineRoot,
+      projectPath,
+      projectDir: dirname(projectPath),
+      command: {
+        executable: invocation.executable,
+        args: invocation.args,
+      },
+      detached: true,
+      diagnostics,
+    };
+  }
+
   async waitForEditorRestart(
     probeConnection: ProbeConnection,
     options: {
       disconnectTimeoutMs?: number;
       reconnectTimeoutMs?: number;
+      waitForDisconnect?: boolean;
+      waitForReconnect?: boolean;
     } = {},
   ): Promise<RestartReconnectResult> {
     const disconnectTimeoutMs = options.disconnectTimeoutMs ?? DEFAULT_DISCONNECT_TIMEOUT_MS;
     const reconnectTimeoutMs = options.reconnectTimeoutMs ?? DEFAULT_RECONNECT_TIMEOUT_MS;
+    const waitForDisconnect = options.waitForDisconnect ?? true;
+    const waitForReconnect = options.waitForReconnect ?? true;
     const diagnostics: string[] = [];
 
-    const disconnected = await waitForState(probeConnection, false, disconnectTimeoutMs, this.sleep);
-    if (!disconnected) {
+    const disconnected = waitForDisconnect
+      ? await waitForState(probeConnection, false, disconnectTimeoutMs, this.sleep)
+      : false;
+    if (waitForDisconnect && !disconnected) {
       diagnostics.push('Editor never disconnected after restart request');
       return {
         success: false,
@@ -600,15 +691,17 @@ export class ProjectController implements ProjectControllerLike {
       };
     }
 
-    const reconnected = await waitForState(probeConnection, true, reconnectTimeoutMs, this.sleep);
-    if (!reconnected) {
+    const reconnected = waitForReconnect
+      ? await waitForState(probeConnection, true, reconnectTimeoutMs, this.sleep)
+      : false;
+    if (waitForReconnect && !reconnected) {
       diagnostics.push('Editor did not reconnect before the timeout elapsed');
     }
 
     return {
-      success: reconnected,
+      success: (waitForDisconnect ? disconnected : true) && (waitForReconnect ? reconnected : true),
       operation: 'restart_editor',
-      disconnected: true,
+      disconnected,
       reconnected,
       disconnectTimeoutMs,
       reconnectTimeoutMs,

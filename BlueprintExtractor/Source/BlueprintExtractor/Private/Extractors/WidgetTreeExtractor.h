@@ -12,7 +12,7 @@ enum class ESlateVisibility : uint8;
 struct FWidgetTreeExtractor
 {
 	/** Entry point. Extracts the entire widget tree hierarchy and property bindings.
-	 *  Returns nullptr if input is null or has no widget tree. */
+	 *  Returns nullptr only when the input WidgetBlueprint is null. */
 	static TSharedPtr<FJsonObject> Extract(const UWidgetBlueprint* WidgetBP);
 
 private:

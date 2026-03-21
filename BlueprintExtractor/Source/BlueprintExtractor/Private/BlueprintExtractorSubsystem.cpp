@@ -59,6 +59,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/EngineVersionComparison.h"
+#include "HAL/PlatformMisc.h"
 #include "FileHelpers.h"
 #include "UnrealEdMisc.h"
 #include "UObject/UObjectIterator.h"
@@ -2857,12 +2858,16 @@ FString UBlueprintExtractorSubsystem::TriggerLiveCoding(const bool bEnableForSes
 #endif
 }
 
-FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn, const FString& AdditionalCommandLine, const bool bSaveDirtyAssets)
+FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn,
+                                                    const FString& AdditionalCommandLine,
+                                                    const bool bSaveDirtyAssets,
+                                                    const bool bRelaunch)
 {
 	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 	Result->SetBoolField(TEXT("success"), true);
 	Result->SetStringField(TEXT("operation"), TEXT("restart_editor"));
 	Result->SetBoolField(TEXT("scheduled"), true);
+	Result->SetBoolField(TEXT("relaunch"), bRelaunch);
 	if (!AdditionalCommandLine.IsEmpty())
 	{
 		Result->SetStringField(TEXT("additionalCommandLine"), AdditionalCommandLine);
@@ -2878,16 +2883,28 @@ FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn, const FStr
 		Result->SetBoolField(TEXT("dirtyPackagesSaved"), bSaved);
 	}
 
-	Result->SetStringField(TEXT("message"), TEXT("Editor restart scheduled."));
+	if (!bRelaunch && !AdditionalCommandLine.IsEmpty())
+	{
+		Result->SetStringField(TEXT("additionalCommandLineNote"), TEXT("additionalCommandLine is ignored when bRelaunch is false."));
+	}
+
+	Result->SetStringField(TEXT("message"), bRelaunch ? TEXT("Editor restart scheduled.") : TEXT("Editor shutdown scheduled."));
 
 	const FString CommandLineCopy = AdditionalCommandLine;
 	FTSTicker::GetCoreTicker().AddTicker(
-		FTickerDelegate::CreateLambda([bWarn, CommandLineCopy](float)
+		FTickerDelegate::CreateLambda([bWarn, CommandLineCopy, bRelaunch](float)
 		{
-			const TOptional<FString> RestartCommandLine = CommandLineCopy.IsEmpty()
-				? TOptional<FString>()
-				: TOptional<FString>(CommandLineCopy);
-			FUnrealEdMisc::Get().RestartEditor(bWarn, RestartCommandLine);
+			if (bRelaunch)
+			{
+				const TOptional<FString> RestartCommandLine = CommandLineCopy.IsEmpty()
+					? TOptional<FString>()
+					: TOptional<FString>(CommandLineCopy);
+				FUnrealEdMisc::Get().RestartEditor(bWarn, RestartCommandLine);
+			}
+			else
+			{
+				FPlatformMisc::RequestExit(false);
+			}
 			return false;
 		}),
 		0.0f);

@@ -13,13 +13,15 @@ TSharedPtr<FJsonObject> FWidgetTreeExtractor::Extract(const UWidgetBlueprint* Wi
 		return nullptr;
 	}
 
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 	const UWidgetTree* WidgetTree = WidgetBP->WidgetTree;
 	if (!WidgetTree)
 	{
-		return nullptr;
+		Result->SetStringField(TEXT("widgetTreeStatus"), TEXT("missing_widget_tree"));
+		Result->SetField(TEXT("rootWidget"), MakeShared<FJsonValueNull>());
+		Result->SetStringField(TEXT("widgetTreeError"), TEXT("WidgetTree is null on the WidgetBlueprint."));
+		return Result;
 	}
-
-	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
 	const UWidget* RootWidget = WidgetTree->RootWidget;
 	if (RootWidget)
@@ -28,7 +30,20 @@ TSharedPtr<FJsonObject> FWidgetTreeExtractor::Extract(const UWidgetBlueprint* Wi
 		if (RootWidgetJson)
 		{
 			Result->SetObjectField(TEXT("rootWidget"), RootWidgetJson);
+			Result->SetStringField(TEXT("widgetTreeStatus"), TEXT("ok"));
 		}
+		else
+		{
+			Result->SetField(TEXT("rootWidget"), MakeShared<FJsonValueNull>());
+			Result->SetStringField(TEXT("widgetTreeStatus"), TEXT("root_widget_extract_failed"));
+			Result->SetStringField(TEXT("widgetTreeError"), TEXT("Root widget exists but could not be serialized."));
+		}
+	}
+	else
+	{
+		Result->SetField(TEXT("rootWidget"), MakeShared<FJsonValueNull>());
+		Result->SetStringField(TEXT("widgetTreeStatus"), TEXT("missing_root_widget"));
+		Result->SetStringField(TEXT("widgetTreeError"), TEXT("WidgetTree exists but RootWidget is null."));
 	}
 
 	const TSharedPtr<FJsonObject> BindingsJson = ExtractBindings(WidgetBP);

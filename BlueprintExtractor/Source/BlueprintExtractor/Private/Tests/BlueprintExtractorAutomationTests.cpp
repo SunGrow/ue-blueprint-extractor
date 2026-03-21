@@ -2429,6 +2429,223 @@ static bool RunWidgetStructureFailureRecoveryCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunWidgetCompileFailureExtractionCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_CompileFailureExtract"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			FixtureBindWidgetParentClassPath),
+		TEXT("CreateWidgetBlueprint for compile failure extraction"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"TextBlock","name":"WrongTitle","is_variable":true,"properties":{"Text":"Broken BindWidget layout"}}]})json"),
+			false),
+		TEXT("BuildWidgetTree for compile failure extraction"));
+
+	ExpectFailureResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint expected failure for extract coverage"));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath),
+		TEXT("ExtractWidgetBlueprint after compile failure"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> CompileJson;
+	Test.TestTrue(TEXT("ExtractWidgetBlueprint includes a compile snapshot after compile failure"), TryGetObjectFieldCopy(ExtractResult, TEXT("compile"), CompileJson) && CompileJson.IsValid());
+	if (CompileJson.IsValid())
+	{
+		Test.TestEqual(TEXT("Compile snapshot reports Error status"), CompileJson->GetStringField(TEXT("status")), FString(TEXT("Error")));
+		const TArray<TSharedPtr<FJsonValue>>* Errors = nullptr;
+		Test.TestTrue(TEXT("Compile snapshot includes compile errors"), CompileJson->TryGetArrayField(TEXT("errors"), Errors) && Errors != nullptr && Errors->Num() > 0);
+		const TArray<TSharedPtr<FJsonValue>>* Messages = nullptr;
+		Test.TestTrue(TEXT("Compile snapshot includes normalized messages"), CompileJson->TryGetArrayField(TEXT("messages"), Messages) && Messages != nullptr && Messages->Num() > 0);
+	}
+
+	FString WidgetTreeStatus;
+	Test.TestTrue(TEXT("ExtractWidgetBlueprint includes widgetTreeStatus after compile failure"), ExtractResult->TryGetStringField(TEXT("widgetTreeStatus"), WidgetTreeStatus) && !WidgetTreeStatus.IsEmpty());
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	const bool bHasRootWidget = TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid();
+	if (bHasRootWidget)
+	{
+		Test.TestEqual(TEXT("Compile failure keeps a degraded live widget tree when available"), WidgetTreeStatus, FString(TEXT("ok")));
+		const TSharedPtr<FJsonObject> WrongTitleNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/WrongTitle"));
+		Test.TestNotNull(TEXT("Degraded extract still returns the authored tree snapshot"), WrongTitleNode.Get());
+	}
+	else
+	{
+		Test.TestTrue(TEXT("ExtractWidgetBlueprint still returns the rootWidget field when the tree cannot be recovered"), ExtractResult->HasField(TEXT("rootWidget")));
+		FString WidgetTreeError;
+		Test.TestTrue(TEXT("Missing rootWidget is accompanied by widgetTreeError"), ExtractResult->TryGetStringField(TEXT("widgetTreeError"), WidgetTreeError) && !WidgetTreeError.IsEmpty());
+	}
+
+	return true;
+}
+
+static bool RunOverrideCoupledWidgetPropertyCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_SizeBoxOverrides"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("/Script/UMG.UserWidget")),
+		TEXT("CreateWidgetBlueprint for override-coupled property coverage"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"SizeBox","name":"ActionHost","is_variable":true,"children":[{"class":"TextBlock","name":"ActionLabel","is_variable":true,"properties":{"Text":"Action"}}]}]})json"),
+			false),
+		TEXT("BuildWidgetTree for override-coupled property coverage"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidget(
+			WidgetObjectPath,
+			TEXT("ActionHost"),
+			TEXT(R"json({"WidthOverride":320.0,"HeightOverride":48.0,"MinDesiredHeight":24.0})json"),
+			TEXT("{}"),
+			TEXT("{}"),
+			false),
+		TEXT("ModifyWidget applies override-coupled SizeBox properties"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after override-coupled SizeBox properties"));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath),
+		TEXT("ExtractWidgetBlueprint after override-coupled SizeBox properties"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	Test.TestTrue(TEXT("Override-coupled extract returns a rootWidget"), TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid());
+	if (!RootWidgetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> ActionHostNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ActionHost"));
+	Test.TestNotNull(TEXT("SizeBox node is present after override-coupled patch"), ActionHostNode.Get());
+	if (!ActionHostNode.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> PropertiesJson;
+	Test.TestTrue(TEXT("SizeBox extract includes patched properties"), TryGetObjectFieldCopy(ActionHostNode, TEXT("properties"), PropertiesJson) && PropertiesJson.IsValid());
+	if (!PropertiesJson.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestTrue(TEXT("WidthOverride was applied"), FMath::IsNearlyEqual(PropertiesJson->GetNumberField(TEXT("WidthOverride")), 320.0));
+	Test.TestTrue(TEXT("HeightOverride was applied"), FMath::IsNearlyEqual(PropertiesJson->GetNumberField(TEXT("HeightOverride")), 48.0));
+	Test.TestTrue(TEXT("MinDesiredHeight was applied"), FMath::IsNearlyEqual(PropertiesJson->GetNumberField(TEXT("MinDesiredHeight")), 24.0));
+
+	bool bOverrideWidth = false;
+	bool bOverrideHeight = false;
+	bool bOverrideMinDesiredHeight = false;
+	Test.TestTrue(TEXT("bOverride_WidthOverride auto-enables"), PropertiesJson->TryGetBoolField(TEXT("bOverride_WidthOverride"), bOverrideWidth) && bOverrideWidth);
+	Test.TestTrue(TEXT("bOverride_HeightOverride auto-enables"), PropertiesJson->TryGetBoolField(TEXT("bOverride_HeightOverride"), bOverrideHeight) && bOverrideHeight);
+	Test.TestTrue(TEXT("bOverride_MinDesiredHeight auto-enables"), PropertiesJson->TryGetBoolField(TEXT("bOverride_MinDesiredHeight"), bOverrideMinDesiredHeight) && bOverrideMinDesiredHeight);
+
+	return true;
+}
+
+static bool RunWidgetPropertyDiagnosticsCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString CheckBoxWidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_CheckBoxDiagnostics"));
+	const FString CheckBoxWidgetObjectPath = MakeObjectPath(CheckBoxWidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			CheckBoxWidgetAssetPath,
+			TEXT("/Script/UMG.UserWidget")),
+		TEXT("CreateWidgetBlueprint for CheckBox diagnostics"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			CheckBoxWidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"CheckBox","name":"ToggleBox","is_variable":true}]})json"),
+			false),
+		TEXT("BuildWidgetTree for CheckBox diagnostics"));
+
+	const FString CheckBoxFailureJson = Subsystem->ModifyWidget(
+		CheckBoxWidgetObjectPath,
+		TEXT("ToggleBox"),
+		TEXT(R"json({"WidgetStyles":"Bad"})json"),
+		TEXT("{}"),
+		TEXT("{}"),
+		false);
+	ExpectFailureResult(Test, CheckBoxFailureJson, TEXT("ModifyWidget invalid CheckBox property"));
+	Test.TestTrue(TEXT("CheckBox property failure reports the resolved class"), CheckBoxFailureJson.Contains(TEXT("resolved class CheckBox")));
+	Test.TestTrue(TEXT("CheckBox property failure reports nearby editable suggestions"), CheckBoxFailureJson.Contains(TEXT("Closest editable properties")));
+
+	const FString CommonUIButtonAssetPath = MakeUniqueAssetPath(TEXT("WBP_CommonUIButtonDiagnostics"));
+	const FString CommonUIButtonObjectPath = MakeObjectPath(CommonUIButtonAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			CommonUIButtonAssetPath,
+			TEXT("/Script/CommonUI.CommonButtonBase")),
+		TEXT("CreateWidgetBlueprint for CommonUI diagnostics"));
+
+	const FString CommonUIFailureJson = Subsystem->ModifyWidgetBlueprintStructure(
+		CommonUIButtonObjectPath,
+		TEXT("patch_class_defaults"),
+		TEXT(R"json({"classDefaults":{"BackgroundColor":"#FFFFFFFF"}})json"),
+		false);
+	ExpectFailureResult(Test, CommonUIFailureJson, TEXT("ModifyWidgetBlueprintStructure invalid CommonUI class default"));
+	Test.TestTrue(TEXT("CommonUI property failure reports the resolved class"), CommonUIFailureJson.Contains(TEXT("resolved class")));
+	Test.TestTrue(TEXT("CommonUI property failure identifies unsupported wrapper surfaces"), CommonUIFailureJson.Contains(TEXT("CommonUI unsupported surface")));
+
+	return true;
+}
+
 static bool RunBlueprintGraphAppendAndRollbackCoverage(FAutomationTestBase& Test)
 {
 	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
@@ -2931,6 +3148,21 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("WidgetStructureFailureRecovery"), [this]()
 		{
 			TestTrue(TEXT("Widget failure recovery coverage completes"), RunWidgetStructureFailureRecoveryCoverage(*this));
+		});
+
+		It(TEXT("WidgetCompileFailureExtraction"), [this]()
+		{
+			TestTrue(TEXT("Widget compile failure extraction coverage completes"), RunWidgetCompileFailureExtractionCoverage(*this));
+		});
+
+		It(TEXT("WidgetOverrideCoupledProperties"), [this]()
+		{
+			TestTrue(TEXT("Widget override-coupled property coverage completes"), RunOverrideCoupledWidgetPropertyCoverage(*this));
+		});
+
+		It(TEXT("WidgetPropertyDiagnostics"), [this]()
+		{
+			TestTrue(TEXT("Widget property diagnostics coverage completes"), RunWidgetPropertyDiagnosticsCoverage(*this));
 		});
 
 		It(TEXT("BlueprintGraphAuthoring"), [this]()

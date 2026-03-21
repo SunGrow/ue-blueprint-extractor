@@ -105,6 +105,49 @@ describe('ProjectController', () => {
     });
   });
 
+  it('launches the editor from the host as a detached process', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-launch-'));
+    tempDirs.push(root);
+
+    const engineRoot = join(root, 'UE_5.7');
+    const editorExecutable = join(engineRoot, 'Engine', 'Binaries', 'Linux', 'UnrealEditor');
+    const projectPath = join(root, 'MyGame.uproject');
+    await mkdir(join(engineRoot, 'Engine', 'Binaries', 'Linux'), { recursive: true });
+    await writeFile(editorExecutable, '#!/usr/bin/env bash\n');
+    await writeFile(projectPath, '{}');
+
+    const spawnCalls: Array<Record<string, unknown>> = [];
+    const controller = new ProjectController({
+      env: {
+        UE_ENGINE_ROOT: engineRoot,
+        UE_PROJECT_PATH: projectPath,
+      },
+      platform: 'linux',
+      spawnProcess: ((executable, args, options) => {
+        spawnCalls.push({ executable, args, options });
+        return {
+          unref() {},
+        } as never;
+      }) as typeof import('node:child_process').spawn,
+    });
+
+    const result = await controller.launchEditor({});
+
+    expect(result.success).toBe(true);
+    expect(result.command.executable).toBe(editorExecutable);
+    expect(result.command.args).toEqual([projectPath]);
+    expect(spawnCalls).toEqual([{
+      executable: editorExecutable,
+      args: [projectPath],
+      options: expect.objectContaining({
+        cwd: root,
+        detached: true,
+        shell: false,
+        stdio: 'ignore',
+      }),
+    }]);
+  });
+
   it('waits for the editor to disconnect and reconnect after restart', async () => {
     const states = [true, true, false, false, true];
     const controller = new ProjectController({
@@ -118,6 +161,40 @@ describe('ProjectController', () => {
 
     expect(reconnect.success).toBe(true);
     expect(reconnect.disconnected).toBe(true);
+    expect(reconnect.reconnected).toBe(true);
+  });
+
+  it('can wait only for editor disconnect during shutdown-first orchestration', async () => {
+    const states = [true, true, false];
+    const controller = new ProjectController({
+      sleep: async () => {},
+    });
+
+    const disconnect = await controller.waitForEditorRestart(async () => states.shift() ?? false, {
+      disconnectTimeoutMs: 50,
+      reconnectTimeoutMs: 50,
+      waitForReconnect: false,
+    });
+
+    expect(disconnect.success).toBe(true);
+    expect(disconnect.disconnected).toBe(true);
+    expect(disconnect.reconnected).toBe(false);
+  });
+
+  it('can wait only for editor reconnect after a host-side launch', async () => {
+    const states = [false, false, true];
+    const controller = new ProjectController({
+      sleep: async () => {},
+    });
+
+    const reconnect = await controller.waitForEditorRestart(async () => states.shift() ?? true, {
+      disconnectTimeoutMs: 50,
+      reconnectTimeoutMs: 50,
+      waitForDisconnect: false,
+    });
+
+    expect(reconnect.success).toBe(true);
+    expect(reconnect.disconnected).toBe(false);
     expect(reconnect.reconnected).toBe(true);
   });
 });

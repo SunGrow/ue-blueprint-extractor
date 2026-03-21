@@ -461,5 +461,5 @@ public:
 
 	/** Schedules an editor restart after the current remote call returns. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
-	FString RestartEditor(const bool bWarn = false, const FString& AdditionalCommandLine = TEXT(""), const bool bSaveDirtyAssets = false);
+	FString RestartEditor(const bool bWarn = false, const FString& AdditionalCommandLine = TEXT(""), const bool bSaveDirtyAssets = false, const bool bRelaunch = true);
 };

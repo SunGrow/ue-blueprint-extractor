@@ -4,6 +4,8 @@
 #include "JsonObjectConverter.h"
 #include "UObject/UnrealType.h"
 
+#include <initializer_list>
+
 TSharedPtr<FJsonValue> FPropertySerializer::SerializePropertyValue(const FProperty* Property, const void* ValuePtr)
 {
 	if (!Property || !ValuePtr)
@@ -315,6 +317,288 @@ namespace PropertySerializerInternal
 static void AddError(TArray<FString>& OutErrors, const FString& Message)
 {
 	OutErrors.Add(Message);
+}
+
+static FProperty* FindPropertyOnClassHierarchy(const UClass* TargetClass, const FName PropertyName)
+{
+	if (!TargetClass || PropertyName.IsNone())
+	{
+		return nullptr;
+	}
+
+	FProperty* Property = TargetClass->FindPropertyByName(PropertyName);
+	if (Property)
+	{
+		return Property;
+	}
+
+	for (const UClass* SuperClass = TargetClass->GetSuperClass();
+	     SuperClass && !Property;
+	     SuperClass = SuperClass->GetSuperClass())
+	{
+		Property = SuperClass->FindPropertyByName(PropertyName);
+	}
+
+	return Property;
+}
+
+static FString DescribeResolvedClass(const UClass* TargetClass)
+{
+	if (!TargetClass)
+	{
+		return TEXT("<null>");
+	}
+
+	FString Description = TargetClass->GetName();
+	for (const UClass* SuperClass = TargetClass->GetSuperClass();
+	     SuperClass;
+	     SuperClass = SuperClass->GetSuperClass())
+	{
+		if (SuperClass->HasAnyClassFlags(CLASS_Native))
+		{
+			if (SuperClass != TargetClass)
+			{
+				Description += FString::Printf(TEXT(" (native parent: %s)"), *SuperClass->GetName());
+			}
+			break;
+		}
+	}
+
+	return Description;
+}
+
+static bool ClassHierarchyContainsName(const UClass* TargetClass, const FString& ClassName)
+{
+	for (const UClass* CurrentClass = TargetClass; CurrentClass; CurrentClass = CurrentClass->GetSuperClass())
+	{
+		if (CurrentClass->GetName().Equals(ClassName, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static TArray<FString> TokenizeIdentifier(const FString& Identifier)
+{
+	TArray<FString> Tokens;
+	FString CurrentToken;
+
+	for (int32 Index = 0; Index < Identifier.Len(); ++Index)
+	{
+		const TCHAR Char = Identifier[Index];
+		if (Char == TEXT('_') || Char == TEXT('-') || Char == TEXT(' ') || Char == TEXT('/'))
+		{
+			if (!CurrentToken.IsEmpty())
+			{
+				Tokens.Add(CurrentToken.ToLower());
+				CurrentToken.Reset();
+			}
+			continue;
+		}
+
+		const bool bStartNewToken = CurrentToken.Len() > 0
+			&& FChar::IsUpper(Char)
+			&& !FChar::IsUpper(CurrentToken[CurrentToken.Len() - 1]);
+		if (bStartNewToken)
+		{
+			Tokens.Add(CurrentToken.ToLower());
+			CurrentToken.Reset();
+		}
+
+		CurrentToken.AppendChar(Char);
+	}
+
+	if (!CurrentToken.IsEmpty())
+	{
+		Tokens.Add(CurrentToken.ToLower());
+	}
+
+	return Tokens;
+}
+
+static int32 ScorePropertySuggestion(const FString& RequestedProperty, const FString& CandidateProperty)
+{
+	if (CandidateProperty.IsEmpty())
+	{
+		return 0;
+	}
+
+	const FString RequestedLower = RequestedProperty.ToLower();
+	const FString CandidateLower = CandidateProperty.ToLower();
+
+	int32 Score = 0;
+	if (CandidateLower == RequestedLower)
+	{
+		return 1000;
+	}
+	if (CandidateLower.Contains(RequestedLower) || RequestedLower.Contains(CandidateLower))
+	{
+		Score += 120;
+	}
+	if (CandidateLower.StartsWith(RequestedLower.Left(FMath::Min(3, RequestedLower.Len()))))
+	{
+		Score += 40;
+	}
+
+	const TArray<FString> RequestedTokens = TokenizeIdentifier(RequestedProperty);
+	const TArray<FString> CandidateTokens = TokenizeIdentifier(CandidateProperty);
+	for (const FString& RequestedToken : RequestedTokens)
+	{
+		if (RequestedToken.Len() < 3)
+		{
+			continue;
+		}
+
+		for (const FString& CandidateToken : CandidateTokens)
+		{
+			if (CandidateToken == RequestedToken)
+			{
+				Score += 50;
+			}
+			else if (CandidateToken.Contains(RequestedToken) || RequestedToken.Contains(CandidateToken))
+			{
+				Score += 20;
+			}
+		}
+	}
+
+	return Score;
+}
+
+static TArray<FString> FindEditablePropertySuggestions(const UClass* TargetClass,
+                                                       const FString& RequestedProperty,
+                                                       const int32 MaxSuggestions = 5)
+{
+	if (!TargetClass)
+	{
+		return {};
+	}
+
+	TArray<TPair<FString, int32>> RankedCandidates;
+	TSet<FString> SeenProperties;
+
+	for (TFieldIterator<FProperty> PropIt(TargetClass); PropIt; ++PropIt)
+	{
+		const FProperty* Property = *PropIt;
+		if (!Property
+			|| !Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)
+			|| Property->HasAnyPropertyFlags(CPF_Deprecated | CPF_Transient))
+		{
+			continue;
+		}
+
+		const FString PropertyName = Property->GetName();
+		if (SeenProperties.Contains(PropertyName))
+		{
+			continue;
+		}
+		SeenProperties.Add(PropertyName);
+
+		const int32 Score = ScorePropertySuggestion(RequestedProperty, PropertyName);
+		if (Score > 0)
+		{
+			RankedCandidates.Add(TPair<FString, int32>(PropertyName, Score));
+		}
+	}
+
+	RankedCandidates.Sort([](const TPair<FString, int32>& Left, const TPair<FString, int32>& Right)
+	{
+		if (Left.Value == Right.Value)
+		{
+			return Left.Key < Right.Key;
+		}
+		return Right.Value < Left.Value;
+	});
+
+	TArray<FString> Suggestions;
+	for (const TPair<FString, int32>& Candidate : RankedCandidates)
+	{
+		Suggestions.Add(Candidate.Key);
+		if (Suggestions.Num() >= MaxSuggestions)
+		{
+			break;
+		}
+	}
+
+	return Suggestions;
+}
+
+static bool IsCommonUIButtonWrapperPropertyGap(const UClass* TargetClass, const FString& RequestedProperty)
+{
+	if (!ClassHierarchyContainsName(TargetClass, TEXT("CommonButtonBase")))
+	{
+		return false;
+	}
+
+	for (const FString& KnownGap : {TEXT("BackgroundColor"), TEXT("WidgetStyle"), TEXT("ColorAndOpacity")})
+	{
+		if (RequestedProperty.Equals(KnownGap, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static FString BuildPropertyNotFoundMessage(const UClass* TargetClass, const FString& RequestedProperty)
+{
+	FString Message = FString::Printf(
+		TEXT("Property '%s' not found on resolved class '%s'"),
+		*RequestedProperty,
+		*DescribeResolvedClass(TargetClass));
+
+	if (IsCommonUIButtonWrapperPropertyGap(TargetClass, RequestedProperty))
+	{
+		Message += TEXT(". CommonUI unsupported surface: UCommonButtonBase exposes a wrapper widget, not raw UButton background/style fields. Use a CommonUI style asset or a project-specific material-backed button base instead.");
+	}
+
+	const TArray<FString> Suggestions = FindEditablePropertySuggestions(TargetClass, RequestedProperty);
+	if (Suggestions.Num() > 0)
+	{
+		Message += FString::Printf(TEXT(". Closest editable properties: %s"), *FString::Join(Suggestions, TEXT(", ")));
+	}
+
+	return Message;
+}
+
+static void MaybeEnableOverrideFlag(UObject* Target,
+                                    const TSharedPtr<FJsonObject>& PropertiesJson,
+                                    const FProperty* Property,
+                                    const bool bValidationOnly)
+{
+	if (!Target || !Property || !PropertiesJson.IsValid())
+	{
+		return;
+	}
+
+	const FString PropertyName = Property->GetName();
+	if (PropertyName.StartsWith(TEXT("bOverride_")))
+	{
+		return;
+	}
+
+	const FString OverridePropertyName = FString::Printf(TEXT("bOverride_%s"), *PropertyName);
+	if (PropertiesJson->HasField(OverridePropertyName))
+	{
+		return;
+	}
+
+	FProperty* OverrideProperty = FindPropertyOnClassHierarchy(Target->GetClass(), FName(*OverridePropertyName));
+	FBoolProperty* OverrideBoolProperty = CastField<FBoolProperty>(OverrideProperty);
+	if (!OverrideBoolProperty
+		|| !OverrideBoolProperty->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible))
+	{
+		return;
+	}
+
+	if (!bValidationOnly)
+	{
+		void* OverrideValuePtr = OverrideBoolProperty->ContainerPtrToValuePtr<void>(Target);
+		OverrideBoolProperty->SetPropertyValue(OverrideValuePtr, true);
+	}
 }
 
 struct FTemporaryPropertyStorage
@@ -870,25 +1154,12 @@ bool FPropertySerializer::ApplyPropertiesFromJson(UObject* Target,
 
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : PropertiesJson->Values)
 	{
-		FProperty* Property = TargetClass->FindPropertyByName(FName(*Pair.Key));
-		if (!Property)
-		{
-			// Generated class property chain may be stale if the native parent
-			// gained new UPROPERTYs after the Blueprint was compiled. Walk the
-			// super-class chain to locate properties on the native parent.
-			for (const UClass* Super = TargetClass->GetSuperClass();
-			     Super && !Property;
-			     Super = Super->GetSuperClass())
-			{
-				Property = Super->FindPropertyByName(FName(*Pair.Key));
-			}
-		}
+		FProperty* Property = PropertySerializerInternal::FindPropertyOnClassHierarchy(TargetClass, FName(*Pair.Key));
 		if (!Property)
 		{
 			PropertySerializerInternal::AddError(
 				OutErrors,
-				FString::Printf(TEXT("Property '%s' not found on class '%s'"),
-					*Pair.Key, *TargetClass->GetName()));
+				PropertySerializerInternal::BuildPropertyNotFoundMessage(TargetClass, Pair.Key));
 			bSuccess = false;
 			continue;
 		}
@@ -902,6 +1173,8 @@ bool FPropertySerializer::ApplyPropertiesFromJson(UObject* Target,
 			bSuccess = false;
 			continue;
 		}
+
+		PropertySerializerInternal::MaybeEnableOverrideFlag(Target, PropertiesJson, Property, bValidationOnly);
 
 		void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Target);
 		bSuccess &= ApplyJsonValueToProperty(Property, ValuePtr, Target, Pair.Value, OutErrors, bValidationOnly);

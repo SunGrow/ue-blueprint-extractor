@@ -28,7 +28,7 @@ The default MCP run executes:
 - `tests/server-contract.test.ts`: in-memory contract checks against the exported `createBlueprintExtractorServer(...)`.
   Covers static resources, generated example validation, prompt registration, compact widget/material extraction, widget-path mutation routing, host-side project-control tools, and structured error behavior.
 - `tests/ue-client.test.ts`: HTTP-layer `UEClient` coverage with a local mock Remote Control server.
-- `tests/project-controller.test.ts`: host-side build command selection, changed-path classification, and restart/reconnect polling.
+- `tests/project-controller.test.ts`: host-side build command selection, changed-path classification, editor launch, and disconnect/reconnect polling.
 - `tests/automation-controller.test.ts`: host-side async automation-run orchestration, artifact indexing, timeout handling, and `null_rhi` command selection.
 - `tests/stdio.integration.test.ts`: real stdio server smoke test against the built `dist/index.js`, including the material graph guidance resource plus compact material read/write transport coverage.
 - `tests/pack-smoke.mjs`: `npm pack` plus `npx blueprint-extractor-mcp` startup smoke from the produced tarball.
@@ -46,7 +46,7 @@ The narrowed project-code path is intentionally explicit:
 
 - `sync_project_code` requires `changed_paths`
 - generic Live Coding `Failure` is returned directly to the caller
-- automatic fallback is only used for deterministic preconditions such as unsupported or unavailable Live Coding
+- automatic fallback is only used for deterministic preconditions such as unsupported, unavailable, or `NoChanges` Live Coding
 
 ## UE Automation
 
@@ -80,7 +80,7 @@ The UE runner:
 4. builds `BPXFixtureEditor`,
 5. runs headless editor automation via `UnrealEditor-Cmd`.
 
-The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, structural widget mutations, classic material graph authoring, material-instance parity, widget preview capture/diff verification, and a CommonUI parent canary.
+The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, degraded widget extraction recovery, structural widget mutations, override-coupled widget properties such as `bOverride_*`, classic material graph authoring, material-instance parity, widget preview capture/diff verification, and a CommonUI parent canary.
 
 Use the visual filter without `-NullRHI` when you need to exercise the capture lane directly, for example:
 

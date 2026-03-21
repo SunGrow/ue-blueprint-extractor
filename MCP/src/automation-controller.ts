@@ -3,8 +3,7 @@ import { spawn } from 'node:child_process';
 import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
-import { constants as fsConstants } from 'node:fs';
-import { resolveCommandInvocation } from './project-controller.js';
+import { resolveCommandInvocation, resolveEditorExecutable } from './project-controller.js';
 
 export type AutomationRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 
@@ -192,14 +191,7 @@ function buildResourceUri(runId: string, artifactName: string): string {
 }
 
 async function resolveEditorCommand(engineRoot: string, platform: NodeJS.Platform): Promise<string> {
-  const executable = platform === 'win32'
-    ? resolve(engineRoot, 'Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe')
-    : platform === 'darwin'
-      ? resolve(engineRoot, 'Engine', 'Binaries', 'Mac', 'UnrealEditor-Cmd')
-      : resolve(engineRoot, 'Engine', 'Binaries', 'Linux', 'UnrealEditor-Cmd');
-
-  await access(executable, fsConstants.F_OK);
-  return executable;
+  return await resolveEditorExecutable(engineRoot, platform, 'commandlet');
 }
 
 export class AutomationController implements AutomationControllerLike {
