@@ -13,6 +13,7 @@
 #include "Authoring/DataAssetAuthoring.h"
 #include "Authoring/DataTableAuthoring.h"
 #include "Authoring/FontAuthoring.h"
+#include "Capture/CaptureTypes.h"
 #include "Import/ImportJobManager.h"
 #include "Authoring/MaterialGraphAuthoring.h"
 #include "Authoring/MaterialInstanceAuthoring.h"
@@ -514,7 +515,7 @@ UBlueprintExtractorSubsystem::~UBlueprintExtractorSubsystem()
 	ImportJobManager = nullptr;
 }
 
-FString UBlueprintExtractorSubsystem::ExtractBlueprint(const FString& AssetPath, const FString& Scope, const FString& GraphFilter)
+FString UBlueprintExtractorSubsystem::ExtractBlueprint(const FString& AssetPath, const FString& Scope, const FString& GraphFilter, const bool bIncludeClassDefaults)
 {
 	const EBlueprintExtractionScope ParsedScope = ParseScope(Scope);
 
@@ -537,7 +538,7 @@ FString UBlueprintExtractorSubsystem::ExtractBlueprint(const FString& AssetPath,
 	}
 
 	FString OutString;
-	UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(Blueprint, OutString, ParsedScope, ParsedFilter);
+	UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(Blueprint, OutString, ParsedScope, ParsedFilter, bIncludeClassDefaults);
 	return OutString;
 }
 
@@ -1163,6 +1164,92 @@ FString UBlueprintExtractorSubsystem::CompileWidgetBlueprint(const FString& Asse
 		return MakeErrorJson(TEXT("Failed to compile WidgetBlueprint"));
 	}
 
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CaptureWidgetPreview(const FString& AssetPath, int32 Width, int32 Height)
+{
+	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	FBlueprintExtractorCaptureMetadata Metadata;
+	FString Error;
+	if (!BlueprintExtractorCapture::CaptureWidgetPreview(WidgetBP, Width, Height, Metadata, Error))
+	{
+		return MakeErrorJson(Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorCapture::CaptureMetadataToJson(Metadata);
+	Result->SetStringField(TEXT("operation"), TEXT("capture_widget_preview"));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CompareCaptureToReference(const FString& CaptureIdOrPath,
+                                                               const FString& ReferenceIdOrPath,
+                                                               double Tolerance)
+{
+	FBlueprintExtractorCaptureCompareResult ComparisonResult;
+	FString Error;
+	if (!BlueprintExtractorCapture::CompareCaptureToReference(
+		CaptureIdOrPath,
+		ReferenceIdOrPath,
+		Tolerance,
+		ComparisonResult,
+		Error))
+	{
+		return MakeErrorJson(Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorCapture::CaptureCompareResultToJson(ComparisonResult);
+	Result->SetStringField(TEXT("operation"), TEXT("compare_capture_to_reference"));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ListCaptures(const FString& AssetPathFilter)
+{
+	TArray<FBlueprintExtractorCaptureMetadata> Captures;
+	FString Error;
+	if (!BlueprintExtractorCapture::ListCaptures(AssetPathFilter, Captures, Error))
+	{
+		return MakeErrorJson(Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("operation"), TEXT("list_captures"));
+	Result->SetStringField(TEXT("assetPathFilter"), AssetPathFilter);
+	Result->SetNumberField(TEXT("captureCount"), Captures.Num());
+
+	TArray<TSharedPtr<FJsonValue>> CaptureValues;
+	CaptureValues.Reserve(Captures.Num());
+	for (const FBlueprintExtractorCaptureMetadata& Capture : Captures)
+	{
+		CaptureValues.Add(MakeShared<FJsonValueObject>(BlueprintExtractorCapture::CaptureMetadataToJson(Capture)));
+	}
+
+	Result->SetArrayField(TEXT("captures"), CaptureValues);
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CleanupCaptures(int32 MaxAgeDays)
+{
+	int32 DeletedCount = 0;
+	int64 FreedBytes = 0;
+	FString Error;
+	if (!BlueprintExtractorCapture::CleanupCaptures(MaxAgeDays, DeletedCount, FreedBytes, Error))
+	{
+		return MakeErrorJson(Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("operation"), TEXT("cleanup_captures"));
+	Result->SetNumberField(TEXT("deletedCount"), DeletedCount);
+	Result->SetNumberField(TEXT("freedBytes"), static_cast<double>(FreedBytes));
+	Result->SetNumberField(TEXT("maxAgeDays"), FMath::Max(0, MaxAgeDays));
 	return SerializeJsonObject(Result);
 }
 
@@ -2740,11 +2827,21 @@ FString UBlueprintExtractorSubsystem::TriggerLiveCoding(const bool bEnableForSes
 	Result->SetBoolField(TEXT("enabledForSession"), LiveCodingModule->IsEnabledForSession());
 	Result->SetBoolField(TEXT("started"), LiveCodingModule->HasStarted());
 	Result->SetStringField(TEXT("compileResult"), CompileResultToString(CompileResult));
+
+	const bool bNoChanges = CompileResult == ELiveCodingCompileResult::NoChanges;
 	Result->SetBoolField(TEXT("success"),
 		bCompileRequested &&
 		(CompileResult == ELiveCodingCompileResult::Success
-			|| CompileResult == ELiveCodingCompileResult::NoChanges
+			|| bNoChanges
 			|| CompileResult == ELiveCodingCompileResult::InProgress));
+	Result->SetBoolField(TEXT("noOp"), bNoChanges);
+	if (bNoChanges)
+	{
+		Result->SetStringField(TEXT("hint"),
+			TEXT("Live Coding detected no source changes. If an external build already compiled .obj files, ")
+			TEXT("the source timestamps may not have updated. Use build_and_restart strategy instead, or ")
+			TEXT("touch the source files to update their timestamps before retrying."));
+	}
 	Result->SetStringField(
 		TEXT("message"),
 		bCompileRequested ? TEXT("Live Coding compile request completed.") : TEXT("Live Coding compile request failed to start."));

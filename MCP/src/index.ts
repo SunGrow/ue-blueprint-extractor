@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { CallToolResult, ContentBlock, ImageContent, ResourceLink } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { UEClient } from './ue-client.js';
 import { compactBlueprint } from './compactor.js';
@@ -11,6 +13,10 @@ import {
   type BuildConfiguration,
   type BuildPlatform,
 } from './project-controller.js';
+import {
+  AutomationController,
+  type AutomationControllerLike,
+} from './automation-controller.js';
 
 export type UEClientLike = Pick<UEClient, 'callSubsystem'> & Partial<Pick<UEClient, 'checkConnection'>>;
 
@@ -22,6 +28,9 @@ const serverInstructions = [
   'Prefer validate_only=true the first time you author a new asset family or payload shape.',
   'Use the composable material tools for settings, node creation, node connection, and root-property binding. Treat modify_material and modify_material_function as advanced escape hatches.',
   'Use create_input_action, modify_input_action, create_input_mapping_context, and modify_input_mapping_context for Enhanced Input authoring. Generic data asset mutation is intentionally rejected for those asset classes.',
+  'Verify blueprint wiring, layout data, and authored values semantically with the existing extract_* tools before relying on screenshots.',
+  'After widget or UI-heavy mutations, use capture_widget_preview for visual confirmation in addition to extract_widget_blueprint.',
+  'Use run_automation_tests for gameplay or runtime verification. If no Automation Spec or Functional Test exists for a mechanic, report verification as partial instead of inferring success from structure alone.',
   'Successful tool results mirror the same JSON in structuredContent and text. Recoverable execution failures return isError=true with code, message, recoverable, and next_steps.',
 ].join('\n');
 
@@ -36,6 +45,9 @@ const taskAwareTools = new Set([
   'list_import_jobs',
   'import_textures',
   'import_meshes',
+  'run_automation_tests',
+  'get_automation_test_run',
+  'list_automation_test_runs',
 ]);
 
 type ToolExample = {
@@ -317,6 +329,7 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
 export function createBlueprintExtractorServer(
   client: UEClientLike = new UEClient(),
   projectController: ProjectControllerLike = new ProjectController(),
+  automationController: AutomationControllerLike = new AutomationController(),
 ) {
   const server = new McpServer({
     name: 'blueprint-extractor',
@@ -391,6 +404,42 @@ export function createBlueprintExtractorServer(
     return result;
   }
 
+  function isContentBlock(value: unknown): value is ContentBlock {
+    if (!isRecord(value) || typeof value.type !== 'string') {
+      return false;
+    }
+
+    switch (value.type) {
+      case 'text':
+        return typeof value.text === 'string';
+      case 'image':
+      case 'audio':
+        return typeof value.data === 'string' && typeof value.mimeType === 'string';
+      case 'resource_link':
+        return typeof value.uri === 'string' && typeof value.name === 'string';
+      case 'resource':
+        return isRecord(value.resource)
+          && typeof value.resource.uri === 'string'
+          && typeof value.resource.mimeType === 'string'
+          && (
+            typeof value.resource.text === 'string'
+            || typeof value.resource.blob === 'string'
+          );
+      default:
+        return false;
+    }
+  }
+
+  function extractExtraContent(result: unknown): ContentBlock[] {
+    if (!isRecord(result) || !Array.isArray(result.content)) {
+      return [];
+    }
+
+    return result.content.filter((candidate): candidate is ContentBlock => (
+      isContentBlock(candidate) && candidate.type !== 'text'
+    ));
+  }
+
   function defaultNextSteps(toolName: string, payload?: Record<string, unknown>): string[] {
     if (toolName === 'compile_widget_blueprint') {
       return [
@@ -446,8 +495,8 @@ export function createBlueprintExtractorServer(
   function normalizeToolError(
     toolName: string,
     payloadOrError: unknown,
-    existingResult?: Record<string, unknown>,
-  ) {
+    existingResult?: Partial<CallToolResult> & Record<string, unknown>,
+  ): CallToolResult & Record<string, unknown> {
     const payload = isRecord(payloadOrError) ? { ...payloadOrError } : {};
     const diagnostics = Array.isArray(payload.diagnostics)
       ? payload.diagnostics
@@ -495,7 +544,11 @@ export function createBlueprintExtractorServer(
     };
   }
 
-  function normalizeToolSuccess(toolName: string, payload: unknown) {
+  function normalizeToolSuccess(
+    toolName: string,
+    payload: unknown,
+    extraContent: ContentBlock[] = [],
+  ): CallToolResult & Record<string, unknown> {
     const basePayload: Record<string, unknown> = isRecord(payload) ? { ...payload } : { data: payload };
     const success = typeof basePayload.success === 'boolean' ? basePayload.success : true;
 
@@ -511,7 +564,10 @@ export function createBlueprintExtractorServer(
     };
 
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify(envelope) }],
+      content: [
+        { type: 'text' as const, text: JSON.stringify(envelope) },
+        ...extraContent,
+      ],
       structuredContent: envelope,
     };
   }
@@ -528,7 +584,7 @@ export function createBlueprintExtractorServer(
           return normalizeToolError(name, extractToolPayload(result), result);
         }
 
-        return normalizeToolSuccess(name, extractToolPayload(result));
+        return normalizeToolSuccess(name, extractToolPayload(result), extractExtraContent(result));
       } catch (error) {
         return normalizeToolError(name, error);
       }
@@ -560,6 +616,100 @@ const CascadeResultSchema = v2ToolResultSchema.extend({
   total_count: z.number().int().min(0),
   output_directory: z.string(),
   manifest: z.array(cascadeManifestEntrySchema),
+}).passthrough();
+
+const captureMetadataSchema = z.object({
+  captureId: z.string(),
+  captureType: z.enum(['widget_preview', 'comparison_diff']),
+  assetPath: z.string(),
+  widgetClass: z.string().optional(),
+  captureDirectory: z.string(),
+  artifactPath: z.string(),
+  metadataPath: z.string(),
+  width: z.number().int().min(1),
+  height: z.number().int().min(1),
+  fileSizeBytes: z.number().int().min(0),
+  createdAt: z.string(),
+  projectDir: z.string().optional(),
+}).passthrough();
+
+const CaptureResultSchema = v2ToolResultSchema.extend({
+  resourceUri: z.string(),
+}).merge(captureMetadataSchema).passthrough();
+
+const CompareCaptureResultSchema = v2ToolResultSchema.extend({
+  capturePath: z.string(),
+  referencePath: z.string(),
+  tolerance: z.number().min(0),
+  pass: z.boolean(),
+  rmse: z.number().min(0),
+  maxPixelDelta: z.number().int().min(0),
+  mismatchPixelCount: z.number().int().min(0),
+  mismatchPercentage: z.number().min(0),
+  diffCaptureId: z.string(),
+  diffArtifactPath: z.string(),
+  diffResourceUri: z.string(),
+}).passthrough();
+
+const ListCapturesResultSchema = v2ToolResultSchema.extend({
+  assetPathFilter: z.string(),
+  captureCount: z.number().int().min(0),
+  captures: z.array(captureMetadataSchema),
+}).passthrough();
+
+const CleanupCapturesResultSchema = v2ToolResultSchema.extend({
+  deletedCount: z.number().int().min(0),
+  freedBytes: z.number().int().min(0),
+  maxAgeDays: z.number().int().min(0),
+}).passthrough();
+
+const automationArtifactSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  mimeType: z.string(),
+  resourceUri: z.string(),
+  relativePath: z.string().optional(),
+}).passthrough();
+
+const automationRunSummarySchema = z.object({
+  successful: z.boolean(),
+  totalTests: z.number().int().optional(),
+  passedTests: z.number().int().optional(),
+  failedTests: z.number().int().optional(),
+  skippedTests: z.number().int().optional(),
+  warningCount: z.number().int().optional(),
+  reportAvailable: z.boolean(),
+}).passthrough();
+
+const automationRunSchema = v2ToolResultSchema.extend({
+  runId: z.string(),
+  automationFilter: z.string(),
+  status: z.enum(['queued', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled']),
+  terminal: z.boolean(),
+  engineRoot: z.string(),
+  projectPath: z.string(),
+  projectDir: z.string(),
+  target: z.string().optional(),
+  reportOutputDir: z.string(),
+  command: z.object({
+    executable: z.string(),
+    args: z.array(z.string()),
+  }),
+  diagnostics: z.array(z.string()),
+  startedAt: z.string().optional(),
+  completedAt: z.string().optional(),
+  durationMs: z.number().int().min(0).optional(),
+  exitCode: z.number().int().optional(),
+  timeoutMs: z.number().int().positive(),
+  nullRhi: z.boolean(),
+  artifacts: z.array(automationArtifactSchema),
+  summary: automationRunSummarySchema.optional(),
+}).passthrough();
+
+const AutomationRunListSchema = v2ToolResultSchema.extend({
+  includeCompleted: z.boolean(),
+  runCount: z.number().int().min(0),
+  runs: z.array(automationRunSchema),
 }).passthrough();
 
 // Resource: extraction scope reference (static docs — app-controlled read-only context)
@@ -896,6 +1046,37 @@ server.resource(
   }),
 );
 
+server.resource(
+  'verification-workflows',
+  'blueprint://verification-workflows',
+  {
+    description: 'Verification guidance mapping semantic, visual, and gameplay/runtime changes to the right verification lane.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Verification Workflows',
+        '',
+        'Three verification lanes work together:',
+        '- Semantic verification: use extract_blueprint, extract_widget_blueprint, extract_dataasset, extract_datatable, compile_widget_blueprint, compile_material_asset, and compile/save diagnostics to verify authored data, graph wiring, widget hierarchy, class defaults, and graph layout.',
+        '- Visual verification: use capture_widget_preview and compare_capture_to_reference when structure can compile but the rendered result may still be wrong.',
+        '- Gameplay/runtime verification: use run_automation_tests for mechanics, behavior, interactions, and scenario validation through Automation Specs or Functional Tests.',
+        '',
+        'Recommended mapping:',
+        '- Blueprint graph or member changes: semantic first.',
+        '- Widget structure, slot layout, class defaults: semantic first, then visual if the change is user-facing.',
+        '- Data assets, tables, AI trees, input assets: semantic verification through extractors and compile diagnostics.',
+        '- Gameplay mechanics, scripted interactions, runtime flows: automation tests first.',
+        '',
+        'Guardrail:',
+        '- If no Automation Spec or Functional Test exists for a gameplay mechanic, report verification as partial instead of inferring success from structure or screenshots alone.',
+      ].join('\n'),
+    }],
+  }),
+);
+
 const widgetPatternBodies: Record<string, string[]> = {
   activatable_window: [
     'Pattern: activatable_window',
@@ -1088,6 +1269,69 @@ server.resource(
   },
 );
 
+server.resource(
+  'captures',
+  new ResourceTemplate('blueprint://captures/{capture_id}', {
+    list: undefined,
+  }),
+  {
+    description: 'Read a widget preview or diff capture PNG by capture id.',
+    mimeType: 'image/png',
+  },
+  async (uri, variables) => {
+    const captureId = String(variables.capture_id ?? '');
+    const listed = await callSubsystemJson('ListCaptures', { AssetPathFilter: '' });
+    const captures = Array.isArray(listed.captures) ? listed.captures : [];
+    const capture = captures.find((candidate) => (
+      isRecord(candidate)
+      && typeof candidate.captureId === 'string'
+      && candidate.captureId === captureId
+      && typeof candidate.artifactPath === 'string'
+    ));
+
+    if (!capture || typeof capture.artifactPath !== 'string') {
+      throw new Error(`Capture '${captureId}' not found.`);
+    }
+
+    const data = await readFile(capture.artifactPath);
+    return {
+      contents: [{
+        uri: uri.href,
+        mimeType: 'image/png',
+        blob: data.toString('base64'),
+      }],
+    };
+  },
+);
+
+server.resource(
+  'automation-test-runs',
+  new ResourceTemplate('blueprint://test-runs/{run_id}/{artifact}', {
+    list: undefined,
+  }),
+  {
+    description: 'Read stdout, stderr, summary, or exported report artifacts from a host-side automation test run.',
+  },
+  async (uri, variables) => {
+    const runId = String(variables.run_id ?? '');
+    const artifact = String(variables.artifact ?? '');
+    const resolved = await automationController.readAutomationArtifact(runId, artifact);
+    if (!resolved) {
+      throw new Error(`Automation artifact '${artifact}' for run '${runId}' was not found.`);
+    }
+
+    const mimeType = resolved.artifact.mimeType;
+    const textLike = mimeType.startsWith('text/') || mimeType === 'application/json';
+    return {
+      contents: [{
+        uri: uri.href,
+        mimeType,
+        ...(textLike ? { text: resolved.data.toString('utf8') } : { blob: resolved.data.toString('base64') }),
+      }],
+    };
+  },
+);
+
 server.registerResource(
   'unsupported-surfaces',
   'blueprint://unsupported-surfaces',
@@ -1164,10 +1408,19 @@ async function callSubsystemJson(method: string, params: Record<string, unknown>
   return parsed;
 }
 
-function jsonToolSuccess(parsed: unknown, options: { compact?: boolean } = {}) {
+function jsonToolSuccess(
+  parsed: unknown,
+  options: {
+    compact?: boolean;
+    extraContent?: ContentBlock[];
+  } = {},
+): CallToolResult & { structuredContent: Record<string, unknown> } {
   const compact = options.compact ?? true;
   return {
-    content: [{ type: 'text' as const, text: compact ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2) }],
+    content: [
+      { type: 'text' as const, text: compact ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2) },
+      ...(options.extraContent ?? []),
+    ],
     structuredContent: parsed as Record<string, unknown>,
   };
 }
@@ -1177,6 +1430,44 @@ function jsonToolError(e: unknown) {
     content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
     isError: true,
   };
+}
+
+const MAX_INLINE_CAPTURE_BYTES = 200_000;
+
+function buildResourceLinkContent(
+  uri: string,
+  name: string,
+  mimeType: string,
+  description?: string,
+): ResourceLink {
+  return {
+    type: 'resource_link',
+    uri,
+    name,
+    mimeType,
+    ...(description ? { description } : {}),
+  };
+}
+
+async function maybeBuildInlineImageContent(filePath: unknown): Promise<ImageContent | null> {
+  if (typeof filePath !== 'string' || filePath.length === 0) {
+    return null;
+  }
+
+  try {
+    const image = await readFile(filePath);
+    if (image.byteLength > MAX_INLINE_CAPTURE_BYTES) {
+      return null;
+    }
+
+    return {
+      type: 'image',
+      data: image.toString('base64'),
+      mimeType: 'image/png',
+    };
+  } catch {
+    return null;
+  }
 }
 
 function maybeBoolean(...values: Array<unknown>): boolean | undefined {
@@ -1203,9 +1494,11 @@ function canFallbackFromLiveCoding(result: Record<string, unknown>): boolean {
     || status === 'unavailable'
     || compileResult === 'unsupported'
     || compileResult === 'unavailable'
+    || compileResult === 'nochanges'
     || reason === 'unsupported'
     || reason === 'unavailable'
     || result.fallbackRecommended === true
+    || result.noOp === true
   );
 }
 
@@ -1352,6 +1645,7 @@ USAGE GUIDELINES:
 - Full scope on complex Blueprints can exceed 200KB and will be truncated. If truncated, use a narrower scope or inspect specific functions via the graph names from FunctionsShallow.
 - Use FunctionsShallow scope first to get graph names, then request specific graphs with graph_filter to reduce output size.
 - Use compact=true to reduce JSON size by ~50-70% for LLM consumption.
+- Use include_class_defaults=true to read CDO (Class Default Object) property values — useful for checking TSubclassOf slots, EditDefaultsOnly properties inherited from C++ parent classes, and any other class default values that differ from the parent.
 
 RETURNS: JSON object with the extracted Blueprint data at the requested scope level.`,
     inputSchema: {
@@ -1367,6 +1661,9 @@ RETURNS: JSON object with the extracted Blueprint data at the requested scope le
       compact: z.boolean().default(false).describe(
         'When true, strips low-value fields and minifies JSON to reduce size by ~50-70%. Removes: pinId, posX/posY, graphGuid, autogeneratedDefaultValue, nodeComment (when empty), empty connections, empty default_value, empty sub_category. Replaces full exec pin type objects with the string "exec".',
       ),
+      include_class_defaults: z.boolean().default(false).describe(
+        'When true, includes a "classDefaults" object with CDO (Class Default Object) property values that differ from the parent class. Shows EditDefaultsOnly C++ UPROPERTY values, TSubclassOf slots, and other class defaults. Works at any scope level.',
+      ),
     },
     annotations: {
       title: 'Extract Blueprint',
@@ -1376,12 +1673,13 @@ RETURNS: JSON object with the extracted Blueprint data at the requested scope le
       openWorldHint: false,
     },
   },
-  async ({ asset_path, scope, graph_filter, compact }) => {
+  async ({ asset_path, scope, graph_filter, compact, include_class_defaults }) => {
     try {
       const result = await client.callSubsystem('ExtractBlueprint', {
         AssetPath: asset_path,
         Scope: scope,
         GraphFilter: graph_filter ? graph_filter.join(',') : '',
+        bIncludeClassDefaults: include_class_defaults,
       });
       let parsed = JSON.parse(result);
       if (parsed.error) {
@@ -2835,6 +3133,186 @@ server.registerTool(
 );
 
 server.registerTool(
+  'capture_widget_preview',
+  {
+    title: 'Capture Widget Preview',
+    description: 'Render a WidgetBlueprint offscreen, write a PNG capture under Saved/BlueprintExtractor/Captures, and return metadata plus visual artifacts.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint to preview.',
+      ),
+      width: z.number().int().min(64).max(2048).default(512).describe(
+        'Requested capture width in pixels. The editor clamps to a safe range.',
+      ),
+      height: z.number().int().min(64).max(2048).default(512).describe(
+        'Requested capture height in pixels. The editor clamps to a safe range.',
+      ),
+    },
+    outputSchema: CaptureResultSchema,
+    annotations: {
+      title: 'Capture Widget Preview',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, width, height }) => {
+    try {
+      const parsed = await callSubsystemJson('CaptureWidgetPreview', {
+        AssetPath: asset_path,
+        Width: width,
+        Height: height,
+      });
+      const captureId = typeof parsed.captureId === 'string' ? parsed.captureId : '';
+      const resourceUri = `blueprint://captures/${encodeURIComponent(captureId)}`;
+      const extraContent: ContentBlock[] = [];
+      if (captureId) {
+        extraContent.push(buildResourceLinkContent(
+          resourceUri,
+          `Capture ${captureId}`,
+          'image/png',
+          'Rendered widget preview capture.',
+        ));
+      }
+
+      const inlineImage = await maybeBuildInlineImageContent(parsed.artifactPath);
+      if (inlineImage) {
+        extraContent.push(inlineImage);
+      }
+
+      return jsonToolSuccess({
+        ...parsed,
+        resourceUri,
+      }, { extraContent });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'compare_capture_to_reference',
+  {
+    title: 'Compare Capture To Reference',
+    description: 'Compare a saved capture id or PNG path against another capture or reference PNG and produce a diff capture.',
+    inputSchema: {
+      capture: z.string().describe(
+        'Capture id or absolute PNG path for the actual result.',
+      ),
+      reference: z.string().describe(
+        'Capture id or absolute PNG path for the expected reference.',
+      ),
+      tolerance: z.number().min(0).default(0.01).describe(
+        'Normalized RMSE tolerance. 0 is pixel-perfect.',
+      ),
+    },
+    outputSchema: CompareCaptureResultSchema,
+    annotations: {
+      title: 'Compare Capture To Reference',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ capture, reference, tolerance }) => {
+    try {
+      const parsed = await callSubsystemJson('CompareCaptureToReference', {
+        CaptureIdOrPath: capture,
+        ReferenceIdOrPath: reference,
+        Tolerance: tolerance,
+      });
+      const diffCaptureId = typeof parsed.diffCaptureId === 'string' ? parsed.diffCaptureId : '';
+      const diffResourceUri = `blueprint://captures/${encodeURIComponent(diffCaptureId)}`;
+      const extraContent: ContentBlock[] = [];
+      if (diffCaptureId) {
+        extraContent.push(buildResourceLinkContent(
+          diffResourceUri,
+          `Diff ${diffCaptureId}`,
+          'image/png',
+          'Pixel-diff image for the comparison result.',
+        ));
+      }
+
+      const inlineImage = await maybeBuildInlineImageContent(parsed.diffArtifactPath);
+      if (inlineImage) {
+        extraContent.push(inlineImage);
+      }
+
+      return jsonToolSuccess({
+        ...parsed,
+        diffResourceUri,
+      }, { extraContent });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'list_captures',
+  {
+    title: 'List Captures',
+    description: 'List saved widget preview and comparison captures recorded by the editor-side verification lane.',
+    inputSchema: {
+      asset_path_filter: z.string().default('').describe(
+        'Optional exact asset path filter for captures created from one asset.',
+      ),
+    },
+    outputSchema: ListCapturesResultSchema,
+    annotations: {
+      title: 'List Captures',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path_filter }) => {
+    try {
+      const parsed = await callSubsystemJson('ListCaptures', {
+        AssetPathFilter: asset_path_filter,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'cleanup_captures',
+  {
+    title: 'Cleanup Captures',
+    description: 'Delete old capture artifacts from Saved/BlueprintExtractor/Captures without touching UE assets.',
+    inputSchema: {
+      max_age_days: z.number().int().min(0).default(7).describe(
+        'Delete capture directories older than this many days. 0 removes all captures.',
+      ),
+    },
+    outputSchema: CleanupCapturesResultSchema,
+    annotations: {
+      title: 'Cleanup Captures',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ max_age_days }) => {
+    try {
+      const parsed = await callSubsystemJson('CleanupCaptures', {
+        MaxAgeDays: max_age_days,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
   'create_data_asset',
   {
     title: 'Create DataAsset',
@@ -4182,6 +4660,158 @@ server.registerTool(
 );
 
 server.registerTool(
+  'run_automation_tests',
+  {
+    title: 'Run Automation Tests',
+    description: 'Run Automation Specs or Functional Tests in a headless editor process from the MCP host and return an async run id plus exported report artifacts.',
+    inputSchema: {
+      automation_filter: z.string().describe(
+        'Automation test filter passed to `Automation RunTests <filter>`.',
+      ),
+      engine_root: z.string().optional().describe(
+        'Optional Unreal Engine root. Falls back to editor context or UE_ENGINE_ROOT.',
+      ),
+      project_path: z.string().optional().describe(
+        'Optional .uproject path. Falls back to editor context or UE_PROJECT_PATH.',
+      ),
+      target: z.string().optional().describe(
+        'Optional editor target name to keep in the run metadata.',
+      ),
+      report_output_dir: z.string().optional().describe(
+        'Optional host filesystem directory for this run. Defaults under Project/Saved/BlueprintExtractor/AutomationRuns/<run_id>/reports.',
+      ),
+      timeout_seconds: z.number().int().positive().default(3600).describe(
+        'Maximum wall-clock time for the automation process before the host terminates it.',
+      ),
+      null_rhi: z.boolean().default(true).describe(
+        'When true, include -NullRHI for headless logic-focused automation runs.',
+      ),
+    },
+    outputSchema: automationRunSchema,
+    annotations: {
+      title: 'Run Automation Tests',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ automation_filter, engine_root, project_path, target, report_output_dir, timeout_seconds, null_rhi }) => {
+    try {
+      const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+      if (!resolved.engineRoot || !resolved.projectPath) {
+        throw explainProjectResolutionFailure(
+          'run_automation_tests requires engine_root and project_path',
+          resolved,
+        );
+      }
+
+      const parsed = await automationController.runAutomationTests({
+        automationFilter: automation_filter,
+        engineRoot: resolved.engineRoot,
+        projectPath: resolved.projectPath,
+        target: resolved.target,
+        reportOutputDir: report_output_dir,
+        timeoutMs: timeout_seconds * 1000,
+        nullRhi: null_rhi,
+      });
+
+      const extraContent = parsed.artifacts
+        .slice(0, 6)
+        .map((artifact) => buildResourceLinkContent(
+          artifact.resourceUri,
+          `Automation ${artifact.name}`,
+          artifact.mimeType,
+          artifact.relativePath ?? artifact.path,
+        ));
+
+      return jsonToolSuccess({
+        ...parsed,
+        inputResolution: {
+          engineRoot: resolved.sources.engineRoot,
+          projectPath: resolved.sources.projectPath,
+          target: resolved.sources.target,
+          contextError: resolved.contextError,
+        },
+      }, { extraContent });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'get_automation_test_run',
+  {
+    title: 'Get Automation Test Run',
+    description: 'Read the latest known status and exported artifacts for one host-side automation run.',
+    inputSchema: {
+      run_id: z.string().describe(
+        'Run id returned by run_automation_tests.',
+      ),
+    },
+    outputSchema: automationRunSchema,
+    annotations: {
+      title: 'Get Automation Test Run',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ run_id }) => {
+    try {
+      const parsed = await automationController.getAutomationTestRun(run_id);
+      if (!parsed) {
+        return jsonToolError(new Error(`Automation test run '${run_id}' was not found.`));
+      }
+
+      const extraContent = parsed.artifacts
+        .slice(0, 6)
+        .map((artifact) => buildResourceLinkContent(
+          artifact.resourceUri,
+          `Automation ${artifact.name}`,
+          artifact.mimeType,
+          artifact.relativePath ?? artifact.path,
+        ));
+
+      return jsonToolSuccess(parsed, { extraContent });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'list_automation_test_runs',
+  {
+    title: 'List Automation Test Runs',
+    description: 'List host-side automation runs and their current statuses.',
+    inputSchema: {
+      include_completed: z.boolean().default(true).describe(
+        'When true, include terminal runs in addition to still-running jobs.',
+      ),
+    },
+    outputSchema: AutomationRunListSchema,
+    annotations: {
+      title: 'List Automation Test Runs',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ include_completed }) => {
+    try {
+      const parsed = await automationController.listAutomationTestRuns(include_completed);
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
   'compile_project_code',
   {
     title: 'Compile Project Code',
@@ -4421,6 +5051,9 @@ server.registerTool(
       clear_uht_cache: z.boolean().default(false).describe(
         'When true, delete UHT cache files (.uhtpath, .uhtsettings) from Intermediate/ before building so that Unreal Header Tool regenerates headers for any new or changed UPROPERTYs.',
       ),
+      restart_first: z.boolean().default(false).describe(
+        'When true, restart the editor BEFORE building to release locked DLLs. Use this when a previous build failed due to a locked DLL (errorCategory: locked_file). Sequence: restart editor → build → restart editor again to load new binaries.',
+      ),
     },
     annotations: {
       title: 'Sync Project Code',
@@ -4445,6 +5078,7 @@ server.registerTool(
     reconnect_timeout_seconds,
     include_output,
     clear_uht_cache,
+    restart_first,
   }) => {
     try {
       const plan = projectController.classifyChangedPaths(changed_paths, force_rebuild);
@@ -4495,6 +5129,37 @@ server.registerTool(
         }
       }
 
+      // Restart-first: close editor to release locked DLLs before building
+      if (restart_first) {
+        if (Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
+          const preSave = await callSubsystemJson('SaveAssets', {
+            AssetPathsJson: JSON.stringify(save_asset_paths),
+          });
+          structuredResult.preSave = preSave;
+        }
+
+        const preRestart = await callSubsystemJson('RestartEditor', {
+          bWarn: false,
+          bSaveDirtyAssets: save_dirty_assets,
+        });
+        cachedProjectAutomationContext = null;
+        structuredResult.preRestart = preRestart;
+        if (preRestart.success === false) {
+          structuredResult.strategy = 'restart_first';
+          return jsonToolSuccess(structuredResult);
+        }
+
+        const preReconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+          disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+          reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+        });
+        structuredResult.preReconnect = preReconnect;
+        if (!preReconnect.reconnected) {
+          // Editor is down — build without it running (DLL is free)
+          structuredResult.editorDownForBuild = true;
+        }
+      }
+
       const build = await projectController.compileProjectCode({
         engineRoot: resolvedProjectInputs.engineRoot,
         projectPath: resolvedProjectInputs.projectPath,
@@ -4506,14 +5171,14 @@ server.registerTool(
         clearUhtCache: clear_uht_cache,
       });
 
-      structuredResult.strategy = 'build_and_restart';
+      structuredResult.strategy = restart_first ? 'restart_first' : 'build_and_restart';
       structuredResult.build = build;
 
       if (!build.success) {
         return jsonToolSuccess(structuredResult);
       }
 
-      if (Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
+      if (!restart_first && Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
         const saveResult = await callSubsystemJson('SaveAssets', {
           AssetPathsJson: JSON.stringify(save_asset_paths),
         });
@@ -4523,13 +5188,17 @@ server.registerTool(
         }
       }
 
-      const restartRequest = await callSubsystemJson('RestartEditor', {
-        bWarn: false,
-        bSaveDirtyAssets: save_dirty_assets,
-      });
+      // If restart_first, editor may already be running (preReconnect succeeded) or down.
+      // Either way, restart to pick up new binaries.
+      const restartRequest = restart_first && structuredResult.editorDownForBuild
+        ? { success: true, message: 'Editor was already down during build; starting fresh.' }
+        : await callSubsystemJson('RestartEditor', {
+          bWarn: false,
+          bSaveDirtyAssets: restart_first ? false : save_dirty_assets,
+        });
       cachedProjectAutomationContext = null;
       structuredResult.restartRequest = restartRequest;
-      structuredResult.restartRequestSaveDirtyAssetsAccepted = save_dirty_assets;
+      structuredResult.restartRequestSaveDirtyAssetsAccepted = restart_first ? false : save_dirty_assets;
       if (restartRequest.success === false) {
         return jsonToolSuccess(structuredResult);
       }
@@ -4600,6 +5269,7 @@ server.registerTool(
         reconnect_timeout_seconds: z.number().int().positive().default(180).optional(),
         include_output: z.boolean().default(false).optional(),
         clear_uht_cache: z.boolean().default(false).optional(),
+        restart_first: z.boolean().default(false).optional(),
       }).optional().describe(
         'Optional project-code sync step to run after the widget asset work succeeds.',
       ),
@@ -4801,6 +5471,35 @@ server.registerTool(
         }
 
         if (needsBuildRestart) {
+          const useRestartFirst = sync_project_code.restart_first ?? false;
+
+          // Restart-first: close editor before building to release locked DLLs
+          if (useRestartFirst) {
+            const preRestart = await callSubsystemJson('RestartEditor', {
+              bWarn: false,
+              bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
+            });
+            cachedProjectAutomationContext = null;
+            const preReconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+              disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
+              reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
+            });
+            steps.push({
+              step: 'sync_project_code_pre_restart',
+              strategy: 'restart_first',
+              restartRequest: preRestart,
+              reconnect: preReconnect,
+            });
+            if (preRestart.success === false) {
+              return jsonToolSuccess({
+                success: false,
+                operation: 'apply_window_ui_changes',
+                stoppedAt: 'sync_project_code_pre_restart',
+                steps,
+              });
+            }
+          }
+
           const build = await projectController.compileProjectCode({
             engineRoot: resolvedProjectInputs.engineRoot,
             projectPath: resolvedProjectInputs.projectPath,
@@ -4834,7 +5533,7 @@ server.registerTool(
 
           const restartRequest = await callSubsystemJson('RestartEditor', {
             bWarn: false,
-            bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
+            bSaveDirtyAssets: useRestartFirst ? false : (sync_project_code.save_dirty_assets ?? true),
           });
           cachedProjectAutomationContext = null;
           const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
@@ -4843,9 +5542,9 @@ server.registerTool(
           });
           steps.push({
             step: 'sync_project_code',
-            strategy: 'build_and_restart',
+            strategy: useRestartFirst ? 'restart_first' : 'build_and_restart',
             restartRequest,
-            saveDirtyAssetsAccepted: sync_project_code.save_dirty_assets ?? true,
+            saveDirtyAssetsAccepted: useRestartFirst ? false : (sync_project_code.save_dirty_assets ?? true),
             reconnect,
           });
           if (restartRequest.success === false || !reconnect.success) {

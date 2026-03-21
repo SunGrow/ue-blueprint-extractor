@@ -13,7 +13,7 @@ A UE5 editor plugin + MCP server that gives [Claude Code](https://docs.anthropic
 
 ## Features at a Glance
 
-- **80 MCP tools**, **13 resources**, **2 resource templates**, and **4 prompts**
+- **87 MCP tools**, **12 resources**, **4 resource templates**, and **4 prompts**
 - **Full round-trip** -- extract assets to JSON, then create and modify them back
 - **Strict v2 contract** -- snake_case inputs, `outputSchema` on every tool, and structured success/error envelopes
 - **Generated examples + prompts** -- schema-backed examples and reusable workflow prompts for UI, materials, HUD wiring, and compile debugging
@@ -24,6 +24,7 @@ A UE5 editor plugin + MCP server that gives [Claude Code](https://docs.anthropic
 - **Compact output** -- LLM-optimized JSON reduces token usage by 50-70%
 - **Cascade extraction** -- follow asset references automatically with depth control
 - **Project automation** -- compile, live coding, editor restart, and code sync
+- **Verification platform** -- semantic extraction, widget preview capture/diffing, and host-side automation test runs
 - **Editor-only** -- not included in packaged builds
 
 <details>
@@ -81,7 +82,7 @@ Run the install script for your client:
 
 ### 3. Verify
 
-Open a new Claude Code or Codex session. The 80 Blueprint Extractor tools and 4 workflow prompts will appear automatically.
+Open a new Claude Code or Codex session. The 87 Blueprint Extractor tools and 4 workflow prompts will appear automatically.
 
 <details>
 <summary><strong>Manual registration and local builds</strong></summary>
@@ -143,7 +144,7 @@ Reference docs:
 
 ## MCP Tools
 
-80 tools organized by category. All tools declare `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations for safe auto-approval, and every public tool exposes `outputSchema`.
+87 tools organized by category. All tools declare `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations for safe auto-approval, and every public tool exposes `outputSchema`.
 
 <details>
 <summary><strong>Extraction Tools</strong> (17 tools) -- read-only, extract asset data to JSON</summary>
@@ -322,6 +323,21 @@ Reference docs:
 | `trigger_live_coding` | Request an editor-side Live Coding compile (Windows) |
 | `restart_editor` | Request an editor restart and wait for Remote Control reconnect |
 | `sync_project_code` | Use explicit `changed_paths` to choose Live Coding vs build-and-restart |
+
+</details>
+
+<details>
+<summary><strong>Verification</strong> (7 tools) -- visual capture and runtime automation</summary>
+
+| Tool | Description |
+|------|-------------|
+| `capture_widget_preview` | Render a WidgetBlueprint offscreen and return capture metadata plus a linked preview artifact |
+| `compare_capture_to_reference` | Compare two captures or PNGs and record a diff image with RMSE and mismatch details |
+| `list_captures` | List saved widget preview and diff captures from the current project |
+| `cleanup_captures` | Delete old capture artifacts from `Saved/BlueprintExtractor/Captures` |
+| `run_automation_tests` | Launch an async host-side Unreal automation run for gameplay, runtime, or mechanic verification |
+| `get_automation_test_run` | Poll one automation run and inspect logs, reports, and indexed artifacts |
+| `list_automation_test_runs` | List active or completed host-side automation runs |
 
 </details>
 
@@ -584,7 +600,7 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
 
 ### Design Principles
 
-- **Right primitive** -- Live editor actions are exposed as 80 MCP **tools**. Static guidance lives in 13 resources, 2 resource templates, and 4 prompts (`blueprint://scopes`, `blueprint://unsupported-surfaces`, `blueprint://examples/{family}`, `design_menu_screen`, etc.).
+- **Right primitive** -- Live editor actions are exposed as 87 MCP **tools**. Static guidance lives in 12 resources, 4 resource templates, and 4 prompts (`blueprint://scopes`, `blueprint://verification-workflows`, `blueprint://examples/{family}`, `design_menu_screen`, etc.).
 - **Small, distinct surface** -- extraction tools stay read-only, common material flows are decomposed into smaller tools, and Enhanced Input uses dedicated authoring tools instead of pretending generic DataAsset reflection is enough.
 - **Annotations** -- All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval.
 - **Structured results** -- every public tool exposes `outputSchema`, mirrors JSON in `structuredContent`, and returns machine-usable error envelopes when execution fails recoverably.

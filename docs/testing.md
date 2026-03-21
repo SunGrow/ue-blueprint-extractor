@@ -29,6 +29,7 @@ The default MCP run executes:
   Covers static resources, generated example validation, prompt registration, compact widget/material extraction, widget-path mutation routing, host-side project-control tools, and structured error behavior.
 - `tests/ue-client.test.ts`: HTTP-layer `UEClient` coverage with a local mock Remote Control server.
 - `tests/project-controller.test.ts`: host-side build command selection, changed-path classification, and restart/reconnect polling.
+- `tests/automation-controller.test.ts`: host-side async automation-run orchestration, artifact indexing, timeout handling, and `null_rhi` command selection.
 - `tests/stdio.integration.test.ts`: real stdio server smoke test against the built `dist/index.js`, including the material graph guidance resource plus compact material read/write transport coverage.
 - `tests/pack-smoke.mjs`: `npm pack` plus `npx blueprint-extractor-mcp` startup smoke from the produced tarball.
 - `tests/live.e2e.test.ts`: gated end-to-end import and extraction smoke against a real editor. It imports a texture through a local HTTP fixture server, verifies header forwarding, imports a local mesh fixture, exercises the composable v2 material tools, round-trips dedicated Enhanced Input assets, polls job status, and explicitly saves the imported and authored assets.
@@ -69,6 +70,7 @@ Useful options:
 - `-BuildPlugin` or `--build-plugin`: run `RunUAT BuildPlugin` as a packaging gate before the automation run.
 - `-SkipBuildProject` or `--skip-build-project`: reuse an existing staged fixture build when `Binaries/<platform>/<ProjectName>Editor.target` is already present. On a fresh stage, the runner falls back to building the fixture editor target.
 - `-AutomationFilter` or `--automation-filter`: override the default `BlueprintExtractor` test filter.
+- `-NoNullRHI` or `--no-null-rhi`: run with rendering enabled so visual capture tests and screenshot-based verification can execute. The default runner keeps `-NullRHI` for faster logic-only coverage.
 
 The UE runner:
 
@@ -78,7 +80,13 @@ The UE runner:
 4. builds `BPXFixtureEditor`,
 5. runs headless editor automation via `UnrealEditor-Cmd`.
 
-The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, structural widget mutations, classic material graph authoring, material-instance parity, and a CommonUI parent canary.
+The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, structural widget mutations, classic material graph authoring, material-instance parity, widget preview capture/diff verification, and a CommonUI parent canary.
+
+Use the visual filter without `-NullRHI` when you need to exercise the capture lane directly, for example:
+
+```powershell
+pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.7" -AutomationFilter "BlueprintExtractor.Authoring.WidgetCaptureVerification" -NoNullRHI
+```
 
 ## CI Shape
 

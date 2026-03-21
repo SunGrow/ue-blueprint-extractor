@@ -28,7 +28,9 @@
 #include "Components/Widget.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Fonts/SlateFontInfo.h"
+#include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformProcess.h"
+#include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/EngineVersionComparison.h"
 #include "Misc/Guid.h"
@@ -2638,7 +2640,7 @@ static bool RunOverlaySlotRoundTripCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->BuildWidgetTree(
 			WidgetObjectPath,
-			TEXT(R"json({"class":"Overlay","name":"OverlayRoot","is_variable":true,"children":[{"class":"TextBlock","name":"LeftText","is_variable":true,"slot":{"HorizontalAlignment":"HAlign_Left"},"properties":{"Text":"Overlay slot regression"}}]})json"),
+			TEXT(R"json({"class":"Overlay","name":"OverlayRoot","is_variable":true,"children":[{"class":"TextBlock","name":"LeftText","is_variable":true,"slot":{"HorizontalAlignment":"HAlign_Right"},"properties":{"Text":"Overlay slot regression"}}]})json"),
 			false),
 		TEXT("BuildWidgetTree overlay slot round trip"));
 
@@ -2660,7 +2662,7 @@ static bool RunOverlaySlotRoundTripCoverage(FAutomationTestBase& Test)
 	Test.TestNotNull(TEXT("Overlay slot child has an OverlaySlot"), OverlaySlot);
 	if (OverlaySlot)
 	{
-		Test.TestEqual(TEXT("BuildWidgetTree applies OverlaySlot HorizontalAlignment"), OverlaySlot->GetHorizontalAlignment(), HAlign_Left);
+		Test.TestEqual(TEXT("BuildWidgetTree applies OverlaySlot HorizontalAlignment"), OverlaySlot->GetHorizontalAlignment(), HAlign_Right);
 	}
 
 	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
@@ -2692,9 +2694,150 @@ static bool RunOverlaySlotRoundTripCoverage(FAutomationTestBase& Test)
 	{
 		FString HorizontalAlignment;
 		Test.TestTrue(TEXT("Overlay slot extract reports HorizontalAlignment"), SlotJson->TryGetStringField(TEXT("HorizontalAlignment"), HorizontalAlignment));
-		Test.TestEqual(TEXT("Overlay slot extract preserves HorizontalAlignment"), HorizontalAlignment, FString(TEXT("HAlign_Left")));
+		Test.TestEqual(TEXT("Overlay slot extract preserves HorizontalAlignment"), HorizontalAlignment, FString(TEXT("HAlign_Right")));
 	}
 
+	return true;
+}
+
+static bool RunWidgetCaptureVerificationCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
+	{
+		Test.AddInfo(TEXT("Skipping widget capture verification because rendering is unavailable. Run this filter without -NullRHI to exercise the visual lane."));
+		return true;
+	}
+
+	const FString PrimaryWidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_CapturePrimary"));
+	const FString PrimaryWidgetObjectPath = MakeObjectPath(PrimaryWidgetAssetPath);
+	const FString SecondaryWidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_CaptureSecondary"));
+	const FString SecondaryWidgetObjectPath = MakeObjectPath(SecondaryWidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(PrimaryWidgetAssetPath, TEXT("/Script/UMG.UserWidget")),
+		TEXT("CreateWidgetBlueprint capture primary"));
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			PrimaryWidgetObjectPath,
+			TEXT(R"json({"class":"CanvasPanel","name":"Root","is_variable":true,"children":[{"class":"TextBlock","name":"Label","is_variable":true,"properties":{"Text":"Capture Primary"}}]})json"),
+			false),
+		TEXT("BuildWidgetTree capture primary"));
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(PrimaryWidgetObjectPath),
+		TEXT("CompileWidgetBlueprint capture primary"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(SecondaryWidgetAssetPath, TEXT("/Script/UMG.UserWidget")),
+		TEXT("CreateWidgetBlueprint capture secondary"));
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			SecondaryWidgetObjectPath,
+			TEXT(R"json({"class":"CanvasPanel","name":"Root","is_variable":true,"children":[{"class":"TextBlock","name":"Label","is_variable":true,"properties":{"Text":"Capture Secondary"}}]})json"),
+			false),
+		TEXT("BuildWidgetTree capture secondary"));
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(SecondaryWidgetObjectPath),
+		TEXT("CompileWidgetBlueprint capture secondary"));
+
+	const TSharedPtr<FJsonObject> PrimaryCapture = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CaptureWidgetPreview(PrimaryWidgetObjectPath, 320, 180),
+		TEXT("CaptureWidgetPreview primary"));
+	const TSharedPtr<FJsonObject> SecondaryCapture = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CaptureWidgetPreview(SecondaryWidgetObjectPath, 320, 180),
+		TEXT("CaptureWidgetPreview secondary"));
+	if (!PrimaryCapture.IsValid() || !SecondaryCapture.IsValid())
+	{
+		return false;
+	}
+
+	FString PrimaryCaptureId;
+	FString PrimaryArtifactPath;
+	FString PrimaryMetadataPath;
+	Test.TestTrue(TEXT("Primary capture returns a captureId"), PrimaryCapture->TryGetStringField(TEXT("captureId"), PrimaryCaptureId) && !PrimaryCaptureId.IsEmpty());
+	Test.TestTrue(TEXT("Primary capture returns artifactPath"), PrimaryCapture->TryGetStringField(TEXT("artifactPath"), PrimaryArtifactPath) && !PrimaryArtifactPath.IsEmpty());
+	Test.TestTrue(TEXT("Primary capture returns metadataPath"), PrimaryCapture->TryGetStringField(TEXT("metadataPath"), PrimaryMetadataPath) && !PrimaryMetadataPath.IsEmpty());
+	Test.TestEqual(TEXT("Primary capture reports widget_preview type"), PrimaryCapture->GetStringField(TEXT("captureType")), FString(TEXT("widget_preview")));
+	Test.TestTrue(TEXT("Primary capture artifact exists"), FPaths::FileExists(PrimaryArtifactPath));
+	Test.TestTrue(TEXT("Primary capture metadata exists"), FPaths::FileExists(PrimaryMetadataPath));
+
+	FString SecondaryCaptureId;
+	Test.TestTrue(TEXT("Secondary capture returns a captureId"), SecondaryCapture->TryGetStringField(TEXT("captureId"), SecondaryCaptureId) && !SecondaryCaptureId.IsEmpty());
+
+	const TSharedPtr<FJsonObject> SelfCompare = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompareCaptureToReference(PrimaryCaptureId, PrimaryCaptureId, 0.0),
+		TEXT("CompareCaptureToReference self"));
+	if (!SelfCompare.IsValid())
+	{
+		return false;
+	}
+
+	bool bSelfPass = false;
+	double SelfRmse = 1.0;
+	FString SelfDiffArtifactPath;
+	Test.TestTrue(TEXT("Self comparison passes"), SelfCompare->TryGetBoolField(TEXT("pass"), bSelfPass) && bSelfPass);
+	Test.TestTrue(TEXT("Self comparison has zero RMSE"), SelfCompare->TryGetNumberField(TEXT("rmse"), SelfRmse) && FMath::IsNearlyZero(SelfRmse));
+	Test.TestTrue(TEXT("Self comparison returns a diffArtifactPath"), SelfCompare->TryGetStringField(TEXT("diffArtifactPath"), SelfDiffArtifactPath) && !SelfDiffArtifactPath.IsEmpty());
+	Test.TestTrue(TEXT("Self comparison diff artifact exists"), FPaths::FileExists(SelfDiffArtifactPath));
+
+	const TSharedPtr<FJsonObject> MismatchCompare = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompareCaptureToReference(PrimaryCaptureId, SecondaryCaptureId, 0.0),
+		TEXT("CompareCaptureToReference mismatch"));
+	if (!MismatchCompare.IsValid())
+	{
+		return false;
+	}
+
+	bool bMismatchPass = true;
+	double MismatchRmse = 0.0;
+	double MismatchPercentage = 0.0;
+	Test.TestTrue(TEXT("Mismatch comparison returns pass=false"), MismatchCompare->TryGetBoolField(TEXT("pass"), bMismatchPass) && !bMismatchPass);
+	Test.TestTrue(TEXT("Mismatch comparison returns RMSE"), MismatchCompare->TryGetNumberField(TEXT("rmse"), MismatchRmse) && MismatchRmse > 0.0);
+	Test.TestTrue(TEXT("Mismatch comparison reports mismatch percentage"), MismatchCompare->TryGetNumberField(TEXT("mismatchPercentage"), MismatchPercentage) && MismatchPercentage > 0.0);
+
+	const TSharedPtr<FJsonObject> ListedCaptures = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ListCaptures(PrimaryWidgetObjectPath),
+		TEXT("ListCaptures primary asset"));
+	if (!ListedCaptures.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> ListedPrimaryCapture = FindArrayObjectByStringField(
+		ListedCaptures,
+		TEXT("captures"),
+		TEXT("captureId"),
+		PrimaryCaptureId);
+	Test.TestNotNull(TEXT("ListCaptures includes the primary capture"), ListedPrimaryCapture.Get());
+
+	const TSharedPtr<FJsonObject> CleanupResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CleanupCaptures(0),
+		TEXT("CleanupCaptures"));
+	if (!CleanupResult.IsValid())
+	{
+		return false;
+	}
+
+	double DeletedCount = 0.0;
+	Test.TestTrue(TEXT("CleanupCaptures deletes the capture artifacts"), CleanupResult->TryGetNumberField(TEXT("deletedCount"), DeletedCount) && DeletedCount >= 1.0);
+	Test.TestFalse(TEXT("Primary capture artifact no longer exists after cleanup"), FPaths::FileExists(PrimaryArtifactPath));
 	return true;
 }
 
@@ -2743,6 +2886,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("OverlaySlotRoundTrip"), [this]()
 		{
 			TestTrue(TEXT("Overlay slot round-trip coverage completes"), RunOverlaySlotRoundTripCoverage(*this));
+		});
+
+		It(TEXT("WidgetCaptureVerification"), [this]()
+		{
+			TestTrue(TEXT("Widget capture verification coverage completes"), RunWidgetCaptureVerificationCoverage(*this));
 		});
 
 		It(TEXT("ImportJobs"), [this]()

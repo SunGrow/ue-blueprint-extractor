@@ -3,6 +3,7 @@
 #include "BlueprintExtractorSettings.h"
 #include "BlueprintExtractorVersion.h"
 #include "BlueprintJsonSchema.h"
+#include "Extractors/ClassDefaultsExtractor.h"
 #include "Extractors/ClassLevelExtractor.h"
 #include "Extractors/VariableExtractor.h"
 #include "Extractors/ComponentExtractor.h"
@@ -199,14 +200,14 @@ bool UBlueprintExtractorLibrary::ExtractBlueprintToJson(UBlueprint* Blueprint, c
 	return false;
 }
 
-bool UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter)
+bool UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter, const bool bIncludeClassDefaults)
 {
 	if (!Blueprint)
 	{
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> JsonRoot = ExtractBlueprintToJsonObject(Blueprint, Scope, GraphFilter);
+	TSharedPtr<FJsonObject> JsonRoot = ExtractBlueprintToJsonObject(Blueprint, Scope, GraphFilter, bIncludeClassDefaults);
 	if (!JsonRoot)
 	{
 		return false;
@@ -230,7 +231,7 @@ bool UBlueprintExtractorLibrary::ExtractBlueprintToJsonString(UBlueprint* Bluepr
 	return true;
 }
 
-TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter)
+TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter, const bool bIncludeClassDefaults)
 {
 	if (!Blueprint)
 	{
@@ -252,6 +253,10 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 
 	if (Scope == EBlueprintExtractionScope::ClassLevel)
 	{
+		if (bIncludeClassDefaults)
+		{
+			BPObj->SetObjectField(TEXT("classDefaults"), FClassDefaultsExtractor::Extract(Blueprint));
+		}
 		Root->SetObjectField(TEXT("blueprint"), BPObj);
 		return Root;
 	}
@@ -261,6 +266,10 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 
 	if (Scope == EBlueprintExtractionScope::Variables)
 	{
+		if (bIncludeClassDefaults)
+		{
+			BPObj->SetObjectField(TEXT("classDefaults"), FClassDefaultsExtractor::Extract(Blueprint));
+		}
 		Root->SetObjectField(TEXT("blueprint"), BPObj);
 		return Root;
 	}
@@ -284,6 +293,10 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 
 	if (Scope == EBlueprintExtractionScope::Components)
 	{
+		if (bIncludeClassDefaults)
+		{
+			BPObj->SetObjectField(TEXT("classDefaults"), FClassDefaultsExtractor::Extract(Blueprint));
+		}
 		Root->SetObjectField(TEXT("blueprint"), BPObj);
 		return Root;
 	}
@@ -378,6 +391,12 @@ TSharedPtr<FJsonObject> UBlueprintExtractorLibrary::ExtractBlueprintToJsonObject
 	if (Scope == EBlueprintExtractionScope::FullWithBytecode)
 	{
 		BPObj->SetObjectField(TEXT("bytecode"), FBytecodeExtractor::Extract(Blueprint));
+	}
+
+	// Class defaults (CDO overrides vs parent class)
+	if (bIncludeClassDefaults)
+	{
+		BPObj->SetObjectField(TEXT("classDefaults"), FClassDefaultsExtractor::Extract(Blueprint));
 	}
 
 	Root->SetObjectField(TEXT("blueprint"), BPObj);

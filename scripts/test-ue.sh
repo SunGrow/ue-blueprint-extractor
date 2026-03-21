@@ -7,6 +7,7 @@ stage_root="${UE_FIXTURE_STAGE_ROOT:-}"
 automation_filter="BlueprintExtractor"
 build_plugin=0
 skip_build_project=0
+use_null_rhi=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-build-project)
       skip_build_project=1
+      shift
+      ;;
+    --no-null-rhi)
+      use_null_rhi=0
       shift
       ;;
     *)
@@ -175,14 +180,24 @@ fi
 
 mkdir -p "$automation_report_path"
 
+automation_args=(
+  "$project_path"
+  -unattended
+  -nop4
+  -nosplash
+)
+
+if [[ "$use_null_rhi" -eq 1 ]]; then
+  automation_args+=(-NullRHI)
+fi
+
+automation_args+=(
+  -RCWebControlEnable
+  -RCWebInterfaceEnable
+  "-ReportExportPath=$automation_report_path"
+  "-ExecCmds=Automation RunTests $automation_filter;Quit"
+)
+
 run_step "Run BlueprintExtractor automation tests" \
   "$editor_cmd" \
-  "$project_path" \
-  -unattended \
-  -nop4 \
-  -nosplash \
-  -NullRHI \
-  -RCWebControlEnable \
-  -RCWebInterfaceEnable \
-  "-ReportExportPath=$automation_report_path" \
-  "-ExecCmds=Automation RunTests $automation_filter;Quit"
+  "${automation_args[@]}"

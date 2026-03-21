@@ -30,9 +30,10 @@ public:
 	virtual ~UBlueprintExtractorSubsystem() override;
 
 	/** Extracts a Blueprint asset to a JSON string. Returns an error JSON object on failure.
-	 *  GraphFilter is a comma-separated list of graph names to extract. Empty = all graphs. */
+	 *  GraphFilter is a comma-separated list of graph names to extract. Empty = all graphs.
+	 *  bIncludeClassDefaults includes CDO property values that differ from the parent class. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
-	FString ExtractBlueprint(const FString& AssetPath, const FString& Scope = TEXT("Full"), const FString& GraphFilter = TEXT(""));
+	FString ExtractBlueprint(const FString& AssetPath, const FString& Scope = TEXT("Full"), const FString& GraphFilter = TEXT(""), const bool bIncludeClassDefaults = false);
 
 	/** Extracts a StateTree asset to a JSON string. Returns an error JSON object on failure. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
@@ -145,6 +146,24 @@ public:
 	/** Compiles a WidgetBlueprint. Returns JSON array of errors/warnings. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CompileWidgetBlueprint(const FString& AssetPath);
+
+	/** Renders a WidgetBlueprint offscreen to a PNG capture under Saved/BlueprintExtractor/Captures. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CaptureWidgetPreview(const FString& AssetPath, int32 Width = 512, int32 Height = 512);
+
+	/** Compares two PNG captures or reference images and records a diff capture. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CompareCaptureToReference(const FString& CaptureIdOrPath,
+	                                  const FString& ReferenceIdOrPath,
+	                                  double Tolerance = 0.01);
+
+	/** Lists saved capture metadata, optionally filtered to one asset path. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ListCaptures(const FString& AssetPathFilter = TEXT(""));
+
+	/** Deletes old captures from Saved/BlueprintExtractor/Captures. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CleanupCaptures(int32 MaxAgeDays = 7);
 
 	/** Imports one or more font files into UFontFace assets and optionally updates a runtime UFont. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")

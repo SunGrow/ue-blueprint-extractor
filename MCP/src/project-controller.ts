@@ -36,6 +36,8 @@ export interface SyncStrategyPlan {
   reasons: string[];
 }
 
+export type BuildErrorCategory = 'compilation' | 'link' | 'locked_file' | 'infrastructure' | 'unknown';
+
 export interface CompileProjectCodeResult {
   success: boolean;
   operation: 'compile_project_code';
@@ -58,6 +60,9 @@ export interface CompileProjectCodeResult {
   stdout?: string;
   stderr?: string;
   uhtCacheFilesDeleted?: string[];
+  errorCategory?: BuildErrorCategory;
+  errorSummary?: string;
+  lockedFiles?: string[];
 }
 
 export interface RestartReconnectResult {
@@ -385,6 +390,73 @@ async function waitForState(
   return false;
 }
 
+/** Classify UBT build output into an error category. */
+export function classifyBuildError(
+  stdout: string,
+  stderr: string,
+  exitCode: number,
+): { errorCategory: BuildErrorCategory; errorSummary: string; lockedFiles: string[] } {
+  const combined = `${stdout}\n${stderr}`;
+
+  // Locked file detection (must be checked before generic link errors)
+  const lockedFilePatterns = [
+    /unable to (?:open|write)[^]*?['"](.*?\.dll)['"]/gim,
+    /cannot open ['"](.*?\.dll)['"]/gim,
+    /(?:Access is denied|used by another process)[^]*?['"](.*?\.dll)['"]/gim,
+    /['"](.*?\.dll)['"].*?(?:Access is denied|used by another process)/gim,
+    /LINK : fatal error LNK\d+:.*?['"](.*?\.dll)['"]/gim,
+  ];
+  const lockedFiles: string[] = [];
+  for (const pattern of lockedFilePatterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(combined)) !== null) {
+      if (match[1] && !lockedFiles.includes(match[1])) {
+        lockedFiles.push(match[1]);
+      }
+    }
+  }
+  if (lockedFiles.length > 0) {
+    return {
+      errorCategory: 'locked_file',
+      errorSummary: `Build failed: ${lockedFiles.length === 1 ? lockedFiles[0] : `${lockedFiles.length} files`} locked by another process. Restart the editor to release the DLL.`,
+      lockedFiles,
+    };
+  }
+
+  // Linker errors (LNK on MSVC, ld on clang/gcc)
+  if (/error LNK\d+/im.test(combined) || /LINK\s*:\s*fatal error/im.test(combined) || /ld:\s*error:/im.test(combined)) {
+    return {
+      errorCategory: 'link',
+      errorSummary: 'Build failed at link stage. Check for unresolved symbols, missing libraries, or object file issues.',
+      lockedFiles: [],
+    };
+  }
+
+  // Compilation errors (MSVC: error C####, Clang: error:)
+  if (/\berror C\d+/im.test(combined) || /:\s*error\s*:/im.test(combined)) {
+    return {
+      errorCategory: 'compilation',
+      errorSummary: 'Build failed due to compilation errors in source code.',
+      lockedFiles: [],
+    };
+  }
+
+  // Infrastructure errors (timeouts, missing tools, permissions)
+  if (/unable to execute|not found|permission denied|timed? ?out/im.test(combined)) {
+    return {
+      errorCategory: 'infrastructure',
+      errorSummary: 'Build failed due to a toolchain or environment issue (missing tool, permission, or timeout).',
+      lockedFiles: [],
+    };
+  }
+
+  return {
+    errorCategory: 'unknown',
+    errorSummary: `Build failed with exit code ${exitCode}. Check stdout/stderr for details.`,
+    lockedFiles: [],
+  };
+}
+
 export class ProjectController implements ProjectControllerLike {
   private readonly env: NodeJS.ProcessEnv;
   private readonly platform: NodeJS.Platform;
@@ -485,6 +557,19 @@ export class ProjectController implements ProjectControllerLike {
     }
     if (uhtCacheFilesDeleted && uhtCacheFilesDeleted.length > 0) {
       result.uhtCacheFilesDeleted = uhtCacheFilesDeleted;
+    }
+
+    if (!result.success) {
+      const classification = classifyBuildError(
+        completed.stdout,
+        completed.stderr,
+        completed.exitCode,
+      );
+      result.errorCategory = classification.errorCategory;
+      result.errorSummary = classification.errorSummary;
+      if (classification.lockedFiles.length > 0) {
+        result.lockedFiles = classification.lockedFiles;
+      }
     }
 
     return result;

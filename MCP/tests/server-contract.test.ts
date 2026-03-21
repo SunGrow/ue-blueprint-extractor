@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createBlueprintExtractorServer,
   exampleCatalog,
@@ -79,6 +82,69 @@ class FakeProjectController {
   }
 }
 
+class FakeAutomationController {
+  readonly runCalls: Array<Record<string, unknown>> = [];
+  readonly getCalls: string[] = [];
+  readonly listCalls: boolean[] = [];
+  readonly readArtifactCalls: Array<{ runId: string; artifactName: string }> = [];
+
+  constructor(
+    private readonly runHandler: (request: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown> = (request) => ({
+      success: true,
+      operation: 'run_automation_tests',
+      runId: 'run-123',
+      automationFilter: request.automationFilter ?? 'BlueprintExtractor',
+      status: 'running',
+      terminal: false,
+      engineRoot: request.engineRoot ?? 'C:/Epic/UE_5.7',
+      projectPath: request.projectPath ?? 'C:/Projects/MyGame/MyGame.uproject',
+      projectDir: 'C:/Projects/MyGame',
+      target: request.target ?? 'MyGameEditor',
+      reportOutputDir: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-123/reports',
+      command: {
+        executable: 'C:/Epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe',
+        args: ['Automation'],
+      },
+      diagnostics: [],
+      timeoutMs: request.timeoutMs ?? 3600000,
+      nullRhi: request.nullRhi ?? true,
+      artifacts: [],
+    }),
+    private readonly getHandler: (runId: string) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null = () => null,
+    private readonly listHandler: (includeCompleted: boolean) => Promise<Record<string, unknown>> | Record<string, unknown> = (includeCompleted) => ({
+      success: true,
+      operation: 'list_automation_test_runs',
+      includeCompleted,
+      runCount: 0,
+      runs: [],
+    }),
+    private readonly readArtifactHandler: (
+      runId: string,
+      artifactName: string,
+    ) => Promise<{ artifact: Record<string, unknown>; data: Buffer } | null> | { artifact: Record<string, unknown>; data: Buffer } | null = () => null,
+  ) {}
+
+  async runAutomationTests(request: Record<string, unknown>) {
+    this.runCalls.push(request);
+    return await this.runHandler(request);
+  }
+
+  async getAutomationTestRun(runId: string) {
+    this.getCalls.push(runId);
+    return await this.getHandler(runId);
+  }
+
+  async listAutomationTestRuns(includeCompleted = true) {
+    this.listCalls.push(includeCompleted);
+    return await this.listHandler(includeCompleted);
+  }
+
+  async readAutomationArtifact(runId: string, artifactName: string) {
+    this.readArtifactCalls.push({ runId, artifactName });
+    return await this.readArtifactHandler(runId, artifactName);
+  }
+}
+
 function makeImportJobResult(overrides: Record<string, unknown> = {}) {
   return {
     success: true,
@@ -145,9 +211,13 @@ describe('createBlueprintExtractorServer', () => {
     const getImportJob = tools.tools.find((tool) => tool.name === 'get_import_job');
     const listImportJobs = tools.tools.find((tool) => tool.name === 'list_import_jobs');
     const saveAssets = tools.tools.find((tool) => tool.name === 'save_assets');
+    const captureWidgetPreview = tools.tools.find((tool) => tool.name === 'capture_widget_preview');
+    const runAutomationTests = tools.tools.find((tool) => tool.name === 'run_automation_tests');
+    const getAutomationTestRun = tools.tools.find((tool) => tool.name === 'get_automation_test_run');
+    const listAutomationTestRuns = tools.tools.find((tool) => tool.name === 'list_automation_test_runs');
 
-    expect(resourceTemplates.resourceTemplates).toHaveLength(2);
-    expect(tools.tools).toHaveLength(80);
+    expect(resourceTemplates.resourceTemplates).toHaveLength(4);
+    expect(tools.tools).toHaveLength(87);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -157,10 +227,13 @@ describe('createBlueprintExtractorServer', () => {
     expect(resourceUris).toContain('blueprint://material-graph-guidance');
     expect(resourceUris).toContain('blueprint://font-roles');
     expect(resourceUris).toContain('blueprint://project-automation');
+    expect(resourceUris).toContain('blueprint://verification-workflows');
     expect(resourceUris).toContain('blueprint://unsupported-surfaces');
     expect(resourceUris).toContain('blueprint://ui-redesign-workflow');
     expect(resourceTemplateUris).toContain('blueprint://examples/{family}');
     expect(resourceTemplateUris).toContain('blueprint://widget-patterns/{pattern}');
+    expect(resourceTemplateUris).toContain('blueprint://captures/{capture_id}');
+    expect(resourceTemplateUris).toContain('blueprint://test-runs/{run_id}/{artifact}');
     expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(Object.keys(promptCatalog).sort());
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(true);
@@ -184,6 +257,13 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'capture_widget_preview')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'compare_capture_to_reference')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'list_captures')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'cleanup_captures')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'run_automation_tests')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'get_automation_test_run')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'list_automation_test_runs')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_input_action')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_input_action')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_input_mapping_context')).toBe(true);
@@ -195,12 +275,18 @@ describe('createBlueprintExtractorServer', () => {
     expectSchemaProperty(listImportJobs, 'jobs');
     expectSchemaProperty(extractCascade, 'extracted_count');
     expectSchemaProperty(extractCascade, 'manifest');
+    expectSchemaProperty(captureWidgetPreview, 'captureId');
+    expectSchemaProperty(runAutomationTests, 'runId');
+    expectSchemaProperty(getAutomationTestRun, 'artifacts');
+    expectSchemaProperty(listAutomationTestRuns, 'runs');
     expect(extractBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractWidgetBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractMaterial?.annotations?.readOnlyHint).toBe(true);
     expect(createBlueprint?.annotations?.readOnlyHint).toBe(false);
     expect(importAssets?.annotations?.readOnlyHint).toBe(false);
     expect(getImportJob?.annotations?.readOnlyHint).toBe(true);
+    expect(captureWidgetPreview?.annotations?.readOnlyHint).toBe(true);
+    expect(getAutomationTestRun?.annotations?.readOnlyHint).toBe(true);
     expect(saveAssets?.annotations?.idempotentHint).toBe(true);
   });
 
@@ -217,6 +303,7 @@ describe('createBlueprintExtractorServer', () => {
     const materialGraphGuidance = await harness.client.readResource({ uri: 'blueprint://material-graph-guidance' });
     const fontRoles = await harness.client.readResource({ uri: 'blueprint://font-roles' });
     const projectAutomation = await harness.client.readResource({ uri: 'blueprint://project-automation' });
+    const verificationWorkflows = await harness.client.readResource({ uri: 'blueprint://verification-workflows' });
     const unsupportedSurfaces = await harness.client.readResource({ uri: 'blueprint://unsupported-surfaces' });
     const uiRedesignWorkflow = await harness.client.readResource({ uri: 'blueprint://ui-redesign-workflow' });
     const widgetExample = await harness.client.readResource({ uri: 'blueprint://examples/widget_blueprint' });
@@ -242,6 +329,8 @@ describe('createBlueprintExtractorServer', () => {
     expect(materialGraphGuidance.contents[0]?.text).toContain('expression_guid');
     expect(fontRoles.contents[0]?.text).toContain('Blueprint Extractor Font Roles');
     expect(projectAutomation.contents[0]?.text).toContain('Blueprint Extractor Project Automation');
+    expect(verificationWorkflows.contents[0]?.text).toContain('Blueprint Extractor Verification Workflows');
+    expect(verificationWorkflows.contents[0]?.text).toContain('run_automation_tests');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('Safe UI Redesign Workflow');
     expect(widgetExample.contents[0]?.text).toContain('Example: insert_body_text');
@@ -959,6 +1048,264 @@ describe('createBlueprintExtractorServer', () => {
         },
       },
     ]);
+  });
+
+  it('preserves resource_link and inline image content for capture tools and serves capture resources', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-capture-resource-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const artifactPath = join(root, 'capture.png');
+    await writeFile(artifactPath, Buffer.from('png-bytes'));
+
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'CaptureWidgetPreview') {
+        return JSON.stringify({
+          success: true,
+          operation: 'capture_widget_preview',
+          captureId: 'capture-123',
+          captureType: 'widget_preview',
+          assetPath: params.AssetPath,
+          widgetClass: '/Game/UI/WBP_Window.WBP_Window_C',
+          captureDirectory: root,
+          artifactPath,
+          metadataPath: join(root, 'metadata.json'),
+          width: params.Width,
+          height: params.Height,
+          fileSizeBytes: 9,
+          createdAt: '2026-03-17T10:00:00.000Z',
+          projectDir: 'C:/Projects/MyGame',
+        });
+      }
+
+      if (method === 'ListCaptures') {
+        return JSON.stringify({
+          success: true,
+          operation: 'list_captures',
+          assetPathFilter: params.AssetPathFilter ?? '',
+          captureCount: 1,
+          captures: [{
+            captureId: 'capture-123',
+            captureType: 'widget_preview',
+            assetPath: '/Game/UI/WBP_Window',
+            widgetClass: '/Game/UI/WBP_Window.WBP_Window_C',
+            captureDirectory: root,
+            artifactPath,
+            metadataPath: join(root, 'metadata.json'),
+            width: 320,
+            height: 180,
+            fileSizeBytes: 9,
+            createdAt: '2026-03-17T10:00:00.000Z',
+            projectDir: 'C:/Projects/MyGame',
+          }],
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'capture_widget_preview',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        width: 320,
+        height: 180,
+      },
+    });
+
+    expect(JSON.parse(getTextContent(result))).toMatchObject({
+      captureId: 'capture-123',
+      resourceUri: 'blueprint://captures/capture-123',
+      width: 320,
+      height: 180,
+    });
+    expect(result.content?.some((entry) => entry.type === 'resource_link')).toBe(true);
+    expect(result.content?.some((entry) => entry.type === 'image')).toBe(true);
+
+    const captureResource = await harness.client.readResource({ uri: 'blueprint://captures/capture-123' });
+    expect(captureResource.contents[0]?.mimeType).toBe('image/png');
+    expect(captureResource.contents[0]?.blob).toBe(Buffer.from('png-bytes').toString('base64'));
+  });
+
+  it('routes automation runs through the host-side automation controller and serves artifact resources', async () => {
+    const fakeClient = new FakeUEClient((method) => {
+      if (method === 'GetProjectAutomationContext') {
+        return JSON.stringify({
+          success: true,
+          operation: 'get_project_automation_context',
+          engineRoot: 'C:/Epic/UE_5.7',
+          projectFilePath: 'C:/Projects/MyGame/MyGame.uproject',
+          editorTarget: 'MyGameEditor',
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const fakeAutomationController = new FakeAutomationController(
+      (request) => ({
+        success: true,
+        operation: 'run_automation_tests',
+        runId: 'run-123',
+        automationFilter: request.automationFilter,
+        status: 'running',
+        terminal: false,
+        engineRoot: request.engineRoot,
+        projectPath: request.projectPath,
+        projectDir: 'C:/Projects/MyGame',
+        target: request.target,
+        reportOutputDir: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-123/reports',
+        command: {
+          executable: 'C:/Epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe',
+          args: ['Automation'],
+        },
+        diagnostics: [],
+        timeoutMs: request.timeoutMs,
+        nullRhi: request.nullRhi,
+        artifacts: [{
+          name: 'summary',
+          path: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-123/summary.json',
+          mimeType: 'application/json',
+          resourceUri: 'blueprint://test-runs/run-123/summary',
+        }],
+      }),
+      async (runId) => ({
+        success: true,
+        operation: 'get_automation_test_run',
+        runId,
+        automationFilter: 'BlueprintExtractor.Verification',
+        status: 'succeeded',
+        terminal: true,
+        engineRoot: 'C:/Epic/UE_5.7',
+        projectPath: 'C:/Projects/MyGame/MyGame.uproject',
+        projectDir: 'C:/Projects/MyGame',
+        target: 'MyGameEditor',
+        reportOutputDir: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-123/reports',
+        command: {
+          executable: 'C:/Epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe',
+          args: ['Automation'],
+        },
+        diagnostics: [],
+        timeoutMs: 900000,
+        nullRhi: true,
+        artifacts: [{
+          name: 'summary',
+          path: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-123/summary.json',
+          mimeType: 'application/json',
+          resourceUri: 'blueprint://test-runs/run-123/summary',
+        }],
+        summary: {
+          successful: true,
+          reportAvailable: true,
+          totalTests: 2,
+          passedTests: 2,
+          failedTests: 0,
+        },
+      }),
+      async (includeCompleted) => ({
+        success: true,
+        operation: 'list_automation_test_runs',
+        includeCompleted,
+        runCount: 1,
+        runs: [{
+          success: true,
+          operation: 'get_automation_test_run',
+          runId: 'run-123',
+          automationFilter: 'BlueprintExtractor.Verification',
+          status: 'succeeded',
+          terminal: true,
+          engineRoot: 'C:/Epic/UE_5.7',
+          projectPath: 'C:/Projects/MyGame/MyGame.uproject',
+          projectDir: 'C:/Projects/MyGame',
+          target: 'MyGameEditor',
+          reportOutputDir: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-123/reports',
+          command: {
+            executable: 'C:/Epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe',
+            args: ['Automation'],
+          },
+          diagnostics: [],
+          timeoutMs: 900000,
+          nullRhi: true,
+          artifacts: [],
+        }],
+      }),
+      async () => ({
+        artifact: {
+          name: 'summary',
+          path: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-123/summary.json',
+          mimeType: 'application/json',
+          resourceUri: 'blueprint://test-runs/run-123/summary',
+        },
+        data: Buffer.from('{"successful":true}'),
+      }),
+    );
+
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(
+      fakeClient,
+      new FakeProjectController(),
+      fakeAutomationController,
+    ));
+    cleanups.push(harness.close);
+
+    const runResult = await harness.client.callTool({
+      name: 'run_automation_tests',
+      arguments: {
+        automation_filter: 'BlueprintExtractor.Verification',
+        timeout_seconds: 900,
+      },
+    });
+    const getResult = await harness.client.callTool({
+      name: 'get_automation_test_run',
+      arguments: {
+        run_id: 'run-123',
+      },
+    });
+    const listResult = await harness.client.callTool({
+      name: 'list_automation_test_runs',
+      arguments: {
+        include_completed: false,
+      },
+    });
+
+    expect(JSON.parse(getTextContent(runResult))).toMatchObject({
+      runId: 'run-123',
+      inputResolution: {
+        engineRoot: 'editor_context',
+        projectPath: 'editor_context',
+        target: 'editor_context',
+      },
+    });
+    expect(runResult.content?.some((entry) => entry.type === 'resource_link')).toBe(true);
+    expect(JSON.parse(getTextContent(getResult))).toMatchObject({
+      runId: 'run-123',
+      status: 'succeeded',
+      summary: {
+        successful: true,
+        totalTests: 2,
+      },
+    });
+    expect(JSON.parse(getTextContent(listResult))).toMatchObject({
+      includeCompleted: false,
+      runCount: 1,
+    });
+
+    const summaryResource = await harness.client.readResource({ uri: 'blueprint://test-runs/run-123/summary' });
+    expect(summaryResource.contents[0]?.mimeType).toBe('application/json');
+    expect(summaryResource.contents[0]?.text).toContain('"successful":true');
+    expect(fakeAutomationController.runCalls).toEqual([
+      {
+        automationFilter: 'BlueprintExtractor.Verification',
+        engineRoot: 'C:/Epic/UE_5.7',
+        projectPath: 'C:/Projects/MyGame/MyGame.uproject',
+        target: 'MyGameEditor',
+        reportOutputDir: undefined,
+        timeoutMs: 900000,
+        nullRhi: true,
+      },
+    ]);
+    expect(fakeAutomationController.getCalls).toEqual(['run-123']);
+    expect(fakeAutomationController.listCalls).toEqual([false]);
+    expect(fakeAutomationController.readArtifactCalls).toEqual([{ runId: 'run-123', artifactName: 'summary' }]);
   });
 
   it('routes compile_project_code through the host-side project controller', async () => {

@@ -5,7 +5,8 @@ param(
     [string]$StageRoot = $env:UE_FIXTURE_STAGE_ROOT,
     [string]$AutomationFilter = 'BlueprintExtractor',
     [switch]$BuildPlugin,
-[switch]$SkipBuildProject
+    [switch]$SkipBuildProject,
+    [switch]$NoNullRHI
 )
 
 $ErrorActionPreference = 'Stop'
@@ -184,17 +185,25 @@ if ($BuildPlan.ShouldBuildProject) {
 
 New-Item -ItemType Directory -Force -Path $AutomationReportPath | Out-Null
 
+$AutomationArgs = @(
+    $ResolvedProjectPath,
+    '-unattended',
+    '-nop4',
+    '-nosplash'
+)
+
+if (-not $NoNullRHI.IsPresent) {
+    $AutomationArgs += '-NullRHI'
+}
+
+$AutomationArgs += @(
+    '-RCWebControlEnable',
+    '-RCWebInterfaceEnable',
+    "-ReportExportPath=$AutomationReportPath",
+    "-ExecCmds=Automation RunTests $AutomationFilter;Quit"
+)
+
 Invoke-Step `
     -Label 'Run BlueprintExtractor automation tests' `
     -FilePath $EditorCmd `
-    -Arguments @(
-        $ResolvedProjectPath,
-        '-unattended',
-        '-nop4',
-        '-nosplash',
-        '-NullRHI',
-        '-RCWebControlEnable',
-        '-RCWebInterfaceEnable',
-        "-ReportExportPath=$AutomationReportPath",
-        "-ExecCmds=Automation RunTests $AutomationFilter;Quit"
-    )
+    -Arguments $AutomationArgs

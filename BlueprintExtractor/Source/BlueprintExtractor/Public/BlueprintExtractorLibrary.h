@@ -35,12 +35,12 @@ public:
 	{ return ExtractBlueprintToJson(Blueprint, OutputPath, Scope, TArray<FName>()); }
 
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
-	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter);
+	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter, bool bIncludeClassDefaults = false);
 
 	static bool ExtractBlueprintToJsonString(UBlueprint* Blueprint, FString& OutJsonString, EBlueprintExtractionScope Scope)
 	{ return ExtractBlueprintToJsonString(Blueprint, OutJsonString, Scope, TArray<FName>()); }
 
-	static TSharedPtr<FJsonObject> ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {});
+	static TSharedPtr<FJsonObject> ExtractBlueprintToJsonObject(UBlueprint* Blueprint, EBlueprintExtractionScope Scope, const TArray<FName>& GraphFilter = {}, bool bIncludeClassDefaults = false);
 
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor", meta=(DevelopmentOnly))
 	static bool ExtractStateTreeToJson(UStateTree* StateTree, const FString& OutputPath);

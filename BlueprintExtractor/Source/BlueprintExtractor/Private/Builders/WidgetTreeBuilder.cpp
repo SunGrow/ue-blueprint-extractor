@@ -3,6 +3,7 @@
 #include "Authoring/AssetMutationHelpers.h"
 #include "Authoring/AuthoringHelpers.h"
 #include "Authoring/BlueprintAuthoring.h"
+#include "Extractors/ClassDefaultsExtractor.h"
 #include "Extractors/WidgetTreeExtractor.h"
 #include "PropertySerializer.h"
 
@@ -606,7 +607,7 @@ static void AnnotateWidgetPaths(const TSharedPtr<FJsonObject>& Node, const FStri
 	}
 }
 
-static TSharedPtr<FJsonObject> BuildWidgetCompileSnapshot(const UWidgetBlueprint* WidgetBP)
+static TSharedPtr<FJsonObject> BuildWidgetCompileSnapshot(UWidgetBlueprint* WidgetBP)
 {
 	const TSharedPtr<FJsonObject> Compile = MakeShared<FJsonObject>();
 	if (!WidgetBP)
@@ -626,78 +627,49 @@ static TSharedPtr<FJsonObject> BuildWidgetCompileSnapshot(const UWidgetBlueprint
 	Compile->SetBoolField(TEXT("dirty"), bDirty);
 	Compile->SetBoolField(TEXT("hasGeneratedClass"), bHasGeneratedClass);
 	Compile->SetBoolField(TEXT("needsCompile"), bDirty || Status == BS_Dirty || !bHasGeneratedClass);
+
+	// When status is Error, do a silent compile to gather error messages
+	if (Status == BS_Error)
+	{
+		FCompilerResultsLog CompileResults;
+		CompileResults.bSilentMode = true;
+		CompileResults.bAnnotateMentionedNodes = false;
+		FKismetEditorUtilities::CompileBlueprint(WidgetBP, EBlueprintCompileOptions::SkipGarbageCollection, &CompileResults);
+
+		TArray<TSharedPtr<FJsonValue>> ErrorArray;
+		TArray<TSharedPtr<FJsonValue>> WarningArray;
+		for (const TSharedRef<FTokenizedMessage>& Message : CompileResults.Messages)
+		{
+			const FString MessageText = Message->ToText().ToString();
+			switch (Message->GetSeverity())
+			{
+			case EMessageSeverity::Error:
+				ErrorArray.Add(MakeShared<FJsonValueString>(MessageText));
+				break;
+			case EMessageSeverity::Warning:
+			case EMessageSeverity::PerformanceWarning:
+				WarningArray.Add(MakeShared<FJsonValueString>(MessageText));
+				break;
+			default:
+				break;
+			}
+		}
+		if (ErrorArray.Num() > 0)
+		{
+			Compile->SetArrayField(TEXT("errors"), ErrorArray);
+		}
+		if (WarningArray.Num() > 0)
+		{
+			Compile->SetArrayField(TEXT("warnings"), WarningArray);
+		}
+	}
+
 	return Compile;
 }
 
 static TSharedPtr<FJsonObject> ExtractWidgetClassDefaults(const UWidgetBlueprint* WidgetBP)
 {
-	if (!WidgetBP || !WidgetBP->GeneratedClass)
-	{
-		return MakeShared<FJsonObject>();
-	}
-
-	const UObject* GeneratedDefaultObject = WidgetBP->GeneratedClass->GetDefaultObject(false);
-	const UClass* ParentClass = WidgetBP->GeneratedClass->GetSuperClass();
-	const UObject* ParentDefaultObject = ParentClass ? ParentClass->GetDefaultObject(false) : nullptr;
-	if (!GeneratedDefaultObject)
-	{
-		return MakeShared<FJsonObject>();
-	}
-
-	const TSharedPtr<FJsonObject> Overrides = MakeShared<FJsonObject>();
-	TSet<FName> SerializedPropertyNames;
-
-	const auto AppendOverridesForClass = [&Overrides, &SerializedPropertyNames, GeneratedDefaultObject, ParentDefaultObject](const UClass* SourceClass)
-	{
-		if (!SourceClass)
-		{
-			return;
-		}
-
-		for (TFieldIterator<FProperty> PropIt(SourceClass); PropIt; ++PropIt)
-		{
-			const FProperty* Property = *PropIt;
-			if (!Property)
-			{
-				continue;
-			}
-
-			const FName PropertyName = Property->GetFName();
-			if (SerializedPropertyNames.Contains(PropertyName))
-			{
-				continue;
-			}
-			SerializedPropertyNames.Add(PropertyName);
-
-			if (!Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible))
-			{
-				continue;
-			}
-
-			if (Property->HasAnyPropertyFlags(CPF_Deprecated | CPF_Transient))
-			{
-				continue;
-			}
-
-			const bool bHasMatchingBaselineClass = ParentDefaultObject
-				&& ParentDefaultObject->GetClass()->IsChildOf(Property->GetOwnerClass());
-			if (bHasMatchingBaselineClass && Property->Identical_InContainer(GeneratedDefaultObject, ParentDefaultObject))
-			{
-				continue;
-			}
-
-			const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(GeneratedDefaultObject);
-			const TSharedPtr<FJsonValue> JsonValue = FPropertySerializer::SerializePropertyValue(Property, ValuePtr);
-			if (JsonValue.IsValid())
-			{
-				Overrides->SetField(Property->GetName(), JsonValue);
-			}
-		}
-	};
-
-	AppendOverridesForClass(WidgetBP->GeneratedClass);
-	AppendOverridesForClass(ParentClass);
-	return Overrides;
+	return FClassDefaultsExtractor::Extract(WidgetBP);
 }
 
 static TArray<TSharedPtr<FJsonValue>> ExtractWidgetAnimationSummaries(const UWidgetBlueprint* WidgetBP)
@@ -1590,6 +1562,142 @@ static FStructProperty* FindSlateFontInfoProperty(UObject* Object)
 	return nullptr;
 }
 
+// ---------------------------------------------------------------------------
+// BindWidget Validation
+// ---------------------------------------------------------------------------
+
+struct FBindWidgetRequirement
+{
+	FName PropertyName;
+	const UClass* ExpectedWidgetClass = nullptr;
+	bool bOptional = false;
+};
+
+/** Introspect the parent C++ class for BindWidget / BindWidgetOptional UPROPERTY declarations. */
+static TArray<FBindWidgetRequirement> GetBindWidgetRequirements(const UClass* ParentClass)
+{
+	TArray<FBindWidgetRequirement> Requirements;
+	if (!ParentClass)
+	{
+		return Requirements;
+	}
+
+	for (TFieldIterator<FObjectPropertyBase> PropIt(ParentClass); PropIt; ++PropIt)
+	{
+		const FObjectPropertyBase* Property = *PropIt;
+		if (!Property)
+		{
+			continue;
+		}
+
+		const bool bRequired = Property->HasMetaData(TEXT("BindWidget"));
+		const bool bOptional = Property->HasMetaData(TEXT("BindWidgetOptional"));
+		if (!bRequired && !bOptional)
+		{
+			continue;
+		}
+
+		FBindWidgetRequirement Req;
+		Req.PropertyName = Property->GetFName();
+		Req.ExpectedWidgetClass = Property->PropertyClass;
+		Req.bOptional = bOptional;
+		Requirements.Add(Req);
+	}
+
+	return Requirements;
+}
+
+/** Collect all widget names and their UClass pointers from a widget tree. */
+static void CollectWidgetNamesFromTree(const UWidget* Widget, TMap<FName, const UClass*>& OutWidgets)
+{
+	if (!Widget)
+	{
+		return;
+	}
+
+	OutWidgets.Add(Widget->GetFName(), Widget->GetClass());
+
+	if (const UPanelWidget* Panel = Cast<UPanelWidget>(Widget))
+	{
+		for (int32 i = 0; i < Panel->GetChildrenCount(); ++i)
+		{
+			CollectWidgetNamesFromTree(Panel->GetChildAt(i), OutWidgets);
+		}
+	}
+}
+
+/** Validate widget tree against BindWidget requirements. Returns a JSON object with results. */
+static TSharedPtr<FJsonObject> ValidateBindWidgets(const UClass* ParentClass, const UWidget* RootWidget)
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+
+	const TArray<FBindWidgetRequirement> Requirements = GetBindWidgetRequirements(ParentClass);
+	if (Requirements.Num() == 0)
+	{
+		Result->SetBoolField(TEXT("passed"), true);
+		Result->SetStringField(TEXT("message"), TEXT("No BindWidget requirements on parent class."));
+		return Result;
+	}
+
+	TMap<FName, const UClass*> TreeWidgets;
+	CollectWidgetNamesFromTree(RootWidget, TreeWidgets);
+
+	TArray<TSharedPtr<FJsonValue>> Missing;
+	TArray<TSharedPtr<FJsonValue>> TypeMismatch;
+	bool bAllPassed = true;
+
+	for (const FBindWidgetRequirement& Req : Requirements)
+	{
+		const UClass** FoundClass = TreeWidgets.Find(Req.PropertyName);
+		if (!FoundClass)
+		{
+			if (!Req.bOptional)
+			{
+				const TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+				Entry->SetStringField(TEXT("name"), Req.PropertyName.ToString());
+				Entry->SetStringField(TEXT("expectedClass"), Req.ExpectedWidgetClass ? Req.ExpectedWidgetClass->GetName() : TEXT("UWidget"));
+				Entry->SetBoolField(TEXT("required"), true);
+				Missing.Add(MakeShared<FJsonValueObject>(Entry));
+				bAllPassed = false;
+			}
+			continue;
+		}
+
+		if (Req.ExpectedWidgetClass && *FoundClass && !(*FoundClass)->IsChildOf(Req.ExpectedWidgetClass))
+		{
+			const TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+			Entry->SetStringField(TEXT("name"), Req.PropertyName.ToString());
+			Entry->SetStringField(TEXT("expectedClass"), Req.ExpectedWidgetClass->GetName());
+			Entry->SetStringField(TEXT("actualClass"), (*FoundClass)->GetName());
+			Entry->SetBoolField(TEXT("required"), !Req.bOptional);
+			TypeMismatch.Add(MakeShared<FJsonValueObject>(Entry));
+			bAllPassed = false;
+		}
+	}
+
+	Result->SetBoolField(TEXT("passed"), bAllPassed);
+	if (Missing.Num() > 0)
+	{
+		Result->SetArrayField(TEXT("missing"), Missing);
+	}
+	if (TypeMismatch.Num() > 0)
+	{
+		Result->SetArrayField(TEXT("typeMismatch"), TypeMismatch);
+	}
+	if (bAllPassed)
+	{
+		Result->SetStringField(TEXT("message"), FString::Printf(
+			TEXT("All %d BindWidget requirements satisfied."), Requirements.Num()));
+	}
+	else
+	{
+		Result->SetStringField(TEXT("message"), FString::Printf(
+			TEXT("BindWidget validation failed: %d missing, %d type mismatches."), Missing.Num(), TypeMismatch.Num()));
+	}
+
+	return Result;
+}
+
 } // namespace WidgetTreeBuilderInternal
 
 // ---------------------------------------------------------------------------
@@ -1729,6 +1837,15 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ExtractWidgetBlueprint(UWidgetBluepr
 			Result->SetObjectField(TEXT("bindings"), BindingsJson);
 		}
 	}
+	else
+	{
+		// WidgetTree is null — return explicit null with diagnostic instead of silently omitting
+		Result->SetField(TEXT("rootWidget"), MakeShared<FJsonValueNull>());
+		Result->SetStringField(TEXT("widgetTreeError"),
+			WidgetBP->WidgetTree
+				? TEXT("WidgetTree exists but root widget is null. The widget tree may be empty.")
+				: TEXT("WidgetTree is null. The asset may need recompilation or manual repair in the editor."));
+	}
 
 	Result->SetArrayField(TEXT("animations"), ExtractWidgetAnimationSummaries(WidgetBP));
 	Result->SetObjectField(TEXT("compile"), BuildWidgetCompileSnapshot(WidgetBP));
@@ -1785,9 +1902,21 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 		return BuildMutationResult(Context, false, ValidationErrors);
 	}
 
+	// BindWidget validation: check widget names/types against parent C++ class BindWidget declarations
+	TSharedPtr<FJsonObject> BindWidgetValidation;
+	if (ValidationRoot && WidgetBP->ParentClass)
+	{
+		BindWidgetValidation = ValidateBindWidgets(WidgetBP->ParentClass, ValidationRoot);
+	}
+
 	if (bValidateOnly)
 	{
-		return BuildMutationResult(Context, true, {});
+		TSharedPtr<FJsonObject> Result = BuildMutationResult(Context, true, {});
+		if (BindWidgetValidation.IsValid())
+		{
+			Result->SetObjectField(TEXT("bindWidgetValidation"), BindWidgetValidation);
+		}
+		return Result;
 	}
 
 	FWidgetBlueprintPreviewGuard PreviewGuard(WidgetBP);
@@ -1844,6 +1973,10 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::BuildWidgetTree(UWidgetBlueprint* Wi
 	const bool bSuccess = OutErrors.Num() == 0;
 	const TSharedPtr<FJsonObject> Result = BuildMutationResult(Context, bSuccess, OutErrors);
 	Result->SetNumberField(TEXT("widgetCount"), WidgetCount);
+	if (BindWidgetValidation.IsValid())
+	{
+		Result->SetObjectField(TEXT("bindWidgetValidation"), BindWidgetValidation);
+	}
 	return Result;
 }
 

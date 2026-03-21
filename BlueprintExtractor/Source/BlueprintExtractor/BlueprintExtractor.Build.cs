@@ -42,6 +42,9 @@ public class BlueprintExtractor : ModuleRules
 			"GameplayTags",
 			"UMG",
 			"UMGEditor",
+			"RenderCore",
+			"RHI",
+			"ImageCore",
 			"SparseVolumeTexture"
 		});
 
