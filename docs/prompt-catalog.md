@@ -33,6 +33,6 @@ Blueprint Extractor v2 ships prompt entries for repeatable MCP workflows. Prompt
 - Turns compile output into a short triage sequence.
 - Highlights likely `BindWidget`, abstract-class, and `ListView` entry-class issues before suggesting another patch.
 - Treats `rootWidget=null` plus `widgetTreeStatus` / `widgetTreeError` as a degraded recovery signal instead of assuming extraction completely failed.
-- Redirects CommonUI button-style failures away from raw `UButton` background/style fields and toward style assets or a project-owned material-backed button base.
+- Redirects CommonUI button-style failures away from raw `UButton` background/style fields and toward `extract_commonui_button_style`, `create_commonui_button_style`, `modify_commonui_button_style`, and `apply_commonui_button_style`.
 - Reminds the caller to verify paired `bOverride_*` flags when override-coupled widget properties appear to ignore a patch.
 - Keeps the flow open until a successful compile is followed by `capture_widget_preview` or explicit `partial verification`.

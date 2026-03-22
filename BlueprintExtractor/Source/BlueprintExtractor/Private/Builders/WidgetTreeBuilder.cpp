@@ -2271,6 +2271,26 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidg
 		return BuildMutationResult(Context, false, Errors);
 	};
 
+	const TSharedPtr<FJsonObject> PendingBatchClassDefaults = MakeShared<FJsonObject>();
+	bool bHasPendingBatchClassDefaults = false;
+
+	const auto QueueBatchClassDefaults = [&PendingBatchClassDefaults, &bHasPendingBatchClassDefaults](const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors)
+	{
+		TSharedPtr<FJsonObject> DefaultsPatch;
+		const bool bHasPatch = TryGetObjectField(OperationJson, TEXT("classDefaults"), DefaultsPatch)
+			|| TryGetObjectField(OperationJson, TEXT("class_defaults"), DefaultsPatch)
+			|| TryGetObjectField(OperationJson, TEXT("properties"), DefaultsPatch);
+		if (!bHasPatch || !DefaultsPatch.IsValid())
+		{
+			OutErrors.Add(TEXT("patch_class_defaults requires classDefaults, class_defaults, or properties object"));
+			return false;
+		}
+
+		MergeJsonObjectFields(PendingBatchClassDefaults, DefaultsPatch);
+		bHasPendingBatchClassDefaults = true;
+		return true;
+	};
+
 	const auto ApplyInsertChild = [&RootWidgetJson](const TSharedPtr<FJsonObject>& OperationJson, TArray<FString>& OutErrors)
 	{
 		const FString ParentIdentifier = GetWidgetIdentifierFromPayload(
@@ -2632,6 +2652,9 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidg
 				return false;
 			}
 
+			TArray<TSharedPtr<FJsonObject>> StructuralOperations;
+			TArray<TSharedPtr<FJsonObject>> PatchWidgetOperations;
+
 			for (const TSharedPtr<FJsonValue>& OperationValue : *OperationsArray)
 			{
 				const TSharedPtr<FJsonObject> BatchOperation = OperationValue.IsValid() ? OperationValue->AsObject() : nullptr;
@@ -2648,7 +2671,39 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidg
 					return false;
 				}
 
-				if (!ApplyOperation(BatchOperationName, BatchOperation, OutErrors))
+				if (BatchOperationName == TEXT("patch_class_defaults"))
+				{
+					if (!QueueBatchClassDefaults(BatchOperation, OutErrors))
+					{
+						return false;
+					}
+					continue;
+				}
+
+				if (BatchOperationName == TEXT("patch_widget"))
+				{
+					PatchWidgetOperations.Add(BatchOperation);
+					continue;
+				}
+
+				StructuralOperations.Add(BatchOperation);
+			}
+
+			for (const TSharedPtr<FJsonObject>& StructuralOperation : StructuralOperations)
+			{
+				FString StructuralOperationName;
+				StructuralOperation->TryGetStringField(TEXT("operation"), StructuralOperationName);
+				if (!ApplyOperation(StructuralOperationName, StructuralOperation, OutErrors))
+				{
+					return false;
+				}
+			}
+
+			for (const TSharedPtr<FJsonObject>& PatchWidgetOperation : PatchWidgetOperations)
+			{
+				FString PatchWidgetOperationName;
+				PatchWidgetOperation->TryGetStringField(TEXT("operation"), PatchWidgetOperationName);
+				if (!ApplyOperation(PatchWidgetOperationName, PatchWidgetOperation, OutErrors))
 				{
 					return false;
 				}
@@ -2672,6 +2727,57 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::ModifyWidgetBlueprintStructure(UWidg
 	{
 		Context.AddError(TEXT("build_failed"), TEXT("Widget tree rebuild failed after structural mutation"), WidgetBP->GetPathName());
 		return Context.BuildResult(false);
+	}
+
+	if (Operation == TEXT("batch") && bHasPendingBatchClassDefaults)
+	{
+		const TSharedPtr<FJsonObject> ClassDefaultsPayload = MakeShared<FJsonObject>();
+		ClassDefaultsPayload->SetObjectField(TEXT("classDefaults"), CloneJsonObject(PendingBatchClassDefaults));
+
+		const TSharedPtr<FJsonObject> ClassDefaultsResult = FBlueprintAuthoring::Modify(
+			WidgetBP,
+			TEXT("patch_class_defaults"),
+			ClassDefaultsPayload,
+			bValidateOnly);
+		if (!ClassDefaultsResult.IsValid())
+		{
+			Context.AddError(TEXT("batch_patch_class_defaults_failed"), TEXT("WidgetBlueprint batch class-default patch failed"), WidgetBP->GetPathName());
+			return Context.BuildResult(false);
+		}
+
+		bool bClassDefaultsSuccess = true;
+		ClassDefaultsResult->TryGetBoolField(TEXT("success"), bClassDefaultsSuccess);
+		if (!bClassDefaultsSuccess)
+		{
+			ClassDefaultsResult->SetStringField(TEXT("operation"), TEXT("modify_widget_blueprint"));
+			ClassDefaultsResult->SetStringField(TEXT("widgetOperation"), Operation);
+			return ClassDefaultsResult;
+		}
+
+		const auto MergeResultArrayField = [&BuildResult, &ClassDefaultsResult](const TCHAR* FieldName)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* SourceArray = nullptr;
+			if (!ClassDefaultsResult->TryGetArrayField(FieldName, SourceArray) || !SourceArray || SourceArray->Num() == 0)
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* ExistingArray = nullptr;
+			TArray<TSharedPtr<FJsonValue>> MergedArray;
+			if (BuildResult->TryGetArrayField(FieldName, ExistingArray) && ExistingArray)
+			{
+				MergedArray = *ExistingArray;
+			}
+
+			MergedArray.Append(*SourceArray);
+			BuildResult->SetArrayField(FieldName, MergedArray);
+		};
+
+		MergeResultArrayField(TEXT("dirtyPackages"));
+		MergeResultArrayField(TEXT("changedObjects"));
+		MergeResultArrayField(TEXT("diagnostics"));
+		MergeResultArrayField(TEXT("warnings"));
+		MergeResultArrayField(TEXT("errors"));
 	}
 
 	BuildResult->SetStringField(TEXT("operation"), TEXT("modify_widget_blueprint"));

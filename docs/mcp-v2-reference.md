@@ -79,9 +79,21 @@ Task-aware families currently include:
 
 ## Project-Code Notes
 
+- `wait_for_editor` polls Remote Control once per second and returns `connected`, `elapsedMs`, `timeoutMs`, and `attempts`, with `editor_unavailable` when the timeout elapses.
 - `trigger_live_coding` returns `fallbackRecommended` and a normalized `reason` when editor-side Live Coding cannot apply the requested change. If a recent external build exists, it is surfaced as `lastExternalBuild`.
 - `sync_project_code.restart_first=true` now means shutdown-first orchestration: the editor is asked to close without relaunching, the host builds with unlocked DLLs, then the host launches the editor and waits for Remote Control to reconnect.
 - `run_automation_tests` and `get_automation_test_run` now surface `verificationArtifacts` for image-based automation report outputs, normalized to the same verification-artifact contract used by widget captures.
+
+## CommonUI Button Style Workflow
+
+Use the dedicated CommonUI family instead of raw `UButton` wrapper fields:
+
+1. `create_commonui_button_style`
+2. `modify_commonui_button_style`
+3. `extract_commonui_button_style`
+4. `apply_commonui_button_style`
+
+`apply_commonui_button_style` patches the wrapper-managed `Style` class default on `CommonButtonBase`-derived WidgetBlueprints. Raw `BackgroundColor` and `WidgetStyle` writes on CommonUI wrappers remain unsupported.
 
 ## Primary v2 Workflows
 
