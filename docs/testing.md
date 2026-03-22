@@ -80,7 +80,7 @@ The UE runner:
 4. builds `BPXFixtureEditor`,
 5. runs headless editor automation via `UnrealEditor-Cmd`.
 
-The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, degraded widget extraction recovery, structural widget mutations, override-coupled widget properties such as `bOverride_*`, classic material graph authoring, material-instance parity, widget preview capture/diff verification, and a CommonUI parent canary.
+The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, degraded widget extraction recovery, structural widget mutations, non-variable widget selector coverage, batched widget class-default patches, override-coupled widget properties such as `bOverride_*`, classic material graph authoring, material-instance parity, widget preview capture/diff verification, and CommonUI widget/style round-trips.
 
 Use the visual filter without `-NullRHI` when you need to exercise the capture lane directly, for example:
 
@@ -96,6 +96,7 @@ Recommended CI split:
   - `pwsh ./scripts/test-mcp.ps1 -PackSmoke -PublishDryRun`
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT>`
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -BuildPlugin -AutomationFilter "BlueprintExtractor.Authoring.CommonUIWidgetRoundTrip"`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -BuildPlugin -AutomationFilter "BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip"`
 - Nightly or release:
   - repeat the PR gate on UE 5.6 and 5.7
   - add the live MCP smoke pass with `BLUEPRINT_EXTRACTOR_LIVE_E2E=1`

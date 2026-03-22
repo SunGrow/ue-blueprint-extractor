@@ -1,6 +1,7 @@
 #include "PropertySerializer.h"
 #include "Authoring/AuthoringHelpers.h"
 
+#include "Components/Widget.h"
 #include "JsonObjectConverter.h"
 #include "UObject/UnrealType.h"
 
@@ -230,6 +231,11 @@ TSharedPtr<FJsonObject> FPropertySerializer::SerializePropertyOverridesAgainstBa
 	for (TFieldIterator<FProperty> PropIt(ObjectClass); PropIt; ++PropIt)
 	{
 		const FProperty* Property = *PropIt;
+
+		if (Object->IsA<UWidget>() && Property->GetFName() == GET_MEMBER_NAME_CHECKED(UWidget, Slot))
+		{
+			continue;
+		}
 
 		if (!Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible))
 		{
@@ -552,7 +558,7 @@ static FString BuildPropertyNotFoundMessage(const UClass* TargetClass, const FSt
 
 	if (IsCommonUIButtonWrapperPropertyGap(TargetClass, RequestedProperty))
 	{
-		Message += TEXT(". CommonUI unsupported surface: UCommonButtonBase exposes a wrapper widget, not raw UButton background/style fields. Use a CommonUI style asset or a project-specific material-backed button base instead.");
+		Message += TEXT(". CommonUI unsupported surface: UCommonButtonBase exposes a wrapper widget, not raw UButton background/style fields. Use extract_commonui_button_style, create_commonui_button_style, modify_commonui_button_style, or apply_commonui_button_style instead.");
 	}
 
 	const TArray<FString> Suggestions = FindEditablePropertySuggestions(TargetClass, RequestedProperty);

@@ -4,7 +4,7 @@ MCP server for the Unreal Engine `BlueprintExtractor` plugin.
 
 This package exposes the `blueprint-extractor` server over stdio and talks to a running Unreal Editor through the Remote Control HTTP API.
 
-The current v2 MCP contract exposes 87 tools, 12 resources, 4 resource templates, and 4 prompts.
+The current v2 MCP contract exposes 92 tools, 12 resources, 4 resource templates, and 4 prompts.
 Public tools use canonical `snake_case` inputs and return structured JSON success or error envelopes.
 
 Current surface area includes:
@@ -12,8 +12,9 @@ Current surface area includes:
 - read-only extraction tools for Blueprints, AI assets, data assets, curves, materials, and animation metadata
 - explicit-save authoring tools for the supported editor-side asset families, including compact widget extraction, incremental widget-structure ops, widget class-default routing, composable material authoring (`set_material_settings`, `add_material_expression`, `connect_material_expressions`, `bind_material_property`), and the advanced `modify_material` escape hatch
 - dedicated Enhanced Input authoring tools for `InputAction` and `InputMappingContext` assets (`create_input_action`, `modify_input_action`, `create_input_mapping_context`, `modify_input_mapping_context`)
+- dedicated CommonUI button-style tools (`create_commonui_button_style`, `extract_commonui_button_style`, `modify_commonui_button_style`, `apply_commonui_button_style`) for `CommonButtonBase` wrapper surfaces instead of raw `UButton` field mutation
 - async import and reimport tools with polling for generic assets plus typed texture and mesh helpers
-- host-side project automation tools for external builds, Live Coding requests, restart/reconnect orchestration, a thin window-polish helper, and runtime automation artifacts that surface verification screenshots back to the caller
+- host-side project automation tools for external builds, Live Coding requests, restart/reconnect orchestration, `wait_for_editor` recovery polling, a thin window-polish helper, and runtime automation artifacts that surface verification screenshots back to the caller
 - a shared visual-verification artifact contract across widget captures, capture diffs, and automation-run screenshots so the caller can inspect rendered results instead of relying on semantic success alone
 - static guidance resources, resource templates, and prompts for authoring conventions, selector rules, font roles, project automation, example payloads, widget patterns, unsupported surfaces, safe UI redesign, and classic material graph guidance
 

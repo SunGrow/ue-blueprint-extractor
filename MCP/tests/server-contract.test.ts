@@ -236,9 +236,14 @@ describe('createBlueprintExtractorServer', () => {
     const runAutomationTests = tools.tools.find((tool) => tool.name === 'run_automation_tests');
     const getAutomationTestRun = tools.tools.find((tool) => tool.name === 'get_automation_test_run');
     const listAutomationTestRuns = tools.tools.find((tool) => tool.name === 'list_automation_test_runs');
+    const waitForEditor = tools.tools.find((tool) => tool.name === 'wait_for_editor');
+    const createCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'create_commonui_button_style');
+    const extractCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'extract_commonui_button_style');
+    const modifyCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'modify_commonui_button_style');
+    const applyCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'apply_commonui_button_style');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(87);
+    expect(tools.tools).toHaveLength(92);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -276,6 +281,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'get_project_automation_context')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'trigger_live_coding')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'wait_for_editor')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'capture_widget_preview')).toBe(true);
@@ -289,6 +295,10 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'modify_input_action')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_input_mapping_context')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_input_mapping_context')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'create_commonui_button_style')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'extract_commonui_button_style')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_commonui_button_style')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'apply_commonui_button_style')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_blueprint_graphs')).toBe(true);
     expect(tools.tools.every((tool) => tool.outputSchema)).toBe(true);
     expectSchemaProperty(importAssets, 'jobId');
@@ -314,6 +324,11 @@ describe('createBlueprintExtractorServer', () => {
     expect(captureWidgetPreview?.annotations?.readOnlyHint).toBe(true);
     expectSchemaProperty(applyWindowUiChanges, 'verification');
     expect(getAutomationTestRun?.annotations?.readOnlyHint).toBe(true);
+    expect(waitForEditor?.annotations?.readOnlyHint).toBe(true);
+    expect(createCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
+    expect(extractCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(true);
+    expect(modifyCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
+    expect(applyCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
     expect(saveAssets?.annotations?.idempotentHint).toBe(true);
   });
 
@@ -356,16 +371,19 @@ describe('createBlueprintExtractorServer', () => {
     expect(widgetBestPractices.contents[0]?.text).toContain('CommonActivatableWidget');
     expect(widgetBestPractices.contents[0]?.text).toContain('checkpoint_after_mutation_steps=true');
     expect(widgetBestPractices.contents[0]?.text).toContain('capture_widget_preview');
+    expect(widgetBestPractices.contents[0]?.text).toContain('apply_commonui_button_style');
     expect(materialGraphGuidance.contents[0]?.text).toContain('Blueprint Extractor Material Graph Guidance');
     expect(materialGraphGuidance.contents[0]?.text).toContain('expression_guid');
     expect(fontRoles.contents[0]?.text).toContain('Blueprint Extractor Font Roles');
     expect(projectAutomation.contents[0]?.text).toContain('Blueprint Extractor Project Automation');
     expect(projectAutomation.contents[0]?.text).toContain('shutdown-first');
+    expect(projectAutomation.contents[0]?.text).toContain('wait_for_editor');
     expect(verificationWorkflows.contents[0]?.text).toContain('Blueprint Extractor Verification Workflows');
     expect(verificationWorkflows.contents[0]?.text).toContain('run_automation_tests');
     expect(verificationWorkflows.contents[0]?.text).toContain('partial verification');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('CommonUI wrapper widgets');
+    expect(unsupportedSurfaces.contents[0]?.text).toContain('create_commonui_button_style');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('Safe UI Redesign Workflow');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('capture_widget_preview');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('partial verification');
@@ -425,6 +443,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(promptTextByName.design_menu_screen).toContain('partial verification');
     expect(promptTextByName.debug_widget_compile_errors).toContain('capture_widget_preview');
     expect(promptTextByName.debug_widget_compile_errors).toContain('partial verification');
+    expect(promptTextByName.debug_widget_compile_errors).toContain('apply_commonui_button_style');
   });
 
   it('validates example catalog payloads against the live tool schemas', async () => {
@@ -1077,6 +1096,369 @@ describe('createBlueprintExtractorServer', () => {
           SlotJson: JSON.stringify({}),
           WidgetOptionsJson: JSON.stringify({}),
           bValidateOnly: true,
+        },
+      },
+    ]);
+  });
+
+  it('accepts batch patch_class_defaults operations through modify_widget_blueprint', async () => {
+    const fakeClient = new FakeUEClient((method, params) => JSON.stringify({
+      success: true,
+      operation: 'modify_widget_blueprint',
+      method,
+      params,
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'modify_widget_blueprint',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        operation: 'batch',
+        operations: [
+          {
+            operation: 'insert_child',
+            parent_widget_path: 'WindowRoot/ContentRoot',
+            child_widget: {
+              class: 'TextBlock',
+              name: 'BodyText',
+              properties: { Text: 'Body' },
+            },
+          },
+          {
+            operation: 'patch_class_defaults',
+            class_defaults: {
+              ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
+            },
+          },
+        ],
+      },
+    });
+
+    expect(parseToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'modify_widget_blueprint',
+    });
+    expect(fakeClient.calls).toEqual([{
+      method: 'ModifyWidgetBlueprintStructure',
+      params: {
+        AssetPath: '/Game/UI/WBP_Window',
+        Operation: 'batch',
+        PayloadJson: JSON.stringify({
+          operations: [
+            {
+              operation: 'insert_child',
+              parent_widget_path: 'WindowRoot/ContentRoot',
+              child_widget: {
+                class: 'TextBlock',
+                name: 'BodyText',
+                properties: { Text: 'Body' },
+              },
+            },
+            {
+              operation: 'patch_class_defaults',
+              class_defaults: {
+                ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
+              },
+            },
+          ],
+        }),
+        bValidateOnly: false,
+      },
+    }]);
+  });
+
+  it('waits for the editor connection to return', async () => {
+    let attempts = 0;
+    const fakeClient = new FakeUEClient(
+      () => JSON.stringify({ success: true }),
+      () => {
+        attempts += 1;
+        return attempts >= 3;
+      },
+    );
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'wait_for_editor',
+      arguments: {
+        timeout_seconds: 5,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(parseToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'wait_for_editor',
+      connected: true,
+      attempts: 3,
+      timeoutMs: 5000,
+    });
+    expect(fakeClient.calls).toEqual([]);
+  });
+
+  it('returns editor_unavailable when wait_for_editor times out', async () => {
+    const fakeClient = new FakeUEClient(
+      () => JSON.stringify({ success: true }),
+      () => false,
+    );
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'wait_for_editor',
+      arguments: {
+        timeout_seconds: 1,
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseToolResult(result)).toMatchObject({
+      success: false,
+      operation: 'wait_for_editor',
+      code: 'editor_unavailable',
+      recoverable: true,
+      retry_after_ms: 1000,
+      connected: false,
+      timeoutMs: 1000,
+    });
+    expect(fakeClient.calls).toEqual([]);
+  });
+
+  it('normalizes offline editor failures into editor_unavailable', async () => {
+    const fakeClient = new FakeUEClient(() => {
+      throw new Error('UE Editor not running or Remote Control not available on 127.0.0.1:30010');
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'search_assets',
+      arguments: {
+        query: 'Player',
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseToolResult(result)).toMatchObject({
+      success: false,
+      operation: 'search_assets',
+      code: 'editor_unavailable',
+      recoverable: true,
+      retry_after_ms: 1000,
+    });
+    expect(getTextContent(result)).toContain('wait_for_editor');
+  });
+
+  it('normalizes missing subsystem failures into subsystem_unavailable', async () => {
+    const fakeClient = new FakeUEClient(() => {
+      throw new Error('BlueprintExtractor subsystem not found. Ensure the plugin is loaded in the editor or set UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH.');
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'search_assets',
+      arguments: {
+        query: 'Player',
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseToolResult(result)).toMatchObject({
+      success: false,
+      operation: 'search_assets',
+      code: 'subsystem_unavailable',
+      recoverable: true,
+      retry_after_ms: 1000,
+    });
+    expect(getTextContent(result)).toContain('BlueprintExtractor plugin/subsystem');
+  });
+
+  it('routes the CommonUI button style tools through the existing Blueprint and Widget authoring surfaces', async () => {
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'ExtractBlueprint') {
+        return JSON.stringify({
+          success: true,
+          operation: 'extract_blueprint',
+          parentClassPath: '/Script/CommonUI.CommonButtonStyle',
+          classDefaults: {
+            NormalBase: {
+              ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+            },
+            Disabled: {
+              ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+            },
+            MinWidth: 240,
+            NormalTextStyle: '/Game/UI/TS_Label.TS_Label_C',
+          },
+        });
+      }
+
+      return JSON.stringify({
+        success: true,
+        operation: method,
+        method,
+        params,
+      });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const createResult = await harness.client.callTool({
+      name: 'create_commonui_button_style',
+      arguments: {
+        asset_path: '/Game/UI/BP_CommonButtonStyle',
+        asset_class_path: '/Script/CommonUI.CommonButtonStyle',
+        style: {
+          normal: {
+            ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+          },
+          disabled: {
+            ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+          },
+          padding: {
+            min_width: 240,
+          },
+          text_styles: {
+            normal: '/Game/UI/TS_Label.TS_Label_C',
+          },
+        },
+      },
+    });
+    const extractResult = await harness.client.callTool({
+      name: 'extract_commonui_button_style',
+      arguments: {
+        asset_path: '/Game/UI/BP_CommonButtonStyle',
+      },
+    });
+    const modifyResult = await harness.client.callTool({
+      name: 'modify_commonui_button_style',
+      arguments: {
+        asset_path: '/Game/UI/BP_CommonButtonStyle',
+        style: {
+          selected_hovered: {
+            ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+          },
+        },
+      },
+    });
+    const applyResult = await harness.client.callTool({
+      name: 'apply_commonui_button_style',
+      arguments: {
+        asset_path: '/Game/UI/WBP_CommonButton',
+        style_asset_path: '/Game/UI/BP_CommonButtonStyle',
+      },
+    });
+
+    expect(parseToolResult(createResult)).toMatchObject({
+      success: true,
+      operation: 'create_commonui_button_style',
+      style: {
+        normal: {
+          ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+        },
+        disabled: {
+          ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+        },
+        padding: {
+          min_width: 240,
+        },
+        text_styles: {
+          normal: '/Game/UI/TS_Label.TS_Label_C',
+        },
+      },
+    });
+    expect(parseToolResult(extractResult)).toMatchObject({
+      success: true,
+      operation: 'extract_commonui_button_style',
+      style: {
+        normal: {
+          ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+        },
+        disabled: {
+          ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+        },
+        padding: {
+          min_width: 240,
+        },
+        text_styles: {
+          normal: '/Game/UI/TS_Label.TS_Label_C',
+        },
+      },
+    });
+    expect(parseToolResult(modifyResult)).toMatchObject({
+      success: true,
+      operation: 'modify_commonui_button_style',
+      style: {
+        selected_hovered: {
+          ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+        },
+      },
+    });
+    expect(parseToolResult(applyResult)).toMatchObject({
+      success: true,
+      operation: 'apply_commonui_button_style',
+      styleClassPath: '/Game/UI/BP_CommonButtonStyle.BP_CommonButtonStyle_C',
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'CreateBlueprint',
+        params: {
+          AssetPath: '/Game/UI/BP_CommonButtonStyle',
+          ParentClassPath: '/Script/CommonUI.CommonButtonStyle',
+          PayloadJson: JSON.stringify({
+            classDefaults: {
+              NormalBase: {
+                ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+              },
+              Disabled: {
+                ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+              },
+              NormalTextStyle: '/Game/UI/TS_Label.TS_Label_C',
+              MinWidth: 240,
+            },
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'ExtractBlueprint',
+        params: {
+          AssetPath: '/Game/UI/BP_CommonButtonStyle',
+          Scope: 'ClassLevel',
+          GraphFilter: '',
+          bIncludeClassDefaults: true,
+        },
+      },
+      {
+        method: 'ModifyBlueprintMembers',
+        params: {
+          AssetPath: '/Game/UI/BP_CommonButtonStyle',
+          Operation: 'patch_class_defaults',
+          PayloadJson: JSON.stringify({
+            classDefaults: {
+              SelectedHovered: {
+                ResourceObject: '/Engine/EngineResources/DefaultTexture.DefaultTexture',
+              },
+            },
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'ModifyWidgetBlueprintStructure',
+        params: {
+          AssetPath: '/Game/UI/WBP_CommonButton',
+          Operation: 'patch_class_defaults',
+          PayloadJson: JSON.stringify({
+            classDefaults: {
+              Style: '/Game/UI/BP_CommonButtonStyle.BP_CommonButtonStyle_C',
+            },
+          }),
+          bValidateOnly: false,
         },
       },
     ]);

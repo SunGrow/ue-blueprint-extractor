@@ -26,6 +26,7 @@ const serverInstructions = [
   'Use search_assets before extract_* tools when the exact asset path is not already known.',
   'For UI redesign work, inspect the current HUD, transition widgets, and class defaults before replacing widget trees.',
   'Write tools mutate the running editor but do not save automatically. Call save_assets after successful mutations you want to persist.',
+  'Use wait_for_editor after restart windows or transient Remote Control disconnects before retrying editor-backed tools.',
   'Prefer validate_only=true the first time you author a new asset family or payload shape.',
   'Use the composable material tools for settings, node creation, node connection, and root-property binding. Treat modify_material and modify_material_function as advanced escape hatches.',
   'Use create_input_action, modify_input_action, create_input_mapping_context, and modify_input_mapping_context for Enhanced Input authoring. Generic data asset mutation is intentionally rejected for those asset classes.',
@@ -69,6 +70,172 @@ type PromptCatalogEntry = {
   args: Record<string, z.ZodTypeAny>;
   buildPrompt: (args: Record<string, unknown>) => string;
 };
+
+const EDITOR_UNAVAILABLE_MESSAGE_FRAGMENT = 'UE Editor not running or Remote Control not available';
+const SUBSYSTEM_UNAVAILABLE_MESSAGE_FRAGMENT = 'BlueprintExtractor subsystem not found';
+const EDITOR_POLL_INTERVAL_MS = 1_000;
+
+const commonUIButtonStyleBrushFields = [
+  ['normal', 'NormalBase'],
+  ['normal_hovered', 'NormalHovered'],
+  ['normal_pressed', 'NormalPressed'],
+  ['selected', 'SelectedBase'],
+  ['selected_hovered', 'SelectedHovered'],
+  ['selected_pressed', 'SelectedPressed'],
+  ['disabled', 'Disabled'],
+] as const;
+
+const commonUIButtonTextStyleFields = [
+  ['normal', 'NormalTextStyle'],
+  ['normal_hovered', 'NormalHoveredTextStyle'],
+  ['selected', 'SelectedTextStyle'],
+  ['selected_hovered', 'SelectedHoveredTextStyle'],
+  ['disabled', 'DisabledTextStyle'],
+] as const;
+
+const commonUIButtonPaddingFields = [
+  ['button', 'ButtonPadding'],
+  ['custom', 'CustomPadding'],
+  ['min_width', 'MinWidth'],
+  ['min_height', 'MinHeight'],
+  ['max_width', 'MaxWidth'],
+  ['max_height', 'MaxHeight'],
+] as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildGeneratedBlueprintClassPath(assetPathOrObjectPath: string): string {
+  const trimmed = assetPathOrObjectPath.trim();
+  if (trimmed.endsWith('_C')) {
+    return trimmed;
+  }
+
+  const objectPath = trimmed.includes('.')
+    ? trimmed
+    : `${trimmed}.${trimmed.split('/').pop() ?? ''}`;
+  return `${objectPath}_C`;
+}
+
+function normalizeCommonUIButtonStyleInput(style: unknown): Record<string, unknown> {
+  const stylePayload = isPlainObject(style) ? style : {};
+  const classDefaults: Record<string, unknown> = {};
+
+  for (const [styleKey, classDefaultKey] of commonUIButtonStyleBrushFields) {
+    if (styleKey in stylePayload) {
+      classDefaults[classDefaultKey] = stylePayload[styleKey];
+    }
+  }
+
+  const textStyles = isPlainObject(stylePayload.text_styles) ? stylePayload.text_styles : null;
+  if (textStyles) {
+    for (const [styleKey, classDefaultKey] of commonUIButtonTextStyleFields) {
+      if (styleKey in textStyles) {
+        classDefaults[classDefaultKey] = textStyles[styleKey];
+      }
+    }
+  }
+
+  const padding = isPlainObject(stylePayload.padding) ? stylePayload.padding : null;
+  if (padding) {
+    for (const [styleKey, classDefaultKey] of commonUIButtonPaddingFields) {
+      if (styleKey in padding) {
+        classDefaults[classDefaultKey] = padding[styleKey];
+      }
+    }
+  }
+
+  if (typeof stylePayload.single_material === 'boolean') {
+    classDefaults.bSingleMaterial = stylePayload.single_material;
+  } else if (isPlainObject(stylePayload.single_material)) {
+    const singleMaterial = stylePayload.single_material;
+    if (typeof singleMaterial.enabled === 'boolean') {
+      classDefaults.bSingleMaterial = singleMaterial.enabled;
+    }
+    if ('brush' in singleMaterial) {
+      classDefaults.SingleMaterialBrush = singleMaterial.brush;
+    }
+  }
+
+  if ('single_material_brush' in stylePayload) {
+    classDefaults.SingleMaterialBrush = stylePayload.single_material_brush;
+  }
+
+  return classDefaults;
+}
+
+function extractCommonUIButtonStyle(classDefaults: unknown): Record<string, unknown> {
+  const defaults = isPlainObject(classDefaults) ? classDefaults : {};
+  const style: Record<string, unknown> = {};
+
+  for (const [styleKey, classDefaultKey] of commonUIButtonStyleBrushFields) {
+    if (classDefaultKey in defaults) {
+      style[styleKey] = defaults[classDefaultKey];
+    }
+  }
+
+  const textStyles: Record<string, unknown> = {};
+  for (const [styleKey, classDefaultKey] of commonUIButtonTextStyleFields) {
+    if (classDefaultKey in defaults) {
+      textStyles[styleKey] = defaults[classDefaultKey];
+    }
+  }
+  if (Object.keys(textStyles).length > 0) {
+    style.text_styles = textStyles;
+  }
+
+  const padding: Record<string, unknown> = {};
+  for (const [styleKey, classDefaultKey] of commonUIButtonPaddingFields) {
+    if (classDefaultKey in defaults) {
+      padding[styleKey] = defaults[classDefaultKey];
+    }
+  }
+  if (Object.keys(padding).length > 0) {
+    style.padding = padding;
+  }
+
+  if ('bSingleMaterial' in defaults || 'SingleMaterialBrush' in defaults) {
+    style.single_material = {
+      ...(typeof defaults.bSingleMaterial === 'boolean' ? { enabled: defaults.bSingleMaterial } : {}),
+      ...('SingleMaterialBrush' in defaults ? { brush: defaults.SingleMaterialBrush } : {}),
+    };
+  }
+
+  return style;
+}
+
+function classifyRecoverableToolFailure(toolName: string, message: string) {
+  if (message.includes(EDITOR_UNAVAILABLE_MESSAGE_FRAGMENT)) {
+    return {
+      code: 'editor_unavailable',
+      recoverable: true,
+      retry_after_ms: EDITOR_POLL_INTERVAL_MS,
+      next_steps: [
+        'Call wait_for_editor to wait for the UE editor and Remote Control to come back online.',
+        `Retry ${toolName} after wait_for_editor returns connected=true.`,
+      ],
+    };
+  }
+
+  if (message.includes(SUBSYSTEM_UNAVAILABLE_MESSAGE_FRAGMENT)) {
+    return {
+      code: 'subsystem_unavailable',
+      recoverable: true,
+      retry_after_ms: EDITOR_POLL_INTERVAL_MS,
+      next_steps: [
+        'Call wait_for_editor to confirm the editor has fully reconnected after the restart window.',
+        'If the editor is connected but this persists, verify the BlueprintExtractor plugin/subsystem loaded successfully and retry the same tool.',
+      ],
+    };
+  }
+
+  return null;
+}
 
 export const exampleCatalog: Record<string, ExampleFamily> = {
   widget_blueprint: {
@@ -325,7 +492,7 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
       `Debug WidgetBlueprint compile failures for ${widget_asset_path}.`,
       compile_summary_json ? `Compile summary:\n${compile_summary_json}` : 'Start by compiling the widget blueprint and inspecting compile diagnostics.',
       'Check for BindWidget type/name mismatches, abstract widget classes in the tree, stale class-default references, and degraded extraction states such as rootWidget=null with widgetTreeStatus/widgetTreeError.',
-      'If the failure is tied to CommonUI button styling, treat raw UButton background/style fields as unsupported wrapper surfaces and redirect to CommonUI style assets or a project-owned material-backed button base.',
+      'If the failure is tied to CommonUI button styling, treat raw UButton background/style fields as unsupported wrapper surfaces and redirect to extract_commonui_button_style, create_commonui_button_style, modify_commonui_button_style, or apply_commonui_button_style.',
       'If the patch touched WidthOverride, HeightOverride, MinDesiredHeight, or similar overrides, verify the paired bOverride_* flags are enabled before assuming the write failed.',
       'Return the minimal follow-up extract/modify/compile sequence needed to fix the compile state, then finish with capture_widget_preview or explicit partial verification if rendering is blocked.',
     ].join('\n'),
@@ -342,7 +509,7 @@ export function createBlueprintExtractorServer(
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '2.3.0',
+    version: '2.4.0',
   }, {
     instructions: serverInstructions,
   });
@@ -733,6 +900,13 @@ export function createBlueprintExtractorServer(
   }
 
   function defaultNextSteps(toolName: string, payload?: Record<string, unknown>): string[] {
+    if (toolName === 'wait_for_editor') {
+      return [
+        'Retry wait_for_editor if the editor is still restarting.',
+        'Once connected=true, rerun the blocked editor-backed tool.',
+      ];
+    }
+
     if (toolName === 'compile_widget_blueprint') {
       return [
         'Inspect compile.messages and diagnostics for the first failing widget or property.',
@@ -804,25 +978,38 @@ export function createBlueprintExtractorServer(
         ? payload.error
         : (isRecord(firstDiagnostic) && typeof firstDiagnostic.message === 'string')
           ? firstDiagnostic.message
-        : payloadOrError instanceof Error
-          ? payloadOrError.message
-          : typeof payloadOrError === 'string'
-            ? payloadOrError.replace(/^Error:\s*/, '')
-            : `Tool '${toolName}' failed.`;
+          : payloadOrError instanceof Error
+            ? payloadOrError.message
+            : typeof payloadOrError === 'string'
+              ? payloadOrError.replace(/^Error:\s*/, '')
+              : `Tool '${toolName}' failed.`;
+    const classification = classifyRecoverableToolFailure(toolName, message);
     const envelope: Record<string, unknown> = {
       ...payload,
       success: false,
       operation: typeof payload.operation === 'string' ? payload.operation : toolName,
       code: typeof payload.code === 'string'
         ? payload.code
-        : (isRecord(firstDiagnostic) && typeof firstDiagnostic.code === 'string' && firstDiagnostic.code.length > 0)
-          ? firstDiagnostic.code
-          : 'tool_execution_failed',
+        : classification?.code ?? (
+          (isRecord(firstDiagnostic) && typeof firstDiagnostic.code === 'string' && firstDiagnostic.code.length > 0)
+            ? firstDiagnostic.code
+            : 'tool_execution_failed'
+        ),
       message,
-      recoverable: typeof payload.recoverable === 'boolean' ? payload.recoverable : true,
-      next_steps: Array.isArray(payload.next_steps) ? payload.next_steps : defaultNextSteps(toolName, payload),
+      recoverable: typeof payload.recoverable === 'boolean'
+        ? payload.recoverable
+        : classification?.recoverable ?? true,
+      next_steps: Array.isArray(payload.next_steps)
+        ? payload.next_steps
+        : classification?.next_steps ?? defaultNextSteps(toolName, payload),
       execution: inferExecutionMetadata(toolName, payload),
     };
+
+    if (typeof payload.retry_after_ms === 'number' && Number.isFinite(payload.retry_after_ms)) {
+      envelope.retry_after_ms = payload.retry_after_ms;
+    } else if (typeof classification?.retry_after_ms === 'number') {
+      envelope.retry_after_ms = classification.retry_after_ms;
+    }
 
     if (diagnostics.length > 0) {
       envelope.diagnostics = diagnostics;
@@ -1113,6 +1300,7 @@ server.resource(
         '',
         'Current write-capable families:',
         '- WidgetBlueprint: create_widget_blueprint, build_widget_tree, modify_widget, modify_widget_blueprint, compile_widget_blueprint',
+        '- CommonUI button style Blueprints: extract_commonui_button_style, create_commonui_button_style, modify_commonui_button_style, apply_commonui_button_style',
         '- DataAsset: create_data_asset, modify_data_asset',
         '- DataTable: create_data_table, modify_data_table',
         '- Curve: create_curve, modify_curve',
@@ -1281,7 +1469,7 @@ server.resource(
         '- Prefer CommonActivatableWidget as the root parent for CommonUI screens and windows.',
         '- Prefer VerticalBox, HorizontalBox, Overlay, Border, SizeBox, ScrollBox, and NamedSlot over CanvasPanel unless absolute positioning is required.',
         '- Keep styling centralized. Reuse fonts, colors, and button classes instead of repeating large inline property blobs.',
-        '- CommonButtonBase is not a raw UButton surface. Do not target UButton background/style fields through patch_class_defaults or patch_widget on CommonUI wrappers; use a CommonUI style asset or a project-owned material-backed button base.',
+        '- CommonButtonBase is not a raw UButton surface. Do not target UButton background/style fields through patch_class_defaults or patch_widget on CommonUI wrappers; use extract_commonui_button_style, create_commonui_button_style, modify_commonui_button_style, and apply_commonui_button_style instead.',
         '- When extract_widget_blueprint reports rootWidget=null, inspect widgetTreeStatus, widgetTreeError, and compile.errors before attempting structural rewrites. A degraded snapshot is still useful for recovery.',
         '- WidthOverride, HeightOverride, MinDesiredHeight, and similar fields may require paired bOverride_* flags. The write path now enables those flags automatically, but re-extract after patching to confirm the authored value landed where expected.',
         '- For long multi-step UI flows, use apply_window_ui_changes.checkpoint_after_mutation_steps=true so later compile/debug interruptions do not discard earlier successful edits.',
@@ -1385,6 +1573,7 @@ server.resource(
         '- compile_project_code and sync_project_code resolve engine_root, project_path, and target in this order: explicit args -> editor context -> environment.',
         '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups. changed_paths remains an accepted compatibility input but the current editor-side trigger ignores it. When Live Coding reports NoChanges or another fallback state, the result includes fallbackRecommended, reason, and the last external build context when available.',
         '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect. When save_dirty_assets is true, all dirty packages are saved before the restart to prevent modal save dialogs.',
+        '- wait_for_editor polls Remote Control once per second and returns a normalized readiness result that callers can use after restart windows or transient disconnects.',
         '- sync_project_code requires explicit changed_paths and chooses Live Coding vs build_and_restart deterministically.',
         '- sync_project_code.restart_first now means shutdown-first: save/checkpoint if requested, ask the editor to close without relaunching, build with the DLL unlocked, then launch the editor from the MCP host and wait for reconnect.',
         '- apply_window_ui_changes can checkpoint after each mutation step without changing the low-level explicit-save contract. Use that when debugging editor ensures or breakpoint-heavy UI iterations.',
@@ -1720,7 +1909,7 @@ server.registerResource(
         '- Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes. Use the dedicated InputAction/InputMappingContext tools instead.',
         '- modify_material and modify_material_function remain available but are advanced escape hatches, not the primary authoring workflow.',
         '- There is still no first-class Substrate graph DSL.',
-        '- CommonUI wrapper widgets are not a backdoor into internal Slate/UButton background or style fields. For CommonButtonBase-family widgets, treat raw UButton background/style properties as unsupported and use CommonUI style assets or a project-owned material-backed button base.',
+        '- CommonUI wrapper widgets are not a backdoor into internal Slate/UButton background or style fields. For CommonButtonBase-family widgets, treat raw UButton background/style properties as unsupported and use extract_commonui_button_style, create_commonui_button_style, modify_commonui_button_style, or apply_commonui_button_style.',
         '- Raw authored animation track synthesis is out of scope. Animation authoring remains metadata-oriented.',
         '- World editing and runtime actor manipulation are out of scope for this server.',
       ].join('\n'),
@@ -3573,6 +3762,190 @@ server.registerTool(
 );
 
 server.registerTool(
+  'create_commonui_button_style',
+  {
+    title: 'Create CommonUI Button Style',
+    description: 'Create a Blueprint-based CommonUI button style asset from a normalized style payload.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path for the new CommonUI button style Blueprint.',
+      ),
+      asset_class_path: z.string().describe(
+        'Blueprint parent class path. It must inherit from UCommonButtonStyle.',
+      ),
+      style: JsonObjectSchema.optional().default({}).describe(
+        'Optional normalized CommonUI button style payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the creation request without creating the Blueprint asset.',
+      ),
+    },
+    annotations: {
+      title: 'Create CommonUI Button Style',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, asset_class_path, style, validate_only }) => {
+    try {
+      const classDefaults = normalizeCommonUIButtonStyleInput(style);
+      const parsed = await callSubsystemJson('CreateBlueprint', {
+        AssetPath: asset_path,
+        ParentClassPath: asset_class_path,
+        PayloadJson: JSON.stringify({
+          classDefaults,
+        }),
+        bValidateOnly: validate_only,
+      });
+
+      return jsonToolSuccess({
+        ...parsed,
+        operation: 'create_commonui_button_style',
+        style: extractCommonUIButtonStyle(classDefaults),
+      });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'extract_commonui_button_style',
+  {
+    title: 'Extract CommonUI Button Style',
+    description: 'Extract a Blueprint-based CommonUI button style into the normalized public schema.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the CommonUI button style Blueprint.',
+      ),
+    },
+    annotations: {
+      title: 'Extract CommonUI Button Style',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path }) => {
+    try {
+      const parsed = await callSubsystemJson('ExtractBlueprint', {
+        AssetPath: asset_path,
+        Scope: 'ClassLevel',
+        GraphFilter: '',
+        bIncludeClassDefaults: true,
+      });
+
+      return jsonToolSuccess({
+        ...parsed,
+        operation: 'extract_commonui_button_style',
+        style: extractCommonUIButtonStyle(parsed.classDefaults),
+      });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_commonui_button_style',
+  {
+    title: 'Modify CommonUI Button Style',
+    description: 'Patch a Blueprint-based CommonUI button style via a normalized style payload.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the CommonUI button style Blueprint.',
+      ),
+      style: JsonObjectSchema.describe(
+        'Normalized CommonUI button style payload.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the style patch without changing the Blueprint asset.',
+      ),
+    },
+    annotations: {
+      title: 'Modify CommonUI Button Style',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, style, validate_only }) => {
+    try {
+      const classDefaults = normalizeCommonUIButtonStyleInput(style);
+      const parsed = await callSubsystemJson('ModifyBlueprintMembers', {
+        AssetPath: asset_path,
+        Operation: 'patch_class_defaults',
+        PayloadJson: JSON.stringify({
+          classDefaults,
+        }),
+        bValidateOnly: validate_only,
+      });
+
+      return jsonToolSuccess({
+        ...parsed,
+        operation: 'modify_commonui_button_style',
+        style: extractCommonUIButtonStyle(classDefaults),
+      });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'apply_commonui_button_style',
+  {
+    title: 'Apply CommonUI Button Style',
+    description: 'Apply a CommonUI button style Blueprint to a CommonButtonBase-derived WidgetBlueprint by patching the wrapper-managed Style class default.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the CommonButtonBase-derived WidgetBlueprint.',
+      ),
+      style_asset_path: z.string().describe(
+        'UE content or object path to the CommonUI button style Blueprint or generated class.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the style assignment without changing the WidgetBlueprint.',
+      ),
+    },
+    annotations: {
+      title: 'Apply CommonUI Button Style',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, style_asset_path, validate_only }) => {
+    try {
+      const styleClassPath = buildGeneratedBlueprintClassPath(style_asset_path);
+      const parsed = await callSubsystemJson('ModifyWidgetBlueprintStructure', {
+        AssetPath: asset_path,
+        Operation: 'patch_class_defaults',
+        PayloadJson: JSON.stringify({
+          classDefaults: {
+            Style: styleClassPath,
+          },
+        }),
+        bValidateOnly: validate_only,
+      });
+
+      return jsonToolSuccess({
+        ...parsed,
+        operation: 'apply_commonui_button_style',
+        styleClassPath,
+      });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
   'capture_widget_preview',
   {
     title: 'Capture Widget Preview',
@@ -5107,6 +5480,86 @@ server.registerTool(
       return jsonToolSuccess(parsed);
     } catch (e) {
       return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'wait_for_editor',
+  {
+    title: 'Wait For Editor',
+    description: 'Poll the editor connection once per second until Remote Control responds again or the timeout elapses.',
+    inputSchema: {
+      timeout_seconds: z.number().int().positive().default(180).describe(
+        'Maximum number of seconds to wait for the editor connection to return.',
+      ),
+    },
+    annotations: {
+      title: 'Wait For Editor',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ timeout_seconds }) => {
+    const probe = supportsConnectionProbe(client);
+    const timeoutMs = timeout_seconds * 1_000;
+    if (!probe) {
+      return jsonToolSuccess({
+        success: false,
+        operation: 'wait_for_editor',
+        connected: false,
+        elapsedMs: 0,
+        timeoutMs,
+        attempts: 0,
+        code: 'connection_probe_unavailable',
+        recoverable: false,
+        message: 'wait_for_editor requires a client implementation with checkConnection().',
+        next_steps: [
+          'Use a UE client implementation that exposes checkConnection() before calling wait_for_editor.',
+        ],
+      });
+    }
+
+    const startedAt = Date.now();
+    let attempts = 0;
+
+    while (true) {
+      attempts += 1;
+      const connected = await probe();
+      const elapsedMs = Date.now() - startedAt;
+      if (connected) {
+        return jsonToolSuccess({
+          success: true,
+          operation: 'wait_for_editor',
+          connected: true,
+          elapsedMs,
+          timeoutMs,
+          attempts,
+        });
+      }
+
+      if (elapsedMs >= timeoutMs) {
+        return jsonToolSuccess({
+          success: false,
+          operation: 'wait_for_editor',
+          connected: false,
+          elapsedMs,
+          timeoutMs,
+          attempts,
+          code: 'editor_unavailable',
+          recoverable: true,
+          retry_after_ms: EDITOR_POLL_INTERVAL_MS,
+          message: `Timed out waiting for the UE editor after ${timeout_seconds}s.`,
+          next_steps: [
+            'Retry wait_for_editor if the editor is still restarting.',
+            'Once the editor is back, rerun the blocked editor-backed tool.',
+          ],
+        });
+      }
+
+      await sleep(EDITOR_POLL_INTERVAL_MS);
     }
   },
 );

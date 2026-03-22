@@ -46,6 +46,7 @@ namespace BlueprintExtractorAutomation
 
 static constexpr TCHAR ScratchRoot[] = TEXT("/Game/__GeneratedTests__");
 static constexpr TCHAR DefaultMaterialPath[] = TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial");
+static constexpr TCHAR WorldGridMaterialPath[] = TEXT("/Engine/EngineMaterials/WorldGridMaterial.WorldGridMaterial");
 static constexpr TCHAR DefaultTexturePath[] = TEXT("/Engine/EngineResources/DefaultTexture.DefaultTexture");
 static constexpr TCHAR EngineSkeletonPath[] = TEXT("/Engine/EngineMeshes/SkeletalCube_Skeleton.SkeletalCube_Skeleton");
 static constexpr TCHAR EnginePreviewMeshPath[] = TEXT("/Engine/EngineMeshes/SkeletalCube.SkeletalCube");
@@ -2008,6 +2009,252 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunWidgetBatchClassDefaultsCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_BatchClassDefaults"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("BlueprintExtractorFixtureStyledWidgetParent")),
+		TEXT("CreateWidgetBlueprint for batch class defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"Image","name":"TitleBarBg","properties":{"RenderOpacity":0.5}},{"class":"TextBlock","name":"TitleText","properties":{"Text":"Before Batch"}}]})json"),
+			false),
+		TEXT("BuildWidgetTree for batch class defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("batch"),
+			FString::Printf(
+				TEXT(R"json({"operations":[{"operation":"insert_child","parent_widget_name":"WindowRoot","child_widget":{"class":"TextBlock","name":"FooterText","properties":{"Text":"Footer"}}},{"operation":"patch_widget","widget_name":"TitleText","properties":{"Text":"After Batch"}},{"operation":"patch_class_defaults","classDefaults":{"ActiveTitleBarMaterial":"%s","InactiveTitleBarMaterial":"%s"}},{"operation":"patch_class_defaults","class_defaults":{"ActiveTitleBarMaterial":"%s"}}]})json"),
+				DefaultMaterialPath,
+				DefaultMaterialPath,
+				WorldGridMaterialPath),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure batch with patch_class_defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after batch class defaults"));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath, true),
+		TEXT("ExtractWidgetBlueprint after batch class defaults"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	Test.TestTrue(TEXT("Batch class defaults extract returns a rootWidget"), TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid());
+	if (!RootWidgetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> FooterTextNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/FooterText"));
+	Test.TestNotNull(TEXT("Batch structural insert is preserved"), FooterTextNode.Get());
+
+	const TSharedPtr<FJsonObject> TitleTextNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/TitleText"));
+	Test.TestNotNull(TEXT("Batch patch_widget target exists"), TitleTextNode.Get());
+	if (TitleTextNode.IsValid())
+	{
+		TSharedPtr<FJsonObject> TitleProperties;
+		Test.TestTrue(TEXT("Batch patch_widget target surfaces properties"), TryGetObjectFieldCopy(TitleTextNode, TEXT("properties"), TitleProperties) && TitleProperties.IsValid());
+		if (TitleProperties.IsValid())
+		{
+			FString TitleText;
+			Test.TestTrue(TEXT("Batch patch_widget target surfaces Text"), TitleProperties->TryGetStringField(TEXT("Text"), TitleText));
+			Test.TestEqual(TEXT("Batch patch_widget runs after structural ops"), TitleText, FString(TEXT("After Batch")));
+		}
+	}
+
+	TSharedPtr<FJsonObject> ClassDefaultsJson;
+	Test.TestTrue(TEXT("Batch class defaults extract surfaces classDefaults"), TryGetObjectFieldCopy(ExtractResult, TEXT("classDefaults"), ClassDefaultsJson) && ClassDefaultsJson.IsValid());
+	if (ClassDefaultsJson.IsValid())
+	{
+		FString ActiveMaterialPath;
+		FString InactiveMaterialPath;
+		Test.TestTrue(TEXT("Batch class defaults extract surfaces ActiveTitleBarMaterial"), ClassDefaultsJson->TryGetStringField(TEXT("ActiveTitleBarMaterial"), ActiveMaterialPath));
+		Test.TestTrue(TEXT("Batch class defaults extract surfaces InactiveTitleBarMaterial"), ClassDefaultsJson->TryGetStringField(TEXT("InactiveTitleBarMaterial"), InactiveMaterialPath));
+		Test.TestEqual(TEXT("Later batch patch_class_defaults entries win per key"), ActiveMaterialPath, FString(WorldGridMaterialPath));
+		Test.TestEqual(TEXT("Unshadowed batch class default keys are preserved"), InactiveMaterialPath, FString(DefaultMaterialPath));
+	}
+
+	return true;
+}
+
+static bool RunNonVariableWidgetSelectorCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_NonVariableSelectors"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			WidgetAssetPath,
+			TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint for non-variable selectors"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			WidgetObjectPath,
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"TextBlock","name":"NameOnlyText","properties":{"Text":"Name Before"}},{"class":"VerticalBox","name":"ContentRoot","children":[{"class":"TextBlock","name":"PathText","properties":{"Text":"Path Before"}},{"class":"TextBlock","name":"PatchByNameText","properties":{"Text":"Patch Name Before"}},{"class":"TextBlock","name":"PatchByPathText","properties":{"Text":"Patch Path Before"}},{"class":"TextBlock","name":"RemoveByNameText","properties":{"Text":"Remove Name"}},{"class":"TextBlock","name":"RemoveByPathText","properties":{"Text":"Remove Path"}}]}]})json"),
+			false),
+		TEXT("BuildWidgetTree for non-variable selectors"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidget(
+			WidgetObjectPath,
+			TEXT("NameOnlyText"),
+			TEXT(R"json({"Text":"Name After"})json"),
+			TEXT("{}"),
+			TEXT("{}"),
+			false),
+		TEXT("ModifyWidget by widget_name on non-variable widget"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidget(
+			WidgetObjectPath,
+			TEXT("WindowRoot/ContentRoot/PathText"),
+			TEXT(R"json({"Text":"Path After"})json"),
+			TEXT("{}"),
+			TEXT("{}"),
+			false),
+		TEXT("ModifyWidget by widget_path on non-variable widget"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("patch_widget"),
+			TEXT(R"json({"widget_name":"PatchByNameText","properties":{"Text":"Patch Name After"}})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure patch_widget by widget_name on non-variable widget"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("patch_widget"),
+			TEXT(R"json({"widget_path":"WindowRoot/ContentRoot/PatchByPathText","properties":{"Text":"Patch Path After"}})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure patch_widget by widget_path on non-variable widget"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("remove_widget"),
+			TEXT(R"json({"widget_name":"RemoveByNameText"})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure remove_widget by widget_name on non-variable widget"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			WidgetObjectPath,
+			TEXT("remove_widget"),
+			TEXT(R"json({"widget_path":"WindowRoot/ContentRoot/RemoveByPathText"})json"),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure remove_widget by widget_path on non-variable widget"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
+		TEXT("CompileWidgetBlueprint after non-variable selector mutations"));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(WidgetObjectPath),
+		TEXT("ExtractWidgetBlueprint after non-variable selector mutations"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> RootWidgetJson;
+	Test.TestTrue(TEXT("Non-variable selector extract returns a rootWidget"), TryGetObjectFieldCopy(ExtractResult, TEXT("rootWidget"), RootWidgetJson) && RootWidgetJson.IsValid());
+	if (!RootWidgetJson.IsValid())
+	{
+		return false;
+	}
+
+	const auto ExpectTextAtPath = [&Test, &RootWidgetJson](const TCHAR* WidgetPath, const TCHAR* ExpectedText, const TCHAR* AssertionPrefix)
+	{
+		const TSharedPtr<FJsonObject> Node = FindWidgetNodeByPath(RootWidgetJson, WidgetPath);
+		Test.TestNotNull(*FString::Printf(TEXT("%s node exists"), AssertionPrefix), Node.Get());
+		if (!Node.IsValid())
+		{
+			return;
+		}
+
+		TSharedPtr<FJsonObject> PropertiesJson;
+		Test.TestTrue(*FString::Printf(TEXT("%s properties exist"), AssertionPrefix), TryGetObjectFieldCopy(Node, TEXT("properties"), PropertiesJson) && PropertiesJson.IsValid());
+		if (!PropertiesJson.IsValid())
+		{
+			return;
+		}
+
+		FString ActualText;
+		Test.TestTrue(*FString::Printf(TEXT("%s text exists"), AssertionPrefix), PropertiesJson->TryGetStringField(TEXT("Text"), ActualText));
+		if (!ActualText.IsEmpty())
+		{
+			Test.TestEqual(*FString::Printf(TEXT("%s text matches"), AssertionPrefix), ActualText, FString(ExpectedText));
+		}
+	};
+
+	ExpectTextAtPath(TEXT("WindowRoot/NameOnlyText"), TEXT("Name After"), TEXT("modify_widget by name"));
+	ExpectTextAtPath(TEXT("WindowRoot/ContentRoot/PathText"), TEXT("Path After"), TEXT("modify_widget by path"));
+	ExpectTextAtPath(TEXT("WindowRoot/ContentRoot/PatchByNameText"), TEXT("Patch Name After"), TEXT("patch_widget by name"));
+	ExpectTextAtPath(TEXT("WindowRoot/ContentRoot/PatchByPathText"), TEXT("Patch Path After"), TEXT("patch_widget by path"));
+
+	const TSharedPtr<FJsonObject> RemovedByNameNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot/RemoveByNameText"));
+	const TSharedPtr<FJsonObject> RemovedByPathNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/ContentRoot/RemoveByPathText"));
+	Test.TestNull(TEXT("remove_widget by widget_name deletes non-variable children"), RemovedByNameNode.Get());
+	Test.TestNull(TEXT("remove_widget by widget_path deletes non-variable children"), RemovedByPathNode.Get());
+
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Non-variable selector widget blueprint exists"), WidgetBP);
+	if (WidgetBP)
+	{
+		Test.TestFalse(
+			TEXT("WidgetVariableNameToGuidMap prunes removed non-variable widget names (widget_name selector)"),
+			WidgetBP->WidgetVariableNameToGuidMap.Contains(FName(TEXT("RemoveByNameText"))));
+		Test.TestFalse(
+			TEXT("WidgetVariableNameToGuidMap prunes removed non-variable widget names (widget_path selector)"),
+			WidgetBP->WidgetVariableNameToGuidMap.Contains(FName(TEXT("RemoveByPathText"))));
+	}
+
+	return true;
+}
+
 static bool RunWidgetFontCoverage(FAutomationTestBase& Test)
 {
 	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
@@ -2835,6 +3082,184 @@ static bool RunCommonUIWidgetCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunCommonUIButtonStyleCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString StyleAssetPath = MakeUniqueAssetPath(TEXT("BP_CommonUIButtonStyle"));
+	const FString StyleObjectPath = MakeObjectPath(StyleAssetPath);
+	const FString StyleClassPath = StyleObjectPath + TEXT("_C");
+	const FString ButtonAssetPath = MakeUniqueAssetPath(TEXT("WBP_CommonUIButtonStyled"));
+	const FString ButtonObjectPath = MakeObjectPath(ButtonAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateBlueprint(
+			StyleAssetPath,
+			TEXT("/Script/CommonUI.CommonButtonStyle"),
+			TEXT("{}"),
+			false),
+		TEXT("CreateBlueprint for CommonUI button style"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintMembers(
+			StyleObjectPath,
+			TEXT("patch_class_defaults"),
+			FString::Printf(
+				TEXT(R"json({"classDefaults":{"NormalBase":{"DrawAs":"Image","ResourceObject":"%s","ImageSize":{"X":240.0,"Y":72.0}},"NormalHovered":{"DrawAs":"Image","ResourceObject":"%s","ImageSize":{"X":260.0,"Y":72.0}},"Disabled":{"DrawAs":"Image","ResourceObject":"%s","ImageSize":{"X":240.0,"Y":72.0}},"ButtonPadding":{"Left":12.0,"Top":6.0,"Right":12.0,"Bottom":6.0},"MinWidth":240,"MinHeight":72}})json"),
+				DefaultTexturePath,
+				DefaultTexturePath,
+				DefaultTexturePath),
+			false),
+		TEXT("ModifyBlueprintMembers patch_class_defaults for CommonUI button style"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ StyleObjectPath })),
+		TEXT("SaveAssets CommonUI button style before extract"));
+
+	const TSharedPtr<FJsonObject> StyleExtract = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractBlueprint(
+			StyleObjectPath,
+			TEXT("ClassLevel"),
+			TEXT(""),
+			true),
+		TEXT("ExtractBlueprint for CommonUI button style"));
+	if (!StyleExtract.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> StyleBlueprintJson;
+	TSharedPtr<FJsonObject> StyleClassDefaults;
+	Test.TestTrue(TEXT("CommonUI button style extract returns a blueprint payload"), TryGetObjectFieldCopy(StyleExtract, TEXT("blueprint"), StyleBlueprintJson) && StyleBlueprintJson.IsValid());
+	Test.TestTrue(TEXT("CommonUI button style extract surfaces classDefaults"), StyleBlueprintJson.IsValid() && TryGetObjectFieldCopy(StyleBlueprintJson, TEXT("classDefaults"), StyleClassDefaults) && StyleClassDefaults.IsValid());
+	if (StyleClassDefaults.IsValid())
+	{
+		double MinWidth = 0.0;
+		TSharedPtr<FJsonObject> NormalBaseJson;
+		Test.TestTrue(TEXT("CommonUI button style classDefaults surfaces MinWidth"), StyleClassDefaults->TryGetNumberField(TEXT("MinWidth"), MinWidth));
+		Test.TestTrue(TEXT("CommonUI button style classDefaults surfaces NormalBase"), TryGetObjectFieldCopy(StyleClassDefaults, TEXT("NormalBase"), NormalBaseJson) && NormalBaseJson.IsValid());
+		Test.TestEqual(TEXT("CommonUI button style classDefaults preserve MinWidth"), MinWidth, 240.0);
+		if (NormalBaseJson.IsValid())
+		{
+			FString ResourceObjectPath;
+			Test.TestTrue(TEXT("CommonUI button style NormalBase surfaces ResourceObject"), NormalBaseJson->TryGetStringField(TEXT("ResourceObject"), ResourceObjectPath));
+			Test.TestTrue(TEXT("CommonUI button style NormalBase preserves the texture reference"), ResourceObjectPath.Contains(FString(DefaultTexturePath)));
+		}
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(
+			ButtonAssetPath,
+			TEXT("/Script/CommonUI.CommonButtonBase")),
+		TEXT("CreateWidgetBlueprint for CommonUI styled button"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->BuildWidgetTree(
+			ButtonAssetPath,
+			TEXT(R"json({"class":"TextBlock","name":"ButtonLabel","is_variable":true,"properties":{"Text":"Styled Button","ColorAndOpacity":{"SpecifiedColor":{"R":1.0,"G":1.0,"B":1.0,"A":1.0}}}})json"),
+			false),
+		TEXT("BuildWidgetTree for CommonUI styled button content"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(ButtonObjectPath),
+		TEXT("CompileWidgetBlueprint before CommonUI style apply"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ ButtonObjectPath })),
+		TEXT("SaveAssets CommonUI styled button before baseline capture"));
+
+	const TSharedPtr<FJsonObject> BeforeCapture = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CaptureWidgetPreview(ButtonObjectPath, 320, 180),
+		TEXT("CaptureWidgetPreview before CommonUI style apply"));
+	if (!BeforeCapture.IsValid())
+	{
+		return false;
+	}
+
+	FString BeforeCaptureId;
+	Test.TestTrue(TEXT("Baseline CommonUI button capture returns a captureId"), BeforeCapture->TryGetStringField(TEXT("captureId"), BeforeCaptureId) && !BeforeCaptureId.IsEmpty());
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyWidgetBlueprintStructure(
+			ButtonObjectPath,
+			TEXT("patch_class_defaults"),
+			FString::Printf(
+				TEXT(R"json({"classDefaults":{"Style":"%s"}})json"),
+				*StyleClassPath),
+			false),
+		TEXT("ModifyWidgetBlueprintStructure patch_class_defaults Style for CommonUI button"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompileWidgetBlueprint(ButtonObjectPath),
+		TEXT("CompileWidgetBlueprint after CommonUI style apply"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ StyleObjectPath, ButtonObjectPath })),
+		TEXT("SaveAssets CommonUI styled button after style apply"));
+
+	const TSharedPtr<FJsonObject> StyledExtract = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractWidgetBlueprint(ButtonObjectPath, true),
+		TEXT("ExtractWidgetBlueprint after CommonUI style apply"));
+	if (!StyledExtract.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> StyledClassDefaults;
+	Test.TestTrue(TEXT("CommonUI styled button extract surfaces classDefaults"), TryGetObjectFieldCopy(StyledExtract, TEXT("classDefaults"), StyledClassDefaults) && StyledClassDefaults.IsValid());
+	if (StyledClassDefaults.IsValid())
+	{
+		FString AppliedStylePath;
+		Test.TestTrue(TEXT("CommonUI styled button classDefaults surfaces Style"), StyledClassDefaults->TryGetStringField(TEXT("Style"), AppliedStylePath));
+		Test.TestEqual(TEXT("CommonUI styled button preserves the applied Style class reference"), AppliedStylePath, StyleClassPath);
+	}
+
+	const TSharedPtr<FJsonObject> AfterCapture = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CaptureWidgetPreview(ButtonObjectPath, 320, 180),
+		TEXT("CaptureWidgetPreview after CommonUI style apply"));
+	if (!AfterCapture.IsValid())
+	{
+		return false;
+	}
+
+	FString AfterCaptureId;
+	Test.TestTrue(TEXT("Styled CommonUI button capture returns a captureId"), AfterCapture->TryGetStringField(TEXT("captureId"), AfterCaptureId) && !AfterCaptureId.IsEmpty());
+
+	const TSharedPtr<FJsonObject> StyleCompare = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CompareCaptureToReference(AfterCaptureId, BeforeCaptureId, 0.0),
+		TEXT("CompareCaptureToReference CommonUI style before/after"));
+	if (!StyleCompare.IsValid())
+	{
+		return false;
+	}
+
+	bool bPass = true;
+	double MismatchPercentage = 0.0;
+	Test.TestTrue(TEXT("CommonUI style capture comparison reports a visual delta"), StyleCompare->TryGetBoolField(TEXT("pass"), bPass) && !bPass);
+	Test.TestTrue(TEXT("CommonUI style capture comparison reports mismatch percentage"), StyleCompare->TryGetNumberField(TEXT("mismatchPercentage"), MismatchPercentage) && MismatchPercentage > 0.0);
+
+	return true;
+}
+
 static bool RunOverlaySlotRoundTripCoverage(FAutomationTestBase& Test)
 {
 	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
@@ -3165,6 +3590,16 @@ void FBlueprintExtractorAutomationSpec::Define()
 			TestTrue(TEXT("Widget property diagnostics coverage completes"), RunWidgetPropertyDiagnosticsCoverage(*this));
 		});
 
+		It(TEXT("WidgetBatchClassDefaults"), [this]()
+		{
+			TestTrue(TEXT("Widget batch class-default coverage completes"), RunWidgetBatchClassDefaultsCoverage(*this));
+		});
+
+		It(TEXT("WidgetNonVariableSelectors"), [this]()
+		{
+			TestTrue(TEXT("Widget non-variable selector coverage completes"), RunNonVariableWidgetSelectorCoverage(*this));
+		});
+
 		It(TEXT("BlueprintGraphAuthoring"), [this]()
 		{
 			TestTrue(TEXT("Blueprint graph authoring coverage completes"), RunBlueprintGraphAuthoringCoverage(*this));
@@ -3178,6 +3613,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("CommonUIWidgetRoundTrip"), [this]()
 		{
 			TestTrue(TEXT("CommonUI widget coverage completes"), RunCommonUIWidgetCoverage(*this));
+		});
+
+		It(TEXT("CommonUIButtonStyleRoundTrip"), [this]()
+		{
+			TestTrue(TEXT("CommonUI button style coverage completes"), RunCommonUIButtonStyleCoverage(*this));
 		});
 	});
 }

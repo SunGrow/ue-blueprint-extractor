@@ -13,7 +13,7 @@ A UE5 editor plugin + MCP server that gives [Claude Code](https://docs.anthropic
 
 ## Features at a Glance
 
-- **87 MCP tools**, **12 resources**, **4 resource templates**, and **4 prompts**
+- **92 MCP tools**, **12 resources**, **4 resource templates**, and **4 prompts**
 - **Full round-trip** -- extract assets to JSON, then create and modify them back
 - **Strict v2 contract** -- snake_case inputs, `outputSchema` on every tool, and structured success/error envelopes
 - **Generated examples + prompts** -- schema-backed examples and reusable workflow prompts for UI, materials, HUD wiring, and compile debugging
@@ -82,7 +82,7 @@ Run the install script for your client:
 
 ### 3. Verify
 
-Open a new Claude Code or Codex session. The 87 Blueprint Extractor tools and 4 workflow prompts will appear automatically.
+Open a new Claude Code or Codex session. The Blueprint Extractor tools and 4 workflow prompts will appear automatically.
 
 <details>
 <summary><strong>Manual registration and local builds</strong></summary>
@@ -144,7 +144,7 @@ Reference docs:
 
 ## MCP Tools
 
-87 tools organized by category. All tools declare `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations for safe auto-approval, and every public tool exposes `outputSchema`.
+Tools are organized by category. All tools declare `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations for safe auto-approval, and every public tool exposes `outputSchema`.
 
 <details>
 <summary><strong>Extraction Tools</strong> (17 tools) -- read-only, extract asset data to JSON</summary>
@@ -600,7 +600,7 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
 
 ### Design Principles
 
-- **Right primitive** -- Live editor actions are exposed as 87 MCP **tools**. Static guidance lives in 12 resources, 4 resource templates, and 4 prompts (`blueprint://scopes`, `blueprint://verification-workflows`, `blueprint://examples/{family}`, `design_menu_screen`, etc.).
+- **Right primitive** -- Live editor actions are exposed as MCP **tools**. Static guidance lives in 12 resources, 4 resource templates, and 4 prompts (`blueprint://scopes`, `blueprint://verification-workflows`, `blueprint://examples/{family}`, `design_menu_screen`, etc.).
 - **Small, distinct surface** -- extraction tools stay read-only, common material flows are decomposed into smaller tools, and Enhanced Input uses dedicated authoring tools instead of pretending generic DataAsset reflection is enough.
 - **Annotations** -- All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval.
 - **Structured results** -- every public tool exposes `outputSchema`, mirrors JSON in `structuredContent`, and returns machine-usable error envelopes when execution fails recoverably.
