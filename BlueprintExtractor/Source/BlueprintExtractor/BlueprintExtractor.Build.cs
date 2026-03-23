@@ -42,6 +42,8 @@ public class BlueprintExtractor : ModuleRules
 			"GameplayTags",
 			"UMG",
 			"UMGEditor",
+			"MovieScene",
+			"MovieSceneTracks",
 			"RenderCore",
 			"RHI",
 			"ImageCore",

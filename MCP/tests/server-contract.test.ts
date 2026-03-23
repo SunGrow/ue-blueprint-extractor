@@ -231,6 +231,11 @@ describe('createBlueprintExtractorServer', () => {
     const listImportJobs = tools.tools.find((tool) => tool.name === 'list_import_jobs');
     const saveAssets = tools.tools.find((tool) => tool.name === 'save_assets');
     const captureWidgetPreview = tools.tools.find((tool) => tool.name === 'capture_widget_preview');
+    const extractWidgetAnimation = tools.tools.find((tool) => tool.name === 'extract_widget_animation');
+    const createWidgetAnimation = tools.tools.find((tool) => tool.name === 'create_widget_animation');
+    const modifyWidgetAnimation = tools.tools.find((tool) => tool.name === 'modify_widget_animation');
+    const captureWidgetMotionCheckpoints = tools.tools.find((tool) => tool.name === 'capture_widget_motion_checkpoints');
+    const compareMotionCaptureBundle = tools.tools.find((tool) => tool.name === 'compare_motion_capture_bundle');
     const compareCaptureToReference = tools.tools.find((tool) => tool.name === 'compare_capture_to_reference');
     const applyWindowUiChanges = tools.tools.find((tool) => tool.name === 'apply_window_ui_changes');
     const runAutomationTests = tools.tools.find((tool) => tool.name === 'run_automation_tests');
@@ -243,7 +248,7 @@ describe('createBlueprintExtractorServer', () => {
     const applyCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'apply_commonui_button_style');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(92);
+    expect(tools.tools).toHaveLength(97);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -254,6 +259,10 @@ describe('createBlueprintExtractorServer', () => {
     expect(resourceUris).toContain('blueprint://font-roles');
     expect(resourceUris).toContain('blueprint://project-automation');
     expect(resourceUris).toContain('blueprint://verification-workflows');
+    expect(resourceUris).toContain('blueprint://design-spec-schema');
+    expect(resourceUris).toContain('blueprint://multimodal-ui-design-workflow');
+    expect(resourceUris).toContain('blueprint://widget-motion-authoring');
+    expect(resourceUris).toContain('blueprint://motion-verification-workflow');
     expect(resourceUris).toContain('blueprint://unsupported-surfaces');
     expect(resourceUris).toContain('blueprint://ui-redesign-workflow');
     expect(resourceTemplateUris).toContain('blueprint://examples/{family}');
@@ -263,6 +272,9 @@ describe('createBlueprintExtractorServer', () => {
     expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(Object.keys(promptCatalog).sort());
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'extract_widget_animation')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'create_widget_animation')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_widget_animation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'reimport_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'list_import_jobs')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'import_textures')).toBe(true);
@@ -285,6 +297,8 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'capture_widget_preview')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'capture_widget_motion_checkpoints')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'compare_motion_capture_bundle')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compare_capture_to_reference')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'list_captures')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'cleanup_captures')).toBe(true);
@@ -310,6 +324,12 @@ describe('createBlueprintExtractorServer', () => {
     expectSchemaProperty(captureWidgetPreview, 'surface');
     expectSchemaProperty(captureWidgetPreview, 'scenarioId');
     expectSchemaProperty(captureWidgetPreview, 'assetPaths');
+    expectSchemaProperty(extractWidgetAnimation, 'animation');
+    expectSchemaProperty(createWidgetAnimation, 'assetPath');
+    expectSchemaProperty(modifyWidgetAnimation, 'assetPath');
+    expectSchemaProperty(captureWidgetMotionCheckpoints, 'motionCaptureId');
+    expectSchemaProperty(captureWidgetMotionCheckpoints, 'verificationArtifacts');
+    expectSchemaProperty(compareMotionCaptureBundle, 'comparisons');
     expectSchemaProperty(compareCaptureToReference, 'comparison');
     expectSchemaProperty(runAutomationTests, 'runId');
     expectSchemaProperty(runAutomationTests, 'verificationArtifacts');
@@ -322,6 +342,11 @@ describe('createBlueprintExtractorServer', () => {
     expect(importAssets?.annotations?.readOnlyHint).toBe(false);
     expect(getImportJob?.annotations?.readOnlyHint).toBe(true);
     expect(captureWidgetPreview?.annotations?.readOnlyHint).toBe(true);
+    expect(extractWidgetAnimation?.annotations?.readOnlyHint).toBe(true);
+    expect(createWidgetAnimation?.annotations?.readOnlyHint).toBe(false);
+    expect(modifyWidgetAnimation?.annotations?.readOnlyHint).toBe(false);
+    expect(captureWidgetMotionCheckpoints?.annotations?.readOnlyHint).toBe(true);
+    expect(compareMotionCaptureBundle?.annotations?.readOnlyHint).toBe(true);
     expectSchemaProperty(applyWindowUiChanges, 'verification');
     expect(getAutomationTestRun?.annotations?.readOnlyHint).toBe(true);
     expect(waitForEditor?.annotations?.readOnlyHint).toBe(true);
@@ -346,9 +371,15 @@ describe('createBlueprintExtractorServer', () => {
     const fontRoles = await harness.client.readResource({ uri: 'blueprint://font-roles' });
     const projectAutomation = await harness.client.readResource({ uri: 'blueprint://project-automation' });
     const verificationWorkflows = await harness.client.readResource({ uri: 'blueprint://verification-workflows' });
+    const designSpecSchema = await harness.client.readResource({ uri: 'blueprint://design-spec-schema' });
+    const multimodalWorkflow = await harness.client.readResource({ uri: 'blueprint://multimodal-ui-design-workflow' });
+    const widgetMotionAuthoring = await harness.client.readResource({ uri: 'blueprint://widget-motion-authoring' });
+    const motionVerificationWorkflow = await harness.client.readResource({ uri: 'blueprint://motion-verification-workflow' });
     const unsupportedSurfaces = await harness.client.readResource({ uri: 'blueprint://unsupported-surfaces' });
     const uiRedesignWorkflow = await harness.client.readResource({ uri: 'blueprint://ui-redesign-workflow' });
     const widgetExample = await harness.client.readResource({ uri: 'blueprint://examples/widget_blueprint' });
+    const referenceMenuExample = await harness.client.readResource({ uri: 'blueprint://examples/reference_menu_screen' });
+    const widgetMotionExample = await harness.client.readResource({ uri: 'blueprint://examples/widget_motion' });
     const materialExample = await harness.client.readResource({ uri: 'blueprint://examples/material' });
     const enhancedInputExample = await harness.client.readResource({ uri: 'blueprint://examples/enhanced_input' });
     const windowPolishExample = await harness.client.readResource({ uri: 'blueprint://examples/window_ui_polish' });
@@ -381,14 +412,36 @@ describe('createBlueprintExtractorServer', () => {
     expect(verificationWorkflows.contents[0]?.text).toContain('Blueprint Extractor Verification Workflows');
     expect(verificationWorkflows.contents[0]?.text).toContain('run_automation_tests');
     expect(verificationWorkflows.contents[0]?.text).toContain('partial verification');
+    expect(verificationWorkflows.contents[0]?.text).toContain('design_spec_json');
+    expect(verificationWorkflows.contents[0]?.text).toContain('capture_widget_motion_checkpoints');
+    expect(designSpecSchema.contents[0]?.text).toContain('Blueprint Extractor Design Spec Schema');
+    expect(designSpecSchema.contents[0]?.text).toContain('"visual_tokens"');
+    expect(multimodalWorkflow.contents[0]?.text).toContain('Blueprint Extractor Multimodal UI Design Workflow');
+    expect(multimodalWorkflow.contents[0]?.text).toContain('text+image and PNG/Figma are first-class');
+    expect(multimodalWorkflow.contents[0]?.text).toContain('create_widget_animation');
+    expect(multimodalWorkflow.contents[0]?.text).toContain('compare_motion_capture_bundle');
+    expect(widgetMotionAuthoring.contents[0]?.text).toContain('Blueprint Extractor Widget Motion Authoring');
+    expect(widgetMotionAuthoring.contents[0]?.text).toContain('replace_timeline');
+    expect(motionVerificationWorkflow.contents[0]?.text).toContain('Blueprint Extractor Motion Verification Workflow');
+    expect(motionVerificationWorkflow.contents[0]?.text).toContain('automation_scenario');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('CommonUI wrapper widgets');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('create_commonui_button_style');
+    expect(unsupportedSurfaces.contents[0]?.text).toContain('Dedicated widget animation authoring is supported only for the constrained v2 track subset');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('Safe UI Redesign Workflow');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('capture_widget_preview');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('partial verification');
+    expect(uiRedesignWorkflow.contents[0]?.text).toContain('design_spec_json');
+    expect(uiRedesignWorkflow.contents[0]?.text).toContain('capture_widget_motion_checkpoints');
     expect(widgetExample.contents[0]?.text).toContain('Example: insert_body_text');
     expect(widgetExample.contents[0]?.text).toContain('capture_widget_preview');
+    expect(referenceMenuExample.contents[0]?.text).toContain('Example: text_image_menu_screen');
+    expect(referenceMenuExample.contents[0]?.text).toContain('design_spec_json');
+    expect(referenceMenuExample.contents[0]?.text).toContain('cinematic_menu_motion');
+    expect(referenceMenuExample.contents[0]?.text).toContain('modify_widget_animation');
+    expect(widgetMotionExample.contents[0]?.text).toContain('Example: menu_shell_state_motion');
+    expect(widgetMotionExample.contents[0]?.text).toContain('compare_motion_capture_bundle');
+    expect(widgetMotionExample.contents[0]?.text).toContain('Example: unsupported_track_request');
     expect(materialExample.contents[0]?.text).toContain('tool: bind_material_property');
     expect(enhancedInputExample.contents[0]?.text).toContain('tool: modify_input_mapping_context');
     expect(windowPolishExample.contents[0]?.text).toContain('tool: apply_window_ui_changes');
@@ -407,6 +460,45 @@ describe('createBlueprintExtractorServer', () => {
     const promptTextByName: Record<string, string> = {};
     for (const promptName of promptNames) {
       const argsByPrompt: Record<string, Record<string, string>> = {
+        normalize_ui_design_input: {
+          design_goal: 'Create a cinematic menu with amber highlights',
+          design_notes_text: 'Needs a strong focal panel and motion checkpoints.',
+          reference_image_paths: '["C:/Refs/menu-open.png","C:/Refs/menu-focused.png"]',
+          html_reference_paths: '["C:/Refs/menu.html"]',
+          design_spec_json: JSON.stringify({ layout: { pattern: 'common_menu_shell' } }),
+        },
+        design_menu_from_design_spec: {
+          widget_asset_path: '/Game/UI/WBP_Menu',
+          design_spec_json: JSON.stringify({
+            layout: { pattern: 'common_menu_shell' },
+            verification: { compare_reference_paths: ['C:/Refs/menu-open.png'] },
+          }),
+          compare_reference_paths: '["C:/Refs/menu-open.png","C:/Refs/menu-focused.png"]',
+        },
+        author_widget_motion_from_design_spec: {
+          widget_asset_path: '/Game/UI/WBP_Menu',
+          animation_name: 'OpenSequence',
+          design_spec_json: JSON.stringify({
+            motion: {
+              state_motion: {
+                open: { property: 'render_opacity' },
+              },
+              checkpoints: ['closed', 'open'],
+            },
+          }),
+          compare_reference_paths: '["C:/Refs/menu-open.png"]',
+        },
+        plan_widget_motion_verification: {
+          widget_asset_path: '/Game/UI/WBP_Menu',
+          animation_name: 'OpenSequence',
+          design_spec_json: JSON.stringify({
+            motion: {
+              checkpoints: ['closed', 'opening_peak', 'open'],
+            },
+          }),
+          automation_filter: 'Project.UI.Menu.Motion',
+          compare_reference_paths: '["C:/Refs/menu-open.png","C:/Refs/menu-focused.png"]',
+        },
         design_menu_screen: {
           widget_asset_path: '/Game/UI/WBP_Menu',
           design_goal: 'Create a centered main menu',
@@ -439,15 +531,89 @@ describe('createBlueprintExtractorServer', () => {
         : '';
     }
 
+    expect(promptTextByName.normalize_ui_design_input).toContain('design_spec_json');
+    expect(promptTextByName.normalize_ui_design_input).toContain('text+image and PNG/Figma references as first-class');
+    expect(promptTextByName.normalize_ui_design_input).toContain('create_widget_animation');
+    expect(promptTextByName.design_menu_from_design_spec).toContain('compare_capture_to_reference');
+    expect(promptTextByName.design_menu_from_design_spec).toContain('/Game/UI/Foundation/Materials');
+    expect(promptTextByName.design_menu_from_design_spec).toContain('create_widget_animation');
+    expect(promptTextByName.design_menu_from_design_spec).toContain('compare_motion_capture_bundle');
+    expect(promptTextByName.author_widget_motion_from_design_spec).toContain('replace_timeline');
+    expect(promptTextByName.author_widget_motion_from_design_spec).toContain('capture_widget_motion_checkpoints');
+    expect(promptTextByName.plan_widget_motion_verification).toContain('editor_preview');
+    expect(promptTextByName.plan_widget_motion_verification).toContain('automation_scenario');
     expect(promptTextByName.design_menu_screen).toContain('capture_widget_preview');
     expect(promptTextByName.design_menu_screen).toContain('partial verification');
+    expect(promptTextByName.design_menu_screen).toContain('normalize_ui_design_input');
+    expect(promptTextByName.author_material_button_style).toContain('design_spec_json');
     expect(promptTextByName.debug_widget_compile_errors).toContain('capture_widget_preview');
     expect(promptTextByName.debug_widget_compile_errors).toContain('partial verification');
     expect(promptTextByName.debug_widget_compile_errors).toContain('apply_commonui_button_style');
   });
 
   it('validates example catalog payloads against the live tool schemas', async () => {
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient(), new FakeProjectController()));
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'ModifyWidgetAnimation') {
+        const payload = JSON.parse(String(params.PayloadJson ?? '{}')) as { timeline?: { tracks?: Array<{ property?: string }> } };
+        const hasUnsupportedTrack = payload.timeline?.tracks?.some((track) => track.property === 'render_transform_shear');
+        if (hasUnsupportedTrack) {
+          return JSON.stringify({
+            success: false,
+            operation: 'modify_widget_animation',
+            assetPath: params.AssetPath,
+            animationName: params.AnimationName,
+            code: 'unsupported_track_family',
+            message: 'render_transform_shear is outside the supported v2 widget track subset.',
+            recoverable: true,
+          });
+        }
+      }
+
+      if (method === 'CreateWidgetAnimation' || method === 'ModifyWidgetAnimation') {
+        return JSON.stringify({
+          success: true,
+          operation: method === 'CreateWidgetAnimation' ? 'create_widget_animation' : 'modify_widget_animation',
+          assetPath: params.AssetPath,
+          animationName: params.AnimationName,
+          supportedTracks: ['render_opacity', 'render_transform_translation', 'render_transform_scale', 'render_transform_angle', 'color_and_opacity'],
+        });
+      }
+
+      return JSON.stringify({ success: true, operation: method, method, params });
+    });
+    const fakeAutomationController = new FakeAutomationController((request) => ({
+      success: true,
+      operation: 'run_automation_tests',
+      runId: 'run-motion-123',
+      automationFilter: request.automationFilter ?? 'Project.UI.Motion',
+      status: 'running',
+      terminal: false,
+      engineRoot: String(request.engineRoot ?? 'C:/Program Files/Epic Games/UE_5.7'),
+      projectPath: String(request.projectPath ?? 'C:/Projects/MyGame/MyGame.uproject'),
+      projectDir: 'C:/Projects/MyGame',
+      target: String(request.target ?? 'MyGameEditor'),
+      reportOutputDir: 'C:/Projects/MyGame/Saved/BlueprintExtractor/AutomationRuns/run-motion-123/reports',
+      command: {
+        executable: 'C:/Epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe',
+        args: ['Automation'],
+      },
+      diagnostics: [],
+      timeoutMs: Number(request.timeoutMs ?? 3600000),
+      nullRhi: Boolean(request.nullRhi ?? false),
+      artifacts: [],
+      verificationArtifacts: [{
+        captureId: 'motion-open-1',
+        captureType: 'widget_motion_checkpoint',
+        surface: 'widget_motion_checkpoint',
+        artifactPath: 'C:/Temp/motion-open.png',
+        resourceUri: 'blueprint://captures/motion-open-1',
+        checkpointName: 'open',
+        checkpointMs: 260,
+        playbackSource: String(request.automationFilter ?? 'Project.UI.Motion'),
+        triggerMode: 'scenario_trigger',
+      }],
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController(), fakeAutomationController));
     cleanups.push(harness.close);
 
     for (const family of Object.values(exampleCatalog)) {
@@ -456,6 +622,17 @@ describe('createBlueprintExtractorServer', () => {
           name: example.tool,
           arguments: example.arguments,
         });
+
+        if (example.expectedSuccess === false) {
+          if (result.isError === true) {
+            expect(getTextContent(result)).toContain('unsupported');
+          } else {
+            expect(parseToolResult(result)).toMatchObject({
+              success: false,
+            });
+          }
+          continue;
+        }
 
         expect(result.isError).not.toBe(true);
         expect(parseToolResult(result)).toMatchObject({

@@ -25,6 +25,11 @@ struct FBlueprintExtractorCaptureMetadata
 	TSharedPtr<FJsonObject> WorldContext;
 	TSharedPtr<FJsonObject> CameraContext;
 	TSharedPtr<FJsonObject> Comparison;
+	FString MotionCaptureId;
+	FString CheckpointName;
+	double CheckpointMs = 0.0;
+	FString PlaybackSource;
+	FString TriggerMode;
 };
 
 struct FBlueprintExtractorCaptureCompareResult
@@ -41,12 +46,30 @@ struct FBlueprintExtractorCaptureCompareResult
 	FString DiffArtifactPath;
 };
 
+struct FBlueprintExtractorMotionCaptureResult
+{
+	FString MotionCaptureId;
+	FString Mode;
+	FString TriggerMode;
+	FString PlaybackSource;
+	FString AssetPath;
+	FString AnimationName;
+	bool bPartialVerification = false;
+	TArray<FString> Diagnostics;
+	TArray<FBlueprintExtractorCaptureMetadata> VerificationArtifacts;
+};
+
 namespace BlueprintExtractorCapture
 {
 	bool CaptureWidgetPreview(UWidgetBlueprint* WidgetBlueprint,
 		int32 RequestedWidth,
 		int32 RequestedHeight,
 		FBlueprintExtractorCaptureMetadata& OutMetadata,
+		FString& OutError);
+
+	bool CaptureWidgetMotionCheckpoints(UWidgetBlueprint* WidgetBlueprint,
+		const TSharedPtr<FJsonObject>& Payload,
+		FBlueprintExtractorMotionCaptureResult& OutResult,
 		FString& OutError);
 
 	bool CompareCaptureToReference(const FString& CaptureIdOrPath,
@@ -66,4 +89,5 @@ namespace BlueprintExtractorCapture
 
 	TSharedPtr<FJsonObject> CaptureMetadataToJson(const FBlueprintExtractorCaptureMetadata& Metadata);
 	TSharedPtr<FJsonObject> CaptureCompareResultToJson(const FBlueprintExtractorCaptureCompareResult& Result);
+	TSharedPtr<FJsonObject> MotionCaptureResultToJson(const FBlueprintExtractorMotionCaptureResult& Result);
 }

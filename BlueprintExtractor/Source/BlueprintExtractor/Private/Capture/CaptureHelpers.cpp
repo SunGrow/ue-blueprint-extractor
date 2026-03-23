@@ -18,6 +18,9 @@
 #include "Serialization/JsonWriter.h"
 #include "Slate/WidgetRenderer.h"
 #include "Blueprint/UserWidget.h"
+#include "Animation/WidgetAnimation.h"
+#include "Blueprint/WidgetBlueprintGeneratedClass.h"
+#include "MovieScene.h"
 #include "WidgetBlueprint.h"
 
 namespace BlueprintExtractorCapture
@@ -140,6 +143,10 @@ namespace
 
 	FString InferVerificationSurface(const FString& CaptureType)
 	{
+		if (CaptureType == TEXT("widget_motion_checkpoint"))
+		{
+			return TEXT("widget_motion_checkpoint");
+		}
 		if (CaptureType == TEXT("widget_preview") || CaptureType == TEXT("comparison_diff"))
 		{
 			return TEXT("editor_offscreen");
@@ -253,9 +260,14 @@ namespace
 		Parsed->TryGetStringField(TEXT("metadataPath"), OutMetadata.MetadataPath);
 		Parsed->TryGetStringField(TEXT("createdAt"), OutMetadata.CreatedAt);
 		Parsed->TryGetStringField(TEXT("projectDir"), OutMetadata.ProjectDir);
+		Parsed->TryGetStringField(TEXT("motionCaptureId"), OutMetadata.MotionCaptureId);
+		Parsed->TryGetStringField(TEXT("checkpointName"), OutMetadata.CheckpointName);
+		Parsed->TryGetStringField(TEXT("playbackSource"), OutMetadata.PlaybackSource);
+		Parsed->TryGetStringField(TEXT("triggerMode"), OutMetadata.TriggerMode);
 		Parsed->TryGetNumberField(TEXT("width"), Width);
 		Parsed->TryGetNumberField(TEXT("height"), Height);
 		Parsed->TryGetNumberField(TEXT("fileSizeBytes"), FileSize);
+		Parsed->TryGetNumberField(TEXT("checkpointMs"), OutMetadata.CheckpointMs);
 		const TArray<TSharedPtr<FJsonValue>>* AssetPathArray = nullptr;
 		if (Parsed->TryGetArrayField(TEXT("assetPaths"), AssetPathArray) && AssetPathArray)
 		{
@@ -374,6 +386,193 @@ namespace
 
 		return true;
 	}
+
+	struct FMotionCheckpointRequest
+	{
+		FString Name;
+		double TimeMs = -1.0;
+	};
+
+	UWidgetAnimation* FindRuntimeAnimationByName(UWidgetBlueprint* WidgetBlueprint, const FString& AnimationName)
+	{
+		if (!WidgetBlueprint)
+		{
+			return nullptr;
+		}
+
+		const UWidgetBlueprintGeneratedClass* GeneratedClass = Cast<UWidgetBlueprintGeneratedClass>(WidgetBlueprint->GeneratedClass);
+		if (!GeneratedClass)
+		{
+			return nullptr;
+		}
+
+		for (UWidgetAnimation* Animation : GeneratedClass->Animations)
+		{
+			if (Animation && (Animation->GetName() == AnimationName || Animation->GetFName().ToString() == AnimationName))
+			{
+				return Animation;
+			}
+		}
+
+		return nullptr;
+	}
+
+	UWidgetAnimation* FindAuthoredAnimationByName(UWidgetBlueprint* WidgetBlueprint, const FString& AnimationName)
+	{
+		if (!WidgetBlueprint)
+		{
+			return nullptr;
+		}
+
+		for (UWidgetAnimation* Animation : WidgetBlueprint->Animations)
+		{
+			if (Animation && (Animation->GetName() == AnimationName || Animation->GetFName().ToString() == AnimationName))
+			{
+				return Animation;
+			}
+		}
+
+		return nullptr;
+	}
+
+	bool ParseMotionCheckpointRequests(const TSharedPtr<FJsonObject>& Payload,
+	                                  UWidgetAnimation* AuthoredAnimation,
+	                                  TArray<FMotionCheckpointRequest>& OutCheckpoints,
+	                                  bool& bOutPartialVerification)
+	{
+		OutCheckpoints.Reset();
+		bOutPartialVerification = false;
+
+		const TArray<TSharedPtr<FJsonValue>>* Checkpoints = nullptr;
+		if (Payload.IsValid() && Payload->TryGetArrayField(TEXT("checkpoints"), Checkpoints) && Checkpoints)
+		{
+			for (const TSharedPtr<FJsonValue>& CheckpointValue : *Checkpoints)
+			{
+				const TSharedPtr<FJsonObject> Checkpoint = CheckpointValue.IsValid() ? CheckpointValue->AsObject() : nullptr;
+				if (!Checkpoint.IsValid())
+				{
+					continue;
+				}
+
+				FMotionCheckpointRequest Request;
+				Checkpoint->TryGetStringField(TEXT("name"), Request.Name);
+				Checkpoint->TryGetNumberField(TEXT("time_ms"), Request.TimeMs);
+				if (Request.TimeMs < 0.0)
+				{
+					Checkpoint->TryGetNumberField(TEXT("timeMs"), Request.TimeMs);
+				}
+				if (!Request.Name.IsEmpty())
+				{
+					OutCheckpoints.Add(Request);
+				}
+			}
+		}
+
+		if (OutCheckpoints.Num() == 0 && AuthoredAnimation && AuthoredAnimation->MovieScene)
+		{
+			for (const FMovieSceneMarkedFrame& MarkedFrame : AuthoredAnimation->MovieScene->GetMarkedFrames())
+			{
+				OutCheckpoints.Add({ MarkedFrame.Label, AuthoredAnimation->MovieScene->GetTickResolution().AsSeconds(MarkedFrame.FrameNumber) * 1000.0 });
+			}
+		}
+
+		if (OutCheckpoints.Num() == 0 && AuthoredAnimation)
+		{
+			const double EndTimeMs = AuthoredAnimation->GetEndTime() * 1000.0;
+			OutCheckpoints.Add({ TEXT("closed"), 0.0 });
+			OutCheckpoints.Add({ TEXT("opening_peak"), EndTimeMs * 0.5 });
+			OutCheckpoints.Add({ TEXT("open"), EndTimeMs });
+			bOutPartialVerification = true;
+		}
+
+		if (AuthoredAnimation && AuthoredAnimation->MovieScene)
+		{
+			for (FMotionCheckpointRequest& Request : OutCheckpoints)
+			{
+				if (Request.TimeMs >= 0.0)
+				{
+					continue;
+				}
+
+				const int32 MarkedFrameIndex = AuthoredAnimation->MovieScene->FindMarkedFrameByLabel(Request.Name);
+				if (MarkedFrameIndex >= 0)
+				{
+					Request.TimeMs = AuthoredAnimation->MovieScene->GetTickResolution().AsSeconds(
+						AuthoredAnimation->MovieScene->GetMarkedFrames()[MarkedFrameIndex].FrameNumber) * 1000.0;
+				}
+			}
+		}
+
+		OutCheckpoints.RemoveAll([](const FMotionCheckpointRequest& Request)
+		{
+			return Request.Name.IsEmpty() || Request.TimeMs < 0.0;
+		});
+		return OutCheckpoints.Num() > 0;
+	}
+
+	bool CaptureWidgetInstance(UUserWidget* WidgetInstance,
+	                          const FString& SourceName,
+	                          const FString& CaptureSuffix,
+	                          FBlueprintExtractorCaptureMetadata& OutMetadata,
+	                          FString& OutError,
+	                          const int32 RequestedWidth,
+	                          const int32 RequestedHeight)
+	{
+		if (!WidgetInstance)
+		{
+			OutError = TEXT("Widget instance is null.");
+			return false;
+		}
+
+		const int32 Width = FMath::Clamp(RequestedWidth, 64, 2048);
+		const int32 Height = FMath::Clamp(RequestedHeight, 64, 2048);
+		const TSharedRef<SWidget> SlateWidget = WidgetInstance->TakeWidget();
+		WidgetInstance->ForceLayoutPrepass();
+
+		UTextureRenderTarget2D* RenderTarget = FWidgetRenderer::CreateTargetFor(FVector2D(Width, Height), TF_Bilinear, true);
+		if (!RenderTarget)
+		{
+			OutError = TEXT("Failed to allocate a render target for widget capture.");
+			return false;
+		}
+
+		{
+			FWidgetRenderer Renderer(true, true);
+			Renderer.DrawWidget(RenderTarget, SlateWidget, FVector2D(Width, Height), 0.0f);
+		}
+
+		FlushRenderingCommands();
+
+		FImage CapturedImage;
+		if (!FImageUtils::GetRenderTargetImage(RenderTarget, CapturedImage))
+		{
+			OutError = TEXT("Failed to read pixels from the widget capture render target.");
+			return false;
+		}
+
+		OutMetadata.CaptureId = MakeCaptureId(SourceName, CaptureSuffix);
+		OutMetadata.CaptureDirectory = BuildCaptureDirectory(OutMetadata.CaptureId);
+		OutMetadata.ArtifactPath = BuildCaptureArtifactPath(OutMetadata.CaptureId);
+		OutMetadata.MetadataPath = BuildCaptureMetadataPath(OutMetadata.CaptureId);
+		OutMetadata.Width = CapturedImage.SizeX;
+		OutMetadata.Height = CapturedImage.SizeY;
+		OutMetadata.CreatedAt = FDateTime::UtcNow().ToIso8601();
+		OutMetadata.ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+		OutMetadata.WorldContext = BuildDefaultWorldContext(OutMetadata);
+		OutMetadata.CameraContext = BuildDefaultCameraContext(OutMetadata);
+
+		if (!EnsureDirectory(OutMetadata.CaptureDirectory, OutError))
+		{
+			return false;
+		}
+		if (!SaveImageAsPng(OutMetadata.ArtifactPath, CapturedImage, OutError))
+		{
+			return false;
+		}
+
+		OutMetadata.FileSizeBytes = FMath::Max<int64>(0, IFileManager::Get().FileSize(*OutMetadata.ArtifactPath));
+		return WriteCaptureMetadata(OutMetadata, OutError);
+	}
 }
 
 TSharedPtr<FJsonObject> CaptureMetadataToJson(const FBlueprintExtractorCaptureMetadata& Metadata)
@@ -403,6 +602,26 @@ TSharedPtr<FJsonObject> CaptureMetadataToJson(const FBlueprintExtractorCaptureMe
 	if (!Normalized.ProjectDir.IsEmpty())
 	{
 		Result->SetStringField(TEXT("projectDir"), Normalized.ProjectDir);
+	}
+	if (!Normalized.MotionCaptureId.IsEmpty())
+	{
+		Result->SetStringField(TEXT("motionCaptureId"), Normalized.MotionCaptureId);
+	}
+	if (!Normalized.CheckpointName.IsEmpty())
+	{
+		Result->SetStringField(TEXT("checkpointName"), Normalized.CheckpointName);
+	}
+	if (Normalized.CheckpointMs > 0.0 || !Normalized.CheckpointName.IsEmpty())
+	{
+		Result->SetNumberField(TEXT("checkpointMs"), Normalized.CheckpointMs);
+	}
+	if (!Normalized.PlaybackSource.IsEmpty())
+	{
+		Result->SetStringField(TEXT("playbackSource"), Normalized.PlaybackSource);
+	}
+	if (!Normalized.TriggerMode.IsEmpty())
+	{
+		Result->SetStringField(TEXT("triggerMode"), Normalized.TriggerMode);
 	}
 	if (Normalized.WorldContext.IsValid())
 	{
@@ -434,6 +653,161 @@ TSharedPtr<FJsonObject> CaptureCompareResultToJson(const FBlueprintExtractorCapt
 	Json->SetStringField(TEXT("diffCaptureId"), Result.DiffCaptureId);
 	Json->SetStringField(TEXT("diffArtifactPath"), Result.DiffArtifactPath);
 	return Json;
+}
+
+TSharedPtr<FJsonObject> MotionCaptureResultToJson(const FBlueprintExtractorMotionCaptureResult& Result)
+{
+	const TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+	Json->SetBoolField(TEXT("success"), true);
+	Json->SetStringField(TEXT("motionCaptureId"), Result.MotionCaptureId);
+	Json->SetStringField(TEXT("mode"), Result.Mode);
+	Json->SetStringField(TEXT("triggerMode"), Result.TriggerMode);
+	Json->SetStringField(TEXT("playbackSource"), Result.PlaybackSource);
+	Json->SetStringField(TEXT("assetPath"), Result.AssetPath);
+	Json->SetStringField(TEXT("animationName"), Result.AnimationName);
+	Json->SetBoolField(TEXT("partialVerification"), Result.bPartialVerification);
+
+	TArray<TSharedPtr<FJsonValue>> DiagnosticValues;
+	for (const FString& Diagnostic : Result.Diagnostics)
+	{
+		DiagnosticValues.Add(MakeShared<FJsonValueString>(Diagnostic));
+	}
+	Json->SetArrayField(TEXT("diagnostics"), DiagnosticValues);
+
+	TArray<TSharedPtr<FJsonValue>> ArtifactValues;
+	for (const FBlueprintExtractorCaptureMetadata& Artifact : Result.VerificationArtifacts)
+	{
+		ArtifactValues.Add(MakeShared<FJsonValueObject>(CaptureMetadataToJson(Artifact)));
+	}
+	Json->SetArrayField(TEXT("verificationArtifacts"), ArtifactValues);
+	Json->SetNumberField(TEXT("checkpointCount"), Result.VerificationArtifacts.Num());
+	return Json;
+}
+
+bool CaptureWidgetMotionCheckpoints(UWidgetBlueprint* WidgetBlueprint,
+	const TSharedPtr<FJsonObject>& Payload,
+	FBlueprintExtractorMotionCaptureResult& OutResult,
+	FString& OutError)
+{
+	if (!WidgetBlueprint)
+	{
+		OutError = TEXT("WidgetBlueprint is null.");
+		return false;
+	}
+
+	if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
+	{
+		OutError = TEXT("Widget motion capture requires an editor session with rendering enabled. Avoid -NullRHI for visual verification runs.");
+		return false;
+	}
+
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		OutError = TEXT("No editor world is available for widget motion capture.");
+		return false;
+	}
+
+	FString AnimationName;
+	if (!Payload.IsValid() || !Payload->TryGetStringField(TEXT("animation_name"), AnimationName) || AnimationName.IsEmpty())
+	{
+		OutError = TEXT("Payload requires animation_name.");
+		return false;
+	}
+
+	UWidgetAnimation* RuntimeAnimation = FindRuntimeAnimationByName(WidgetBlueprint, AnimationName);
+	UWidgetAnimation* AuthoredAnimation = FindAuthoredAnimationByName(WidgetBlueprint, AnimationName);
+	if (!RuntimeAnimation || !AuthoredAnimation)
+	{
+		OutError = FString::Printf(TEXT("Widget animation '%s' was not found on the compiled WidgetBlueprint. Compile the widget before motion capture."), *AnimationName);
+		return false;
+	}
+
+	int32 Width = 512;
+	int32 Height = 512;
+	if (Payload.IsValid())
+	{
+		double WidthNumber = 512.0;
+		double HeightNumber = 512.0;
+		Payload->TryGetNumberField(TEXT("width"), WidthNumber);
+		Payload->TryGetNumberField(TEXT("height"), HeightNumber);
+		Width = FMath::RoundToInt(WidthNumber);
+		Height = FMath::RoundToInt(HeightNumber);
+	}
+
+	TArray<FMotionCheckpointRequest> Checkpoints;
+	bool bPartialVerification = false;
+	if (!ParseMotionCheckpointRequests(Payload, AuthoredAnimation, Checkpoints, bPartialVerification))
+	{
+		OutError = FString::Printf(TEXT("No motion checkpoints could be resolved for animation '%s'."), *AnimationName);
+		return false;
+	}
+
+	const UWidgetBlueprintGeneratedClass* GeneratedClass = Cast<UWidgetBlueprintGeneratedClass>(WidgetBlueprint->GeneratedClass);
+	if (!GeneratedClass || GeneratedClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated))
+	{
+		OutError = FString::Printf(TEXT("WidgetBlueprint '%s' does not have a valid generated class. Compile it before motion capture."), *WidgetBlueprint->GetPathName());
+		return false;
+	}
+
+	const FString AssetName = FPackageName::GetLongPackageAssetName(WidgetBlueprint->GetOutermost()->GetName());
+	OutResult = {};
+	OutResult.MotionCaptureId = MakeCaptureId(AssetName, TEXT("widget_motion"));
+	OutResult.Mode = TEXT("editor_preview");
+	OutResult.TriggerMode = TEXT("asset_animation");
+	OutResult.PlaybackSource = AnimationName;
+	OutResult.AssetPath = WidgetBlueprint->GetPathName();
+	OutResult.AnimationName = AnimationName;
+	OutResult.bPartialVerification = bPartialVerification;
+	if (bPartialVerification)
+	{
+		OutResult.Diagnostics.Add(TEXT("No explicit checkpoints were supplied, so closed/opening_peak/open were inferred from the authored duration."));
+	}
+
+	for (const FMotionCheckpointRequest& Checkpoint : Checkpoints)
+	{
+		UUserWidget* WidgetInstance = NewObject<UUserWidget>(World, WidgetBlueprint->GeneratedClass, NAME_None, RF_Transient);
+		if (!WidgetInstance)
+		{
+			OutError = FString::Printf(TEXT("Failed to instantiate widget class '%s'."), *WidgetBlueprint->GeneratedClass->GetPathName());
+			return false;
+		}
+
+		WidgetInstance->SetDesignerFlags(EWidgetDesignFlags::Designing | EWidgetDesignFlags::ExecutePreConstruct);
+		if (!WidgetInstance->Initialize())
+		{
+			OutError = FString::Printf(TEXT("Failed to initialize widget '%s'."), *WidgetBlueprint->GetPathName());
+			return false;
+		}
+
+		WidgetInstance->PlayAnimation(RuntimeAnimation, 0.0f, 1, EUMGSequencePlayMode::Forward, 1.0f, false);
+		WidgetInstance->SetAnimationCurrentTime(RuntimeAnimation, Checkpoint.TimeMs / 1000.0f);
+		WidgetInstance->FlushAnimations();
+
+		FBlueprintExtractorCaptureMetadata Metadata;
+		Metadata.CaptureType = TEXT("widget_motion_checkpoint");
+		Metadata.Surface = TEXT("widget_motion_checkpoint");
+		Metadata.AssetPath = WidgetBlueprint->GetPathName();
+		Metadata.AssetPaths = { Metadata.AssetPath };
+		Metadata.WidgetClass = WidgetBlueprint->GeneratedClass->GetPathName();
+		Metadata.ScenarioId = FString::Printf(TEXT("widget_motion:%s:%s:%s"), *Metadata.AssetPath, *AnimationName, *Checkpoint.Name);
+		Metadata.MotionCaptureId = OutResult.MotionCaptureId;
+		Metadata.CheckpointName = Checkpoint.Name;
+		Metadata.CheckpointMs = Checkpoint.TimeMs;
+		Metadata.PlaybackSource = AnimationName;
+		Metadata.TriggerMode = TEXT("asset_animation");
+
+		FString CaptureError;
+		if (!CaptureWidgetInstance(WidgetInstance, AssetName, FString::Printf(TEXT("widget_motion_%s"), *FPaths::MakeValidFileName(Checkpoint.Name)), Metadata, CaptureError, Width, Height))
+		{
+			OutError = CaptureError;
+			return false;
+		}
+
+		OutResult.VerificationArtifacts.Add(Metadata);
+	}
+
+	return true;
 }
 
 bool CaptureWidgetPreview(UWidgetBlueprint* WidgetBlueprint,

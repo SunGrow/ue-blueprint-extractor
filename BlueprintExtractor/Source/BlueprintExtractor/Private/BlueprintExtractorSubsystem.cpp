@@ -13,6 +13,7 @@
 #include "Authoring/DataAssetAuthoring.h"
 #include "Authoring/DataTableAuthoring.h"
 #include "Authoring/FontAuthoring.h"
+#include "Authoring/WidgetAnimationAuthoring.h"
 #include "Capture/CaptureTypes.h"
 #include "Import/ImportJobManager.h"
 #include "Authoring/MaterialGraphAuthoring.h"
@@ -1019,6 +1020,93 @@ FString UBlueprintExtractorSubsystem::ExtractWidgetBlueprint(const FString& Asse
 	return SerializeJsonObject(Result);
 }
 
+FString UBlueprintExtractorSubsystem::ExtractWidgetAnimation(const FString& AssetPath, const FString& AnimationName)
+{
+	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetAnimationAuthoring::Extract(WidgetBP, AnimationName);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to extract widget animation"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CreateWidgetAnimation(const FString& AssetPath,
+                                                            const FString& AnimationName,
+                                                            const FString& PayloadJson,
+                                                            const bool bValidateOnly)
+{
+	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetAnimationAuthoring::Create(
+		WidgetBP,
+		AnimationName,
+		ParsedPayload,
+		bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to create widget animation"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ModifyWidgetAnimation(const FString& AssetPath,
+                                                            const FString& AnimationName,
+                                                            const FString& Operation,
+                                                            const FString& PayloadJson,
+                                                            const bool bValidateOnly)
+{
+	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Result = FWidgetAnimationAuthoring::Modify(
+		WidgetBP,
+		AnimationName,
+		Operation,
+		ParsedPayload,
+		bValidateOnly);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(TEXT("Failed to modify widget animation"));
+	}
+
+	return SerializeJsonObject(Result);
+}
+
 FString UBlueprintExtractorSubsystem::BuildWidgetTree(const FString& AssetPath,
                                                       const FString& WidgetTreeJson,
                                                       const bool bValidateOnly)
@@ -1185,6 +1273,36 @@ FString UBlueprintExtractorSubsystem::CaptureWidgetPreview(const FString& AssetP
 
 	const TSharedPtr<FJsonObject> Result = BlueprintExtractorCapture::CaptureMetadataToJson(Metadata);
 	Result->SetStringField(TEXT("operation"), TEXT("capture_widget_preview"));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CaptureWidgetMotionCheckpoints(const FString& AssetPath, const FString& PayloadJson)
+{
+	UWidgetBlueprint* WidgetBP = LoadAssetByPath<UWidgetBlueprint>(AssetPath);
+	if (WidgetBP == nullptr)
+	{
+		return MakeErrorJson(FString::Printf(TEXT("Asset not found or not a WidgetBlueprint: %s"), *AssetPath));
+	}
+
+	TSharedPtr<FJsonObject> ParsedPayload = MakeShared<FJsonObject>();
+	if (!PayloadJson.IsEmpty())
+	{
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PayloadJson);
+		if (!FJsonSerializer::Deserialize(Reader, ParsedPayload) || !ParsedPayload.IsValid())
+		{
+			return MakeErrorJson(TEXT("Invalid JSON for PayloadJson"));
+		}
+	}
+
+	FBlueprintExtractorMotionCaptureResult MotionResult;
+	FString Error;
+	if (!BlueprintExtractorCapture::CaptureWidgetMotionCheckpoints(WidgetBP, ParsedPayload, MotionResult, Error))
+	{
+		return MakeErrorJson(Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorCapture::MotionCaptureResultToJson(MotionResult);
+	Result->SetStringField(TEXT("operation"), TEXT("capture_widget_motion_checkpoints"));
 	return SerializeJsonObject(Result);
 }
 
