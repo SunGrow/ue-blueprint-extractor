@@ -13,10 +13,10 @@ A UE5 editor plugin + MCP server that gives [Claude Code](https://docs.anthropic
 
 ## Features at a Glance
 
-- **92 MCP tools**, **12 resources**, **4 resource templates**, and **4 prompts**
+- **97 MCP tools**, **16 resources**, **4 resource templates**, and **8 prompts**
 - **Full round-trip** -- extract assets to JSON, then create and modify them back
 - **Strict v2 contract** -- snake_case inputs, `outputSchema` on every tool, and structured success/error envelopes
-- **Generated examples + prompts** -- schema-backed examples and reusable workflow prompts for UI, materials, HUD wiring, and compile debugging
+- **Generated examples + prompts** -- schema-backed examples and reusable workflow prompts for UI, widget motion, materials, HUD wiring, and compile debugging
 - **Explicit-save semantics** -- write operations mark packages dirty; you choose when to save
 - **Async imports** -- import textures and meshes from local files or HTTP/HTTPS URLs
 - **Composable material tools** -- use small focused tools before the advanced batch DSL
@@ -24,7 +24,9 @@ A UE5 editor plugin + MCP server that gives [Claude Code](https://docs.anthropic
 - **Compact output** -- LLM-optimized JSON reduces token usage by 50-70%
 - **Cascade extraction** -- follow asset references automatically with depth control
 - **Project automation** -- compile, live coding, editor restart, and code sync
-- **Verification platform** -- semantic extraction, widget preview capture/diffing, and host-side automation test runs
+- **Verification platform** -- semantic extraction, widget preview capture/diffing, widget motion checkpoint bundles, and host-side automation test runs
+- **Multimodal UI planning** -- normalize text, image, PNG/Figma, or HTML/CSS inputs into `design_spec_json` before menu authoring
+- **Widget motion authoring** -- create, modify, extract, capture, and compare WidgetBlueprint animations on the supported v2 track subset
 - **Editor-only** -- not included in packaged builds
 
 <details>
@@ -82,7 +84,7 @@ Run the install script for your client:
 
 ### 3. Verify
 
-Open a new Claude Code or Codex session. The Blueprint Extractor tools and 4 workflow prompts will appear automatically.
+Open a new Claude Code or Codex session. The Blueprint Extractor tools and 8 workflow prompts will appear automatically.
 
 <details>
 <summary><strong>Manual registration and local builds</strong></summary>
@@ -139,6 +141,9 @@ Reference docs:
 
 - [MCP v2 Reference](docs/mcp-v2-reference.md)
 - [Prompt Catalog](docs/prompt-catalog.md)
+- [Multimodal UI Design Workflow](docs/multimodal-ui-design-workflow.md)
+- [Widget Motion Authoring](docs/widget-motion-authoring.md)
+- [Motion Verification Workflow](docs/motion-verification-workflow.md)
 - [Unsupported Surfaces](docs/unsupported-surfaces.md)
 - [Safe UI Redesign Workflow](docs/ui-redesign-workflow.md)
 
@@ -147,12 +152,13 @@ Reference docs:
 Tools are organized by category. All tools declare `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations for safe auto-approval, and every public tool exposes `outputSchema`.
 
 <details>
-<summary><strong>Extraction Tools</strong> (17 tools) -- read-only, extract asset data to JSON</summary>
+<summary><strong>Extraction Tools</strong> (18 tools) -- read-only, extract asset data to JSON</summary>
 
 | Tool | Description |
 |------|-------------|
 | `extract_blueprint` | Extract a Blueprint, AnimBlueprint, or WidgetBlueprint (scope + graph filter + compact mode) |
 | `extract_widget_blueprint` | Extract a compact widget-authoring snapshot with tree, bindings, animations, and class defaults |
+| `extract_widget_animation` | Extract one authored widget animation timeline, bindings, checkpoints, and playback metadata |
 | `extract_statetree` | Extract a StateTree to JSON |
 | `extract_behavior_tree` | Extract a BehaviorTree to JSON |
 | `extract_blackboard` | Extract a Blackboard to JSON |
@@ -201,6 +207,16 @@ Tools are organized by category. All tools declare `readOnlyHint`, `destructiveH
 | `modify_widget` | Patch properties, slot config, rename, and variable flags on a single widget |
 | `modify_widget_blueprint` | Structural ops: replace-tree, patch-widget, insert-child, move, wrap, replace-class, batch |
 | `compile_widget_blueprint` | Compile a WidgetBlueprint and return errors/warnings |
+
+</details>
+
+<details>
+<summary><strong>Widget Motion Authoring</strong> (2 tools) -- create and modify widget timelines</summary>
+
+| Tool | Description |
+|------|-------------|
+| `create_widget_animation` | Create a named widget animation on an existing WidgetBlueprint with an optional initial payload |
+| `modify_widget_animation` | Replace a timeline, patch metadata, rename, remove, or compile a widget animation |
 
 </details>
 
@@ -327,12 +343,14 @@ Tools are organized by category. All tools declare `readOnlyHint`, `destructiveH
 </details>
 
 <details>
-<summary><strong>Verification</strong> (7 tools) -- visual capture and runtime automation</summary>
+<summary><strong>Verification</strong> (9 tools) -- visual capture, motion checkpoints, and runtime automation</summary>
 
 | Tool | Description |
 |------|-------------|
 | `capture_widget_preview` | Render a WidgetBlueprint offscreen and return capture metadata plus a linked preview artifact |
+| `capture_widget_motion_checkpoints` | Play a widget animation or automation-driven scenario and return a keyframe bundle of named checkpoint captures |
 | `compare_capture_to_reference` | Compare two captures or PNGs and record a diff image with RMSE and mismatch details |
+| `compare_motion_capture_bundle` | Compare a captured checkpoint bundle against reference frames or another bundle |
 | `list_captures` | List saved widget preview and diff captures from the current project |
 | `cleanup_captures` | Delete old capture artifacts from `Saved/BlueprintExtractor/Captures` |
 | `run_automation_tests` | Launch an async host-side Unreal automation run for gameplay, runtime, or mechanic verification |
@@ -600,7 +618,7 @@ BlueprintExtractorLibrary          (public API, cascade BFS loop)
 
 ### Design Principles
 
-- **Right primitive** -- Live editor actions are exposed as MCP **tools**. Static guidance lives in 12 resources, 4 resource templates, and 4 prompts (`blueprint://scopes`, `blueprint://verification-workflows`, `blueprint://examples/{family}`, `design_menu_screen`, etc.).
+- **Right primitive** -- Live editor actions are exposed as MCP **tools**. Static guidance lives in 16 resources, 4 resource templates, and 8 prompts (`blueprint://scopes`, `blueprint://verification-workflows`, `blueprint://examples/{family}`, `normalize_ui_design_input`, etc.).
 - **Small, distinct surface** -- extraction tools stay read-only, common material flows are decomposed into smaller tools, and Enhanced Input uses dedicated authoring tools instead of pretending generic DataAsset reflection is enough.
 - **Annotations** -- All tools declare `readOnlyHint`, `destructiveHint`, `idempotentHint` for safe auto-approval.
 - **Structured results** -- every public tool exposes `outputSchema`, mirrors JSON in `structuredContent`, and returns machine-usable error envelopes when execution fails recoverably.

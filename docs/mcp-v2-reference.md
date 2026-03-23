@@ -97,6 +97,74 @@ Use the dedicated CommonUI family instead of raw `UButton` wrapper fields:
 
 ## Primary v2 Workflows
 
+### Multimodal Menu Design
+
+Use a shared `design_spec_json` before authoring a high-fidelity menu:
+
+1. `normalize_ui_design_input`
+2. `design_menu_from_design_spec`
+3. `extract_widget_blueprint`
+4. `import_textures` or `import_assets` when the design needs project-owned textures or rendered references
+5. `create_material_instance`, `modify_material_instance`, `create_commonui_button_style`, `modify_commonui_button_style`, or `apply_commonui_button_style`
+6. `modify_widget_blueprint`
+7. `compile_widget_blueprint`
+8. `capture_widget_preview`
+9. `compare_capture_to_reference` when reference frames exist
+10. `save_assets`
+
+`text+image` and `png/figma` are the primary high-fidelity inputs. `html/css` remains near-parity when the caller extracts tokens and provides rendered reference frames instead of assuming direct DOM-to-UMG translation. `text-only` remains supported, but it should end with a lower-confidence or partial-verification statement when no visual reference exists.
+
+The shared `design_spec_json` should cover:
+
+- `layout`
+- `visual_tokens`
+- `components`
+- `motion` optional
+- `verification` optional
+
+Motion support in v2 now includes dedicated widget animation authoring plus checkpoint-bundle verification. Prefer material-driven states or style-state changes for simple interactions, and use the dedicated widget animation tools when the design needs authored timelines on the supported track subset.
+
+### Widget Motion Authoring
+
+Use the dedicated widget animation tools instead of trying to encode authored motion through generic widget patches:
+
+1. `extract_widget_animation`
+2. `create_widget_animation`
+3. `modify_widget_animation`
+4. `capture_widget_motion_checkpoints`
+5. `compare_motion_capture_bundle`
+6. `save_assets`
+
+`extract_widget_blueprint.animations` remains the shallow inventory surface. Deep timeline inspection, binding targets, playback metadata, and checkpoints now live in `extract_widget_animation`.
+
+The initial supported timeline subset is explicit:
+
+- `render_opacity`
+- `render_transform_translation`
+- `render_transform_scale`
+- `render_transform_angle`
+- `color_and_opacity`
+
+Use `widget_path` as the canonical selector for animation bindings and track targets. `replace_timeline` is the primary write path in the initial v2 release because it is easier to validate, diff, and test than arbitrary key patching. Unsupported track families remain outside the public contract and should return a structured `deferred_to_v2` / partial-implementation boundary.
+
+### Motion Verification
+
+Verification output for motion is a keyframe bundle, not a video or GIF.
+
+- `capture_widget_motion_checkpoints` in `editor_preview` mode is the primary lane for menu/shell widget motion.
+- `capture_widget_motion_checkpoints` in `automation_scenario` mode builds on `run_automation_tests` for HUD/runtime playback.
+- `compare_motion_capture_bundle` compares named checkpoints against reference frames or another bundle.
+
+Canonical checkpoints:
+
+- `closed`
+- `opening_peak`
+- `open`
+- `focused`
+- `pressed`
+
+Compile/save alone is never accepted as motion verification. When a runtime scenario cannot export checkpoint artifacts yet, verification must stay partial.
+
 ### Material Authoring
 
 Use the smaller composable tools first:
@@ -124,17 +192,19 @@ Enhanced Input assets can still be inspected with `extract_dataasset`.
 
 ### Widget Redesign
 
+- Normalize multimodal design input into `design_spec_json` first when the redesign is fidelity-sensitive.
 - Inspect the current widget and any owning HUD/transition assets first.
 - Prefer `modify_widget_blueprint` for small structural changes.
 - Use `build_widget_tree` only when replacing the full tree is justified.
 - `extract_widget_blueprint` now always returns `rootWidget` as an object or `null`. If extraction degrades, inspect `widgetTreeStatus`, `widgetTreeError`, and `compile.errors` before rebuilding the tree.
 - Compile immediately after structural changes.
 - Run `capture_widget_preview` after compile is clean; compile/save alone is not treated as visual proof for user-facing widget work.
+- If reference frames or motion checkpoints exist, use `compare_capture_to_reference` before save.
 - `capture_widget_preview`, `list_captures`, and diff captures now normalize to a shared verification-artifact shape with `surface`, `scenarioId`, `assetPaths`, `worldContext`, and `cameraContext`, so later runtime/editor lanes can reuse the same contract.
 - Use `apply_window_ui_changes.checkpoint_after_mutation_steps=true` when a multi-step UI flow is likely to hit compile failures, debugger pauses, or editor `ensure()` breaks.
 - `apply_window_ui_changes` now returns `verification.status` so callers can distinguish `compile_pending` from `unverified` visual confirmation and finish the flow explicitly.
 - `apply_window_ui_changes.save_after` defaults to `false` so visual verification can stay ahead of final persistence unless the caller opts into saving.
-- Save only after compile results are clean and the visual checkpoint is satisfied, or report `partial verification` with the blocking reason.
+- Save only after compile results are clean and the visual checkpoint is satisfied, or report `partial verification` / lower-confidence verification with the blocking reason.
 
 See [ui-redesign-workflow.md](./ui-redesign-workflow.md) for the full checklist.
 
@@ -149,5 +219,8 @@ The MCP server now exposes three guidance layers:
 Related docs:
 
 - [prompt-catalog.md](./prompt-catalog.md)
+- [multimodal-ui-design-workflow.md](./multimodal-ui-design-workflow.md)
+- [widget-motion-authoring.md](./widget-motion-authoring.md)
+- [motion-verification-workflow.md](./motion-verification-workflow.md)
 - [unsupported-surfaces.md](./unsupported-surfaces.md)
 - [ui-redesign-workflow.md](./ui-redesign-workflow.md)

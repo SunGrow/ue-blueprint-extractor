@@ -121,6 +121,25 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString ExtractWidgetBlueprint(const FString& AssetPath, const bool bIncludeClassDefaults = false);
 
+	/** Extract one authored widget animation timeline from a WidgetBlueprint. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ExtractWidgetAnimation(const FString& AssetPath, const FString& AnimationName);
+
+	/** Create a named widget animation with optional initial timeline payload. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CreateWidgetAnimation(const FString& AssetPath,
+	                              const FString& AnimationName,
+	                              const FString& PayloadJson = TEXT(""),
+	                              const bool bValidateOnly = false);
+
+	/** Modify a named widget animation timeline or metadata. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ModifyWidgetAnimation(const FString& AssetPath,
+	                              const FString& AnimationName,
+	                              const FString& Operation,
+	                              const FString& PayloadJson = TEXT(""),
+	                              const bool bValidateOnly = false);
+
 	/** Builds/replaces the entire widget hierarchy from JSON. Returns JSON with widget count and errors. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString BuildWidgetTree(const FString& AssetPath,
@@ -150,6 +169,10 @@ public:
 	/** Renders a WidgetBlueprint offscreen to a PNG capture under Saved/BlueprintExtractor/Captures. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CaptureWidgetPreview(const FString& AssetPath, int32 Width = 512, int32 Height = 512);
+
+	/** Renders one or more widget animation checkpoints to offscreen captures. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CaptureWidgetMotionCheckpoints(const FString& AssetPath, const FString& PayloadJson);
 
 	/** Compares two PNG captures or reference images and records a diff capture. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")

@@ -25,6 +25,7 @@ const serverInstructions = [
   'Blueprint Extractor MCP v2 exposes explicit snake_case tool arguments, prompt workflows, and structured JSON tool results.',
   'Use search_assets before extract_* tools when the exact asset path is not already known.',
   'For UI redesign work, inspect the current HUD, transition widgets, and class defaults before replacing widget trees.',
+  'For high-fidelity menu design, first normalize text, image, Figma-export, or HTML/CSS inputs into a shared design_spec_json before authoring Unreal assets.',
   'Write tools mutate the running editor but do not save automatically. Call save_assets after successful mutations you want to persist.',
   'Use wait_for_editor after restart windows or transient Remote Control disconnects before retrying editor-backed tools.',
   'Prefer validate_only=true the first time you author a new asset family or payload shape.',
@@ -32,6 +33,9 @@ const serverInstructions = [
   'Use create_input_action, modify_input_action, create_input_mapping_context, and modify_input_mapping_context for Enhanced Input authoring. Generic data asset mutation is intentionally rejected for those asset classes.',
   'Verify blueprint wiring, layout data, and authored values semantically with the existing extract_* tools before relying on screenshots.',
   'After widget or other user-facing UI mutations, treat the task as incomplete until capture_widget_preview succeeds or you explicitly report partial verification with the blocking reason.',
+  'If reference images or motion checkpoint frames exist, compare captures against them. Without references, still capture the result and report lower-confidence or partial verification when fidelity is uncertain.',
+  'Treat text+image and PNG/Figma inputs as first-class visual references. HTML/CSS can reach near parity when you extract design tokens and compare against rendered reference frames instead of assuming direct DOM-to-UMG translation.',
+  'Motion support in v2 includes dedicated widget animation authoring for render_opacity, render_transform translation/scale/angle, and color_and_opacity tracks. Treat broader arbitrary MovieScene track synthesis as deferred_to_v2 or unsupported when it exceeds that subset.',
   'Use run_automation_tests for gameplay or runtime verification. If no Automation Spec or Functional Test exists for a mechanic, report verification as partial instead of inferring success from structure alone.',
   'Successful tool results mirror the same JSON in structuredContent and text. Recoverable execution failures return isError=true with code, message, recoverable, and next_steps.',
 ].join('\n');
@@ -56,6 +60,8 @@ type ToolExample = {
   title: string;
   tool: string;
   arguments: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  expectedSuccess?: boolean;
 };
 
 type ExampleFamily = {
@@ -102,8 +108,165 @@ const commonUIButtonPaddingFields = [
   ['max_height', 'MaxHeight'],
 ] as const;
 
+const stringOrStringArrayPromptArg = z.union([z.string(), z.array(z.string())]);
+const designSpecPromptArg = z.union([z.string(), z.record(z.string(), z.unknown())]);
+
+const designSpecSchemaExample = {
+  layout: {
+    pattern: 'common_menu_shell',
+    hierarchy_intent: 'Header, primary actions, and a supporting detail panel.',
+    shell_type: 'CommonActivatableWidget',
+    density: 'comfortable',
+    safe_area_assumptions: {
+      platform: 'desktop',
+      policy: 'centered',
+    },
+  },
+  visual_tokens: {
+    palette: {
+      surface: '#10141c',
+      accent: '#f3a347',
+      text_primary: '#f5f7fb',
+      text_muted: '#b8c1cc',
+    },
+    typography_scale: {
+      title: 28,
+      button: 16,
+      body: 14,
+      caption: 11,
+    },
+    spacing: {
+      xs: 4,
+      sm: 8,
+      md: 12,
+      lg: 20,
+      xl: 32,
+    },
+    radius: {
+      button: 12,
+      panel: 20,
+    },
+    stroke: {
+      panel: 1,
+      focus: 2,
+    },
+    shadow_glow: {
+      panel_glow: 'soft amber outer glow',
+      focus_glow: 'tight white rim light',
+    },
+    texture_refs: [
+      '/Game/UI/Refs/T_MenuNoise.T_MenuNoise',
+    ],
+  },
+  components: {
+    button: {
+      base: 'material_button_base',
+      states: ['default', 'hovered', 'pressed', 'focused', 'disabled'],
+    },
+    panel: {
+      base: 'bordered_panel',
+      emphasis: 'soft glow',
+    },
+    card: {
+      base: 'list_detail_card',
+    },
+    list_item: {
+      base: 'menu_list_item',
+    },
+    title_bar: {
+      base: 'window_title_bar',
+    },
+    modal_shell: {
+      base: 'activatable_window',
+    },
+  },
+  motion: {
+    state_motion: {
+      hover: 'Scale up slightly and lift glow intensity.',
+      pressed: 'Brief downward nudge with faster fade.',
+      focused: 'Outline pulse and accent rim.',
+      open_close: 'Fade and slide the main panel.',
+    },
+    cinematic_motion: {
+      intro: 'Backdrop bloom, title drift, and staggered button reveal.',
+      outro: 'Panel fade, logo settle, and backdrop release.',
+    },
+    transitions: [
+      {
+        from: 'closed',
+        to: 'open',
+        duration_ms: 240,
+        easing: 'ease_out_cubic',
+      },
+    ],
+    checkpoints: ['closed', 'opening_peak', 'open', 'focused', 'pressed'],
+    triggers: {
+      open: 'asset_animation',
+      focused: 'asset_animation',
+      pressed: 'scenario_trigger',
+    },
+    fallback_policy: 'Use create_widget_animation/modify_widget_animation for the supported property-track subset. Defer only unsupported track families or arbitrary timeline synthesis.',
+  },
+  verification: {
+    compare_reference_paths: [
+      'C:/Refs/menu-open.png',
+      'C:/Refs/menu-focused.png',
+    ],
+    acceptable_deviation_notes: 'Minor glow intensity drift is acceptable if layout and silhouette still match.',
+    required_checkpoints: ['open', 'focused'],
+  },
+};
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function coerceStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+        }
+      } catch {
+        return [trimmed];
+      }
+    }
+
+    return [trimmed];
+  }
+
+  return [];
+}
+
+function formatPromptValue(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value;
+  }
+
+  if (Array.isArray(value) || isPlainObject(value)) {
+    return JSON.stringify(value, null, 2);
+  }
+
+  return null;
+}
+
+function formatPromptList(label: string, value: unknown, fallback: string): string {
+  const entries = coerceStringArray(value);
+  return entries.length > 0
+    ? `${label}:\n${entries.map((entry) => `- ${entry}`).join('\n')}`
+    : fallback;
+}
+
+function formatPromptBlock(label: string, value: unknown, fallback: string): string {
+  const formatted = formatPromptValue(value);
+  return formatted ? `${label}:\n${formatted}` : fallback;
 }
 
 function sleep(ms: number) {
@@ -281,6 +444,306 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
       },
     ],
   },
+  reference_menu_screen: {
+    summary: 'Normalize multimodal design inputs into a shared design_spec_json, author reusable foundation assets first, then assemble and verify the menu through capture plus compare when references exist.',
+    recommended_flow: [
+      'normalize_ui_design_input',
+      'design_menu_from_design_spec',
+      'extract_widget_blueprint',
+      'import_textures',
+      'create_material_instance',
+      'modify_widget_blueprint',
+      'compile_widget_blueprint',
+      'capture_widget_preview',
+      'compare_capture_to_reference',
+      'save_assets',
+    ],
+    examples: [
+      {
+        title: 'text_image_menu_screen',
+        tool: 'modify_widget_blueprint',
+        arguments: {
+          asset_path: '/Game/UI/Screens/WBP_MainMenu',
+          operation: 'patch_widget',
+          widget_path: 'WindowRoot/TitleBar/TitleText',
+          properties: { Text: 'Campaign' },
+          compile_after: true,
+        },
+        context: {
+          input_modality: 'text+image',
+          design_spec_json: {
+            layout: designSpecSchemaExample.layout,
+            visual_tokens: designSpecSchemaExample.visual_tokens,
+            components: designSpecSchemaExample.components,
+          },
+        },
+      },
+      {
+        title: 'png_figma_menu_screen',
+        tool: 'create_material_instance',
+        arguments: {
+          asset_path: '/Game/UI/Foundation/MaterialInstances/MI_MenuPrimaryButton',
+          parent_material_path: '/Game/UI/Foundation/Materials/M_MenuPrimaryButton',
+        },
+        context: {
+          input_modality: 'png/figma',
+          design_spec_json: {
+            visual_tokens: designSpecSchemaExample.visual_tokens,
+            verification: designSpecSchemaExample.verification,
+          },
+        },
+      },
+      {
+        title: 'html_css_menu_screen',
+        tool: 'apply_commonui_button_style',
+        arguments: {
+          asset_path: '/Game/UI/Screens/WBP_MainMenu',
+          style_asset_path: '/Game/UI/Foundation/Styles/BP_MenuPrimaryButtonStyle.BP_MenuPrimaryButtonStyle_C',
+        },
+        context: {
+          input_modality: 'html/css',
+          rendered_reference_frames: [
+            'C:/Refs/main-menu-open.png',
+            'C:/Refs/main-menu-focused.png',
+          ],
+          design_spec_json: {
+            layout: {
+              pattern: 'common_menu_shell',
+            },
+            components: {
+              button: designSpecSchemaExample.components.button,
+            },
+            verification: designSpecSchemaExample.verification,
+          },
+        },
+      },
+      {
+        title: 'state_motion_menu_screen',
+        tool: 'modify_widget_animation',
+        arguments: {
+          asset_path: '/Game/UI/Screens/WBP_MainMenu',
+          animation_name: 'PrimaryActionStates',
+          operation: 'replace_timeline',
+          payload: {
+            timeline: {
+              duration_ms: 180,
+              fps: 20,
+              tracks: [
+                {
+                  widget_path: 'WindowRoot/PrimaryActionButton',
+                  property: 'render_opacity',
+                  keys: [
+                    { time_ms: 0, value: 0.82 },
+                    { time_ms: 90, value: 1.0 },
+                    { time_ms: 180, value: 0.94 },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        context: {
+          motion_mode: 'state_motion',
+          verification_step: 'After compile, run capture_widget_motion_checkpoints in editor_preview mode and compare the open and focused checkpoints.',
+          design_spec_json: {
+            motion: {
+              state_motion: designSpecSchemaExample.motion.state_motion,
+              checkpoints: ['open', 'focused', 'pressed'],
+            },
+            verification: {
+              required_checkpoints: ['open', 'focused'],
+              compare_reference_paths: ['C:/Refs/menu-open.png', 'C:/Refs/menu-focused.png'],
+            },
+          },
+        },
+      },
+      {
+        title: 'cinematic_menu_motion',
+        tool: 'modify_widget_animation',
+        arguments: {
+          asset_path: '/Game/UI/Screens/WBP_MainMenu',
+          animation_name: 'MenuIntro',
+          operation: 'replace_timeline',
+          payload: {
+            timeline: {
+              duration_ms: 420,
+              fps: 20,
+              tracks: [
+                {
+                  widget_path: 'WindowRoot/Backdrop',
+                  property: 'render_opacity',
+                  keys: [
+                    { time_ms: 0, value: 0.2 },
+                    { time_ms: 210, value: 0.55 },
+                    { time_ms: 420, value: 0.85 },
+                  ],
+                },
+                {
+                  widget_path: 'WindowRoot/Backdrop',
+                  property: 'render_transform_scale',
+                  keys: [
+                    { time_ms: 0, value: { x: 1.04, y: 1.04 } },
+                    { time_ms: 420, value: { x: 1.0, y: 1.0 } },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        context: {
+          motion_mode: 'cinematic_motion',
+          expected_outcome: 'Fully planned in v2 when the motion stays inside the supported track subset; otherwise return a structured partial implementation boundary.',
+          verification_step: 'Capture the opening_peak and open checkpoints; only compare them if rendered reference frames exist.',
+          design_spec_json: {
+            motion: {
+              cinematic_motion: designSpecSchemaExample.motion.cinematic_motion,
+              checkpoints: ['opening_peak', 'open'],
+            },
+          },
+        },
+      },
+    ],
+  },
+  widget_motion: {
+    summary: 'Author widget motion through the dedicated animation tools, then verify the result as a keyframe bundle instead of stopping at compile or relying on video capture.',
+    recommended_flow: [
+      'extract_widget_animation',
+      'create_widget_animation',
+      'modify_widget_animation',
+      'capture_widget_motion_checkpoints',
+      'compare_motion_capture_bundle',
+      'save_assets',
+    ],
+    examples: [
+      {
+        title: 'menu_shell_state_motion',
+        tool: 'create_widget_animation',
+        arguments: {
+          asset_path: '/Game/UI/Screens/WBP_MainMenu',
+          animation_name: 'OpenSequence',
+          payload: {
+            display_label: 'OpenSequence',
+            duration_ms: 260,
+            fps: 20,
+            checkpoints: [
+              { name: 'closed', timeMs: 0 },
+              { name: 'opening_peak', timeMs: 120 },
+              { name: 'open', timeMs: 260 },
+            ],
+            timeline: {
+              tracks: [
+                {
+                  widget_path: 'WindowRoot/MainPanel',
+                  property: 'render_opacity',
+                  keys: [
+                    { time_ms: 0, value: 0, interpolation: 'linear' },
+                    { time_ms: 260, value: 1, interpolation: 'cubic' },
+                  ],
+                },
+                {
+                  widget_path: 'WindowRoot/MainPanel',
+                  property: 'render_transform_translation',
+                  keys: [
+                    { time_ms: 0, value: { x: 0, y: 18 } },
+                    { time_ms: 260, value: { x: 0, y: 0 } },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        context: {
+          scope: 'menu_shell',
+          verification: 'Follow with capture_widget_motion_checkpoints in editor_preview mode.',
+        },
+      },
+      {
+        title: 'hud_runtime_motion',
+        tool: 'capture_widget_motion_checkpoints',
+        arguments: {
+          mode: 'automation_scenario',
+          automation_filter: 'Project.UI.HUD.Motion',
+          engine_root: 'C:/Program Files/Epic Games/UE_5.7',
+          project_path: 'C:/Projects/MyGame/MyGame.uproject',
+          target: 'MyGameEditor',
+          compare_reference_paths: ['C:/Refs/hud-open.png', 'C:/Refs/hud-focused.png'],
+          checkpoints: [
+            { name: 'open' },
+            { name: 'focused' },
+          ],
+          null_rhi: false,
+        },
+        context: {
+          scope: 'hud_runtime',
+          expectation: 'Use automation-backed playback and return a keyframe bundle when the test exports checkpoint artifacts.',
+        },
+      },
+      {
+        title: 'cinematic_supported_motion',
+        tool: 'modify_widget_animation',
+        arguments: {
+          asset_path: '/Game/UI/Screens/WBP_MainMenu',
+          animation_name: 'OpenSequence',
+          operation: 'replace_timeline',
+          payload: {
+            timeline: {
+              duration_ms: 420,
+              fps: 20,
+              tracks: [
+                {
+                  widget_path: 'WindowRoot/Backdrop',
+                  property: 'render_opacity',
+                  keys: [
+                    { time_ms: 0, value: 0.35 },
+                    { time_ms: 420, value: 0.85 },
+                  ],
+                },
+                {
+                  widget_path: 'WindowRoot/TitleBar',
+                  property: 'render_transform_scale',
+                  keys: [
+                    { time_ms: 0, value: { x: 0.94, y: 0.94 } },
+                    { time_ms: 420, value: { x: 1.0, y: 1.0 } },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        context: {
+          scope: 'cinematic_motion_supported_subset',
+        },
+      },
+      {
+        title: 'unsupported_track_request',
+        tool: 'modify_widget_animation',
+        arguments: {
+          asset_path: '/Game/UI/Screens/WBP_MainMenu',
+          animation_name: 'OpenSequence',
+          operation: 'replace_timeline',
+          validate_only: true,
+          payload: {
+            timeline: {
+              tracks: [
+                {
+                  widget_path: 'WindowRoot/MainPanel',
+                  property: 'render_transform_shear',
+                  keys: [
+                    { time_ms: 0, value: { x: 0, y: 0 } },
+                    { time_ms: 180, value: { x: 8, y: 0 } },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        expectedSuccess: false,
+        context: {
+          expectation: 'This should return a structured unsupported / deferred boundary rather than silently synthesizing the track.',
+        },
+      },
+    ],
+  },
   material: {
     summary: 'Use the composable material tools first. They emit the same graph operations under the hood without exposing the full batch DSL.',
     recommended_flow: [
@@ -422,6 +885,75 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
 };
 
 export const promptCatalog: Record<string, PromptCatalogEntry> = {
+  normalize_ui_design_input: {
+    title: 'Normalize UI Design Input',
+    description: 'Convert text, image, PNG/Figma, or HTML/CSS references into a shared design_spec_json for menu authoring.',
+    args: {
+      design_goal: z.string(),
+      design_notes_text: z.string().optional(),
+      reference_image_paths: stringOrStringArrayPromptArg.optional(),
+      html_reference_paths: stringOrStringArrayPromptArg.optional(),
+      design_spec_json: designSpecPromptArg.optional(),
+    },
+    buildPrompt: ({
+      design_goal,
+      design_notes_text,
+      reference_image_paths,
+      html_reference_paths,
+      design_spec_json,
+    }) => [
+      'Normalize menu-design inputs into a single design_spec_json.',
+      `Goal: ${design_goal}.`,
+      typeof design_notes_text === 'string' && design_notes_text.trim().length > 0
+        ? `Design notes:\n${design_notes_text}`
+        : 'If the notes are sparse, derive only the minimum safe assumptions and mark them explicitly.',
+      formatPromptList('Reference image paths', reference_image_paths, 'No reference image paths were supplied.'),
+      formatPromptList('HTML/CSS reference paths', html_reference_paths, 'No HTML/CSS reference paths were supplied.'),
+      formatPromptBlock('Existing design_spec_json', design_spec_json, 'If a partial design_spec_json is supplied, normalize and extend it instead of replacing it wholesale.'),
+      'Return compact JSON that matches blueprint://design-spec-schema.',
+      'Treat text+image and PNG/Figma references as first-class high-fidelity inputs.',
+      'HTML/CSS references should reach near parity by extracting tokens, layout intent, and component recipes; when fidelity matters, prefer rendered reference frames over direct DOM-to-UMG translation.',
+      'If only text is available, keep the output lower-confidence and record the missing references in verification notes.',
+      'Populate layout, visual_tokens, components, motion when relevant, and verification when reference frames or checkpoint frames exist.',
+      'Motion can include state_motion, cinematic_motion, checkpoints, triggers, and fallback_policy.',
+      'For supported widget-property tracks, plan to use create_widget_animation, modify_widget_animation, capture_widget_motion_checkpoints, and compare_motion_capture_bundle.',
+      'Only mark motion work deferred_to_v2 when it requires unsupported track families or broader arbitrary timeline synthesis beyond the current subset.',
+    ].join('\n'),
+  },
+  design_menu_from_design_spec: {
+    title: 'Design Menu From Design Spec',
+    description: 'Plan a high-fidelity menu implementation from a normalized design_spec_json using only the existing authoring tools.',
+    args: {
+      widget_asset_path: z.string(),
+      design_spec_json: designSpecPromptArg,
+      parent_class_path: z.string().optional(),
+      existing_hud_asset_path: z.string().optional(),
+      existing_transition_asset_path: z.string().optional(),
+      compare_reference_paths: stringOrStringArrayPromptArg.optional(),
+    },
+    buildPrompt: ({
+      widget_asset_path,
+      design_spec_json,
+      parent_class_path,
+      existing_hud_asset_path,
+      existing_transition_asset_path,
+      compare_reference_paths,
+    }) => [
+      `Plan a reference-driven WidgetBlueprint menu implementation for ${widget_asset_path}.`,
+      formatPromptBlock('design_spec_json', design_spec_json, 'A design_spec_json is required for this prompt.'),
+      parent_class_path ? `Expected parent class: ${parent_class_path}.` : 'Choose the narrowest appropriate parent widget class for a menu shell.',
+      existing_hud_asset_path ? `Inspect the existing HUD first: ${existing_hud_asset_path}.` : 'Inspect the current HUD wiring before replacing the screen.',
+      existing_transition_asset_path ? `Inspect the transition asset first: ${existing_transition_asset_path}.` : 'Inspect transition widgets and activatable-window flow before redesigning layout.',
+      formatPromptList('Compare reference paths', compare_reference_paths, 'No compare reference paths were supplied. If the design spec includes checkpoint frames, use those instead.'),
+      'Prefer foundation assets under /Game/UI/Foundation/Materials, /Game/UI/Foundation/MaterialInstances, /Game/UI/Foundation/Styles, and /Game/UI/Foundation/Widgets, and place the final screen under /Game/UI/Screens.',
+      'Produce a decision-complete sequence that uses the existing tools only: inspect, import textures/fonts if needed, author material instances and styles, patch the widget tree, author or patch widget animations when needed, compile, capture checkpoints, compare when references exist, then save.',
+      'Prefer CommonUI for shell, activation, and focus, and prefer material instances plus reusable components for visual fidelity instead of large one-off property blobs.',
+      'For motion, use create_widget_animation and modify_widget_animation for render_opacity, render_transform translation/scale/angle, and color_and_opacity tracks. Defer only unsupported track families.',
+      'Verification must use capture_widget_preview or capture_widget_motion_checkpoints for each required checkpoint and compare_capture_to_reference or compare_motion_capture_bundle whenever compare_reference_paths or checkpoint frames are available.',
+      'If no visual references exist, finish with capture_widget_preview plus an explicit lower-confidence or partial verification note.',
+      'Prefer centered_overlay, common_menu_shell, activatable_window, or list_detail patterns over ad-hoc CanvasPanel placement.',
+    ].join('\n'),
+  },
   design_menu_screen: {
     title: 'Design Menu Screen',
     description: 'Plan a safe WidgetBlueprint menu redesign that inspects the current UI before rewriting structure.',
@@ -444,6 +976,7 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
       parent_class_path ? `Expected parent class: ${parent_class_path}.` : 'Choose the narrowest appropriate parent widget class.',
       existing_hud_asset_path ? `Inspect the existing HUD first: ${existing_hud_asset_path}.` : 'Inspect the current HUD wiring before replacing the screen.',
       existing_transition_asset_path ? `Inspect the transition asset first: ${existing_transition_asset_path}.` : 'Inspect transition widgets and activatable-window flow before redesigning layout.',
+      'For high-fidelity multimodal work, normalize text, image, PNG/Figma, or HTML/CSS inputs through normalize_ui_design_input before authoring the menu plan.',
       'Produce a concrete widget-tree plan, required BindWidget names, class-default changes, and compile/capture/save steps.',
       'The plan is not complete until it includes capture_widget_preview or an explicit partial verification fallback with a blocking reason.',
       'Prefer centered_overlay, common_menu_shell, or activatable_window patterns over ad-hoc CanvasPanel placement.',
@@ -456,13 +989,61 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
       asset_path: z.string(),
       visual_goal: z.string(),
       texture_asset_path: z.string().optional(),
+      design_spec_json: designSpecPromptArg.optional(),
     },
-    buildPrompt: ({ asset_path, visual_goal, texture_asset_path }) => [
+    buildPrompt: ({ asset_path, visual_goal, texture_asset_path, design_spec_json }) => [
       `Author a button-style material at ${asset_path}.`,
       `Visual goal: ${visual_goal}.`,
       texture_asset_path ? `Use texture asset: ${texture_asset_path}.` : 'Only use engine-default texture assets if no project texture is available.',
+      formatPromptBlock('design_spec_json', design_spec_json, 'If a design_spec_json exists, use it as the source of palette, typography, state, and motion cues for the button.'),
       'Prefer set_material_settings, add_material_expression, connect_material_expressions, and bind_material_property.',
+      'Prefer material parameters and instances for hover, pressed, focused, and disabled states before escalating to widget animation timelines.',
       'Only fall back to modify_material if the smaller tools cannot express the required graph operation.',
+    ].join('\n'),
+  },
+  author_widget_motion_from_design_spec: {
+    title: 'Author Widget Motion From Design Spec',
+    description: 'Turn a normalized motion spec into concrete widget animation authoring steps using the v2 widget animation tools.',
+    args: {
+      widget_asset_path: z.string(),
+      animation_name: z.string(),
+      design_spec_json: designSpecPromptArg,
+      compare_reference_paths: stringOrStringArrayPromptArg.optional(),
+    },
+    buildPrompt: ({ widget_asset_path, animation_name, design_spec_json, compare_reference_paths }) => [
+      `Author widget motion for ${widget_asset_path} using animation '${animation_name}'.`,
+      formatPromptBlock('design_spec_json', design_spec_json, 'A design_spec_json with motion data is required.'),
+      formatPromptList('Compare reference paths', compare_reference_paths, 'No compare reference paths were supplied. Use checkpoint frames from the design spec if they exist.'),
+      'Use create_widget_animation or modify_widget_animation instead of overloading modify_widget_blueprint.',
+      'Supported v2 track subset: render_opacity, render_transform_translation, render_transform_scale, render_transform_angle, color_and_opacity.',
+      'Prefer widget_path selectors for bindings and tracks. Accept widget_name only as a compatibility fallback when unique.',
+      'Use replace_timeline as the canonical write path. patch_metadata is only for display labels, checkpoints, playback metadata, and other non-track updates.',
+      'If the requested motion exceeds the supported track subset, return a partial implementation / deferred_to_v2 boundary explicitly instead of synthesizing unsupported tracks.',
+      'End with compile plus capture_widget_motion_checkpoints, then compare_motion_capture_bundle or compare_capture_to_reference for the required checkpoints.',
+    ].join('\n'),
+  },
+  plan_widget_motion_verification: {
+    title: 'Plan Widget Motion Verification',
+    description: 'Plan keyframe-bundle verification for widget motion in editor preview or automation scenarios.',
+    args: {
+      widget_asset_path: z.string().optional(),
+      animation_name: z.string().optional(),
+      design_spec_json: designSpecPromptArg.optional(),
+      automation_filter: z.string().optional(),
+      compare_reference_paths: stringOrStringArrayPromptArg.optional(),
+    },
+    buildPrompt: ({ widget_asset_path, animation_name, design_spec_json, automation_filter, compare_reference_paths }) => [
+      widget_asset_path
+        ? `Plan motion verification for widget asset ${widget_asset_path}.`
+        : 'Plan motion verification for a widget-driven UI flow.',
+      animation_name ? `Animation focus: ${animation_name}.` : 'Infer the animation or scenario trigger from the supplied spec.',
+      automation_filter ? `Automation scenario filter: ${automation_filter}.` : 'If this is HUD/runtime verification, identify the narrowest automation scenario required to drive it.',
+      formatPromptBlock('design_spec_json', design_spec_json, 'If a motion-aware design_spec_json exists, use its checkpoints, triggers, and fallback policy.'),
+      formatPromptList('Compare reference paths', compare_reference_paths, 'No explicit compare reference paths were supplied. Use checkpoint frames if available; otherwise report lower-confidence / partial verification.'),
+      'Use editor_preview plus capture_widget_motion_checkpoints for menu/shell widgets whenever possible.',
+      'Use automation_scenario plus run_automation_tests-backed playback for HUD/runtime verification. Do not imply that editor preview proves runtime behavior.',
+      'Verification output must be a keyframe bundle, not video or GIF.',
+      'The canonical checkpoints are closed, opening_peak, open, focused, and pressed unless the spec narrows or extends them.',
     ].join('\n'),
   },
   wire_hud_widget_classes: {
@@ -509,7 +1090,7 @@ export function createBlueprintExtractorServer(
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '2.4.0',
+    version: '2.5.0',
   }, {
     instructions: serverInstructions,
   });
@@ -559,7 +1140,8 @@ export function createBlueprintExtractorServer(
     return value === 'editor_offscreen'
       || value === 'pie_runtime'
       || value === 'editor_tool_viewport'
-      || value === 'external_packaged';
+      || value === 'external_packaged'
+      || value === 'widget_motion_checkpoint';
   }
 
   function inferVerificationSurface(captureType: unknown): z.infer<typeof verificationSurfaceSchema> {
@@ -568,6 +1150,8 @@ export function createBlueprintExtractorServer(
     }
 
     switch (captureType) {
+      case 'widget_motion_checkpoint':
+        return 'widget_motion_checkpoint';
       case 'widget_preview':
       case 'comparison_diff':
       default:
@@ -614,6 +1198,29 @@ export function createBlueprintExtractorServer(
       return context;
     }
 
+    if (surface === 'widget_motion_checkpoint') {
+      const context: Record<string, unknown> = {
+        contextType: 'widget_motion',
+        renderLane: 'offscreen_animation',
+      };
+      if (typeof payload.assetPath === 'string' && payload.assetPath.length > 0) {
+        context.assetPath = payload.assetPath;
+      }
+      if (typeof payload.widgetClass === 'string' && payload.widgetClass.length > 0) {
+        context.widgetClass = payload.widgetClass;
+      }
+      if (typeof payload.checkpointName === 'string' && payload.checkpointName.length > 0) {
+        context.checkpointName = payload.checkpointName;
+      }
+      if (typeof payload.playbackSource === 'string' && payload.playbackSource.length > 0) {
+        context.playbackSource = payload.playbackSource;
+      }
+      if (typeof payload.triggerMode === 'string' && payload.triggerMode.length > 0) {
+        context.triggerMode = payload.triggerMode;
+      }
+      return context;
+    }
+
     return undefined;
   }
 
@@ -629,6 +1236,15 @@ export function createBlueprintExtractorServer(
         contextType: 'offscreen_widget',
         ...(typeof width === 'number' ? { width } : {}),
         ...(typeof height === 'number' ? { height } : {}),
+      };
+    }
+
+    if (surface === 'widget_motion_checkpoint') {
+      return {
+        contextType: 'motion_checkpoint',
+        ...(typeof width === 'number' ? { width } : {}),
+        ...(typeof height === 'number' ? { height } : {}),
+        ...(typeof payload.checkpointMs === 'number' ? { checkpointMs: payload.checkpointMs } : {}),
       };
     }
 
@@ -665,6 +1281,19 @@ export function createBlueprintExtractorServer(
         }),
       ...(worldContext ? { worldContext } : {}),
       ...(cameraContext ? { cameraContext } : {}),
+    };
+  }
+
+  function buildCaptureResourceUri(captureId: string) {
+    return `blueprint://captures/${encodeURIComponent(captureId)}`;
+  }
+
+  function normalizeVerificationArtifactReference(payload: unknown): Record<string, unknown> {
+    const artifact = normalizeVerificationArtifact(payload);
+    const captureId = typeof artifact.captureId === 'string' ? artifact.captureId : '';
+    return {
+      ...artifact,
+      resourceUri: captureId ? buildCaptureResourceUri(captureId) : '',
     };
   }
 
@@ -1102,6 +1731,7 @@ const verificationSurfaceSchema = z.enum([
   'pie_runtime',
   'editor_tool_viewport',
   'external_packaged',
+  'widget_motion_checkpoint',
 ]);
 
 const verificationContextSchema = z.record(z.string(), z.unknown());
@@ -1138,6 +1768,11 @@ const verificationArtifactSchema = z.object({
   cameraContext: verificationContextSchema.optional(),
   comparison: verificationComparisonSchema.optional(),
   projectDir: z.string().optional(),
+  motionCaptureId: z.string().optional(),
+  checkpointName: z.string().optional(),
+  checkpointMs: z.number().min(0).optional(),
+  playbackSource: z.string().optional(),
+  triggerMode: z.enum(['asset_animation', 'scenario_trigger']).optional(),
 }).passthrough();
 
 const verificationArtifactReferenceSchema = z.object({
@@ -1160,6 +1795,11 @@ const verificationArtifactReferenceSchema = z.object({
   cameraContext: verificationContextSchema.optional(),
   comparison: verificationComparisonSchema.optional(),
   projectDir: z.string().optional(),
+  motionCaptureId: z.string().optional(),
+  checkpointName: z.string().optional(),
+  checkpointMs: z.number().min(0).optional(),
+  playbackSource: z.string().optional(),
+  triggerMode: z.enum(['asset_animation', 'scenario_trigger']).optional(),
   mimeType: z.string().optional(),
   relativePath: z.string().optional(),
 }).passthrough();
@@ -1193,6 +1833,96 @@ const CleanupCapturesResultSchema = v2ToolResultSchema.extend({
   deletedCount: z.number().int().min(0),
   freedBytes: z.number().int().min(0),
   maxAgeDays: z.number().int().min(0),
+}).passthrough();
+
+const widgetAnimationTrackKindSchema = z.enum([
+  'render_opacity',
+  'render_transform_translation',
+  'render_transform_scale',
+  'render_transform_angle',
+  'color_and_opacity',
+]);
+
+const widgetAnimationTrackSchema = z.object({
+  widget_name: z.string().optional(),
+  widget_path: z.string().optional(),
+  property: widgetAnimationTrackKindSchema,
+  keys: z.array(z.record(z.string(), z.unknown())),
+}).passthrough();
+
+const widgetAnimationCheckpointSchema = z.object({
+  name: z.string(),
+  timeMs: z.number().min(0).optional(),
+  time_ms: z.number().min(0).optional(),
+}).passthrough();
+
+const widgetAnimationTimelineSchema = z.object({
+  duration_ms: z.number().min(0).optional(),
+  fps: z.number().int().positive().optional(),
+  tracks: z.array(widgetAnimationTrackSchema),
+}).passthrough();
+
+const extractedWidgetAnimationSchema = z.object({
+  name: z.string(),
+  displayLabel: z.string().optional(),
+  durationMs: z.number().min(0),
+  playback: z.record(z.string(), z.unknown()).optional(),
+  bindings: z.array(z.record(z.string(), z.unknown())),
+  supportedTracks: z.array(widgetAnimationTrackKindSchema).optional(),
+  tracks: z.array(widgetAnimationTrackSchema),
+  checkpoints: z.array(widgetAnimationCheckpointSchema).optional(),
+}).passthrough();
+
+const ExtractWidgetAnimationResultSchema = v2ToolResultSchema.extend({
+  assetPath: z.string(),
+  animationName: z.string(),
+  supportedTracks: z.array(widgetAnimationTrackKindSchema),
+  animation: extractedWidgetAnimationSchema,
+}).passthrough();
+
+const CreateModifyWidgetAnimationResultSchema = v2ToolResultSchema.extend({
+  assetPath: z.string(),
+  animationName: z.string().optional(),
+  supportedTracks: z.array(widgetAnimationTrackKindSchema).optional(),
+  animation: extractedWidgetAnimationSchema.optional(),
+  validation: z.record(z.string(), z.unknown()).optional(),
+  compile: z.record(z.string(), z.unknown()).optional(),
+  dirtyPackages: z.array(z.string()).optional(),
+  changedObjects: z.array(z.string()).optional(),
+}).passthrough();
+
+const motionCaptureModeSchema = z.enum(['editor_preview', 'automation_scenario']);
+const motionTriggerModeSchema = z.enum(['asset_animation', 'scenario_trigger']);
+
+const MotionCaptureBundleResultSchema = v2ToolResultSchema.extend({
+  motionCaptureId: z.string(),
+  mode: motionCaptureModeSchema,
+  triggerMode: motionTriggerModeSchema,
+  playbackSource: z.string(),
+  assetPath: z.string().optional(),
+  animationName: z.string().optional(),
+  checkpointCount: z.number().int().min(0),
+  partialVerification: z.boolean().optional(),
+  verificationArtifacts: z.array(verificationArtifactReferenceSchema),
+}).passthrough();
+
+const motionCaptureComparisonEntrySchema = z.object({
+  checkpointName: z.string(),
+  matched: z.boolean(),
+  skipped: z.boolean().optional(),
+  reference: z.string().optional(),
+  captureArtifact: verificationArtifactReferenceSchema.optional(),
+  referenceArtifact: verificationArtifactReferenceSchema.optional(),
+  comparison: verificationComparisonSchema.optional(),
+}).passthrough();
+
+const CompareMotionCaptureBundleResultSchema = v2ToolResultSchema.extend({
+  mode: z.enum(['reference_frames', 'reference_bundle']),
+  tolerance: z.number().min(0),
+  captureCount: z.number().int().min(0),
+  matchedCount: z.number().int().min(0),
+  pass: z.boolean(),
+  comparisons: z.array(motionCaptureComparisonEntrySchema),
 }).passthrough();
 
 const automationArtifactSchema = z.object({
@@ -1417,7 +2147,10 @@ server.resource(
         '- Use the narrowest mutation tool that fits: patch one widget/member first, replace whole trees only when structure is changing broadly.',
         '- Keep payloads small by sending only changed fields, not full extracted objects, unless the tool explicitly expects a full replacement payload.',
         '- Re-extract after mutation when you need confirmation; do not assume UE normalized fields exactly as sent.',
+        '- For fidelity-sensitive menu work, normalize text, image, Figma-export, or HTML/CSS inputs into design_spec_json before authoring assets.',
         '- For multi-step widget work, prefer extract_widget_blueprint -> modify_widget_blueprint -> compile_widget_blueprint -> capture_widget_preview -> save_assets.',
+        '- For authored widget motion, prefer extract_widget_animation -> create_widget_animation or modify_widget_animation -> capture_widget_motion_checkpoints -> compare_motion_capture_bundle before save_assets.',
+        '- When reference frames exist, extend the widget flow to compare_capture_to_reference before save_assets. Without reference frames, capture and report lower-confidence or partial verification explicitly.',
         '- If widget preview capture is blocked, report partial verification explicitly instead of treating compile/save as visual proof.',
         '- For code orchestration, pass explicit changed_paths to sync_project_code instead of relying on source-control inference.',
       ].join('\n'),
@@ -1439,6 +2172,7 @@ server.resource(
         'Blueprint Extractor Selector Conventions',
         '',
         '- WidgetBlueprints: use widget_path for nested widgets when practical; use widget_name for flat or unique-tree edits.',
+        '- Widget animation tracks and bindings: use widget_path as the canonical selector; only fall back to widget_name when the target widget is unambiguous.',
         '- BehaviorTree: use nodePath.',
         '- StateTree: use statePath/stateId, editorNodeId, or transitionId.',
         '- Blueprint members: use variableName, componentName, and functionName.',
@@ -1469,11 +2203,15 @@ server.resource(
         '- Prefer CommonActivatableWidget as the root parent for CommonUI screens and windows.',
         '- Prefer VerticalBox, HorizontalBox, Overlay, Border, SizeBox, ScrollBox, and NamedSlot over CanvasPanel unless absolute positioning is required.',
         '- Keep styling centralized. Reuse fonts, colors, and button classes instead of repeating large inline property blobs.',
+        '- Build reusable menu foundation assets under /Game/UI/Foundation/Materials, /Game/UI/Foundation/MaterialInstances, /Game/UI/Foundation/Styles, and /Game/UI/Foundation/Widgets instead of styling each screen from scratch.',
         '- CommonButtonBase is not a raw UButton surface. Do not target UButton background/style fields through patch_class_defaults or patch_widget on CommonUI wrappers; use extract_commonui_button_style, create_commonui_button_style, modify_commonui_button_style, and apply_commonui_button_style instead.',
         '- When extract_widget_blueprint reports rootWidget=null, inspect widgetTreeStatus, widgetTreeError, and compile.errors before attempting structural rewrites. A degraded snapshot is still useful for recovery.',
         '- WidthOverride, HeightOverride, MinDesiredHeight, and similar fields may require paired bOverride_* flags. The write path now enables those flags automatically, but re-extract after patching to confirm the authored value landed where expected.',
         '- For long multi-step UI flows, use apply_window_ui_changes.checkpoint_after_mutation_steps=true so later compile/debug interruptions do not discard earlier successful edits.',
         '- For user-facing widget changes, compile/save is not the terminal checkpoint. Finish with capture_widget_preview or return partial verification with the blocking reason.',
+        '- Use create_widget_animation and modify_widget_animation for authored UI motion on the supported track subset: render_opacity, render_transform_translation, render_transform_scale, render_transform_angle, and color_and_opacity.',
+        '- Use widget_path selectors for animation bindings, keep replace_timeline as the default mutation style, and persist checkpoints as named frames so verification can reuse them.',
+        '- Only mark motion work deferred_to_v2 when it exceeds the supported track subset or requires broader arbitrary MovieScene synthesis.',
         '- Prefer event-driven updates and explicit setter functions over heavy property bindings or per-frame tick work.',
         '- Use TSubclassOf + CreateWidget only for truly dynamic repeated elements. Keep authored static layout in the Widget Blueprint tree.',
       ].join('\n'),
@@ -1610,12 +2348,157 @@ server.resource(
         'Recommended mapping:',
         '- Blueprint graph or member changes: semantic first.',
         '- Widget structure, slot layout, class defaults: semantic first, then visual if the change is user-facing.',
+        '- High-fidelity menu design: normalize raw inputs into design_spec_json, verify checkpoints visually, and compare against reference frames when they exist.',
+        '- Authored widget motion: extract or patch the animation, capture keyframe bundles with capture_widget_motion_checkpoints, then compare checkpoints with compare_motion_capture_bundle or compare_capture_to_reference.',
         '- Data assets, tables, AI trees, input assets: semantic verification through extractors and compile diagnostics.',
         '- Gameplay mechanics, scripted interactions, runtime flows: automation tests first.',
         '',
         'Guardrail:',
         '- User-facing widget work is not complete until capture_widget_preview succeeds or the response explicitly reports partial verification with a blocking reason.',
+        '- If reference images or checkpoint frames exist, use compare_capture_to_reference or compare_motion_capture_bundle for key states such as open, focused, or pressed. Without those references, capture the state and report lower-confidence or partial verification when fidelity is uncertain.',
+        '- Motion verification in v2 is checkpoint-bundle based. Menu/shell widgets should prefer editor_preview playback, while HUD/runtime flows should prefer automation_scenario playback and named checkpoint artifacts.',
+        '- Compile/save alone is never accepted as motion verification. If a requested track family exceeds the supported widget-animation subset, return a structured partial implementation / deferred_to_v2 boundary instead of pretending the timeline exists.',
         '- If no Automation Spec or Functional Test exists for a gameplay mechanic, report verification as partial instead of inferring success from structure or screenshots alone.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'design-spec-schema',
+  'blueprint://design-spec-schema',
+  {
+    description: 'Compact schema and example payload for the shared multimodal menu design_spec_json contract.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Design Spec Schema',
+        '',
+        'Use design_spec_json as the shared contract between multimodal design intake and Unreal authoring.',
+        '',
+        'Required top-level blocks:',
+        '- layout',
+        '- visual_tokens',
+        '- components',
+        '',
+        'Optional top-level blocks:',
+        '- motion',
+        '- verification',
+        '',
+        'JSON example:',
+        JSON.stringify(designSpecSchemaExample, null, 2),
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'multimodal-ui-design-workflow',
+  'blueprint://multimodal-ui-design-workflow',
+  {
+    description: 'Canonical multimodal, reference-driven menu workflow with first-class v2 widget motion authoring and checkpoint verification.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Multimodal UI Design Workflow',
+        '',
+        'Input priority:',
+        '- text+image and PNG/Figma are first-class high-fidelity references.',
+        '- HTML/CSS is near-parity when you extract tokens and compare against rendered reference frames instead of assuming direct DOM-to-UMG translation.',
+        '- text-only is supported, but it remains a lower-confidence path when no visual references exist.',
+        '',
+        'Canonical flow:',
+        '1. Normalize raw text, image, PNG/Figma, or HTML/CSS inputs into design_spec_json.',
+        '2. Inspect the current widget, HUD, transition widgets, and class defaults before rewriting structure.',
+        '3. Author reusable foundation assets first under /Game/UI/Foundation/Materials, /Game/UI/Foundation/MaterialInstances, /Game/UI/Foundation/Styles, and /Game/UI/Foundation/Widgets.',
+        '4. Assemble the menu screen under /Game/UI/Screens with modify_widget_blueprint and related existing tools.',
+        '5. If motion is part of the spec, author or patch widget timelines with create_widget_animation or modify_widget_animation using the supported track subset.',
+        '6. Compile, then capture key visual checkpoints such as open, focused, or pressed.',
+        '7. If reference frames exist, compare captures with compare_capture_to_reference or compare_motion_capture_bundle before save_assets.',
+        '8. If reference frames do not exist, capture the result and report lower-confidence or partial verification explicitly when fidelity is uncertain.',
+        '',
+        'Motion policy:',
+        '- V2 adds dedicated widget-animation authoring for render_opacity, render_transform_translation, render_transform_scale, render_transform_angle, and color_and_opacity.',
+        '- Prefer widget_path selectors, replace_timeline payloads, named checkpoints, and compareable keyframe bundles over ad-hoc manual authoring.',
+        '- Use static checkpoints for motion verification: closed, opening_peak, open, focused, pressed, or project-specific equivalents.',
+        '- If the requested motion requires unsupported track families or broader arbitrary MovieScene synthesis, mark only that portion deferred_to_v2 / partial implementation.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'widget-motion-authoring',
+  'blueprint://widget-motion-authoring',
+  {
+    description: 'Widget animation authoring guidance for the dedicated v2 motion tools and supported track subset.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Widget Motion Authoring',
+        '',
+        'Primary v2 tools:',
+        '- extract_widget_animation for deep timeline, binding, playback, and checkpoint inspection.',
+        '- create_widget_animation to create a named animation on an existing WidgetBlueprint.',
+        '- modify_widget_animation to replace timelines, patch metadata, rename, remove, or compile an animation.',
+        '',
+        'Authoring rules:',
+        '- extract_widget_blueprint.animations remains the shallow inventory surface; use extract_widget_animation when you need binding targets, checkpoints, or authored keys.',
+        '- Use widget_path as the canonical selector for animation bindings and track targets. Use widget_name only as a compatibility fallback when unique.',
+        '- The initial supported track subset is explicit: render_opacity, render_transform_translation, render_transform_scale, render_transform_angle, and color_and_opacity.',
+        '- Use replace_timeline as the default write path. Prefer whole-track replacement over fine-grained key patching in the initial v2 release.',
+        '- patch_metadata is for display labels, checkpoints, playback metadata, and similar non-track updates. It is not a generic key-edit API.',
+        '- Persist checkpoints as named frames so capture_widget_motion_checkpoints can reuse them without guessing.',
+        '- If the requested motion exceeds the supported track subset, return a structured partial implementation / deferred_to_v2 boundary instead of synthesizing unsupported tracks.',
+      ].join('\n'),
+    }],
+  }),
+);
+
+server.resource(
+  'motion-verification-workflow',
+  'blueprint://motion-verification-workflow',
+  {
+    description: 'Keyframe-bundle verification guidance for menu/shell widget motion and HUD/runtime playback.',
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: 'text/plain',
+      text: [
+        'Blueprint Extractor Motion Verification Workflow',
+        '',
+        'Primary v2 tools:',
+        '- capture_widget_motion_checkpoints returns a keyframe bundle with verificationArtifacts for each named checkpoint.',
+        '- compare_motion_capture_bundle compares a captured bundle against reference frames or another bundle checkpoint-by-checkpoint.',
+        '',
+        'Modes:',
+        '- editor_preview: use for menu shells and authored WidgetBlueprint animations when editor playback is sufficient.',
+        '- automation_scenario: use for HUD/runtime flows that require gameplay or scripted scenario playback through run_automation_tests.',
+        '',
+        'Canonical checkpoints:',
+        '- closed',
+        '- opening_peak',
+        '- open',
+        '- focused',
+        '- pressed',
+        '',
+        'Verification rules:',
+        '- Verification output is a keyframe bundle, not video or GIF.',
+        '- Menu/shell motion should prefer editor_preview when the authored widget animation is the source of truth.',
+        '- HUD/runtime motion should prefer automation_scenario and named checkpoint artifact export. Do not imply that editor preview proves runtime behavior.',
+        '- When reference frames exist, compare them with compare_motion_capture_bundle or compare_capture_to_reference before save_assets.',
+        '- When a scenario cannot export checkpoint artifacts yet, report partial verification explicitly instead of silently treating the automation run as sufficient proof.',
+        '- Compile/save alone is never accepted as motion verification.',
       ].join('\n'),
     }],
   }),
@@ -1777,7 +2660,14 @@ server.resource(
         '',
         `Example: ${example.title}`,
         `tool: ${example.tool}`,
+        ...(typeof example.expectedSuccess === 'boolean'
+          ? [`expected success: ${example.expectedSuccess}`]
+          : []),
         JSON.stringify(example.arguments, null, 2),
+        ...(example.context ? [
+          'context:',
+          JSON.stringify(example.context, null, 2),
+        ] : []),
       ]),
     ];
 
@@ -1910,7 +2800,7 @@ server.registerResource(
         '- modify_material and modify_material_function remain available but are advanced escape hatches, not the primary authoring workflow.',
         '- There is still no first-class Substrate graph DSL.',
         '- CommonUI wrapper widgets are not a backdoor into internal Slate/UButton background or style fields. For CommonButtonBase-family widgets, treat raw UButton background/style properties as unsupported and use extract_commonui_button_style, create_commonui_button_style, modify_commonui_button_style, or apply_commonui_button_style.',
-        '- Raw authored animation track synthesis is out of scope. Animation authoring remains metadata-oriented.',
+        '- Dedicated widget animation authoring is supported only for the constrained v2 track subset. Unsupported track families and broader arbitrary MovieScene synthesis remain outside the public contract.',
         '- World editing and runtime actor manipulation are out of scope for this server.',
       ].join('\n'),
     }],
@@ -1930,13 +2820,16 @@ server.registerResource(
       text: [
         'Safe UI Redesign Workflow',
         '',
-        '1. search_assets and extract the current HUD, transition widgets, and target screen widgets.',
-        '2. Inspect class defaults, BindWidget names, and current activatable-window flow before replacing any widget tree.',
-        '3. Choose a preset layout pattern such as centered_overlay, common_menu_shell, activatable_window, or list_detail.',
-        '4. Apply the smallest modify_widget_blueprint patch possible. Only use build_widget_tree or replace_tree when broad structure must change.',
-        '5. Compile immediately after structural changes. If compile fails, inspect compile diagnostics and rerun the smallest recovery patch first.',
-        '6. Run capture_widget_preview after the compile result is clean so the rendered result is visually confirmed.',
-        '7. Save after capture succeeds, or report partial verification explicitly when the visual checkpoint is blocked.',
+        '1. Normalize raw text, image, PNG/Figma, or HTML/CSS inputs into design_spec_json when the redesign is fidelity-sensitive.',
+        '2. search_assets and extract the current HUD, transition widgets, and target screen widgets.',
+        '3. Inspect class defaults, BindWidget names, and current activatable-window flow before replacing any widget tree.',
+        '4. Choose a preset layout pattern such as centered_overlay, common_menu_shell, activatable_window, or list_detail.',
+        '5. Apply the smallest modify_widget_blueprint patch possible. Only use build_widget_tree or replace_tree when broad structure must change.',
+        '6. If the redesign includes authored motion on the supported track subset, use create_widget_animation or modify_widget_animation instead of trying to encode that work through generic widget patches.',
+        '7. Compile immediately after structural or animation changes. If compile fails, inspect compile diagnostics and rerun the smallest recovery patch first.',
+        '8. Run capture_widget_preview or capture_widget_motion_checkpoints after the compile result is clean so the rendered result is visually confirmed for each required checkpoint.',
+        '9. If reference images or checkpoint frames exist, run compare_capture_to_reference or compare_motion_capture_bundle for key states before save_assets.',
+        '10. Save after capture or compare succeeds, or report lower-confidence / partial verification explicitly when the visual checkpoint is blocked.',
       ].join('\n'),
     }],
   }),
@@ -3628,6 +4521,131 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  'extract_widget_animation',
+  {
+    title: 'Extract Widget Animation',
+    description: 'Return one authored widget animation timeline, bindings, supported tracks, checkpoints, duration, and playback metadata.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint.',
+      ),
+      animation_name: z.string().describe(
+        'Animation name or display label to extract.',
+      ),
+    },
+    outputSchema: ExtractWidgetAnimationResultSchema,
+    annotations: {
+      title: 'Extract Widget Animation',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, animation_name }) => {
+    try {
+      const parsed = await callSubsystemJson('ExtractWidgetAnimation', {
+        AssetPath: asset_path,
+        AnimationName: animation_name,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'create_widget_animation',
+  {
+    title: 'Create Widget Animation',
+    description: 'Create a named widget animation on an existing WidgetBlueprint with an optional initial timeline payload.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint.',
+      ),
+      animation_name: z.string().describe(
+        'Name for the new animation.',
+      ),
+      payload: JsonObjectSchema.optional().describe(
+        'Optional initial animation payload. timeline.tracks should use widget_path where possible.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the payload without mutating the widget asset.',
+      ),
+    },
+    outputSchema: CreateModifyWidgetAnimationResultSchema,
+    annotations: {
+      title: 'Create Widget Animation',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, animation_name, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('CreateWidgetAnimation', {
+        AssetPath: asset_path,
+        AnimationName: animation_name,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'modify_widget_animation',
+  {
+    title: 'Modify Widget Animation',
+    description: 'Modify an authored widget animation timeline or metadata. v2 favors replace-oriented timeline payloads instead of fine-grained key patching.',
+    inputSchema: {
+      asset_path: z.string().describe(
+        'UE content path to the WidgetBlueprint.',
+      ),
+      animation_name: z.string().describe(
+        'Animation name or display label to modify.',
+      ),
+      operation: z.enum(['replace_timeline', 'patch_metadata', 'rename_animation', 'remove_animation', 'compile']).describe(
+        'Widget animation mutation operation to apply.',
+      ),
+      payload: JsonObjectSchema.optional().describe(
+        'Optional payload for the selected operation.',
+      ),
+      validate_only: z.boolean().default(false).describe(
+        'When true, validate the requested mutation without changing the asset.',
+      ),
+    },
+    outputSchema: CreateModifyWidgetAnimationResultSchema,
+    annotations: {
+      title: 'Modify Widget Animation',
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ asset_path, animation_name, operation, payload, validate_only }) => {
+    try {
+      const parsed = await callSubsystemJson('ModifyWidgetAnimation', {
+        AssetPath: asset_path,
+        AnimationName: animation_name,
+        Operation: operation,
+        PayloadJson: JSON.stringify(payload ?? {}),
+        bValidateOnly: validate_only,
+      });
+      return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
 // Tool 9: build_widget_tree
 server.registerTool(
   'build_widget_tree',
@@ -4000,6 +5018,186 @@ server.registerTool(
       return jsonToolSuccess({
         ...artifact,
         resourceUri,
+      }, { extraContent });
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'capture_widget_motion_checkpoints',
+  {
+    title: 'Capture Widget Motion Checkpoints',
+    description: 'Play a widget animation or automation-driven UI scenario, capture named checkpoints, and return a typed keyframe bundle.',
+    inputSchema: {
+      mode: motionCaptureModeSchema.describe(
+        'editor_preview for menu/shell widgets, automation_scenario for HUD/runtime flows.',
+      ),
+      asset_path: z.string().optional().describe(
+        'Required for editor_preview mode. UE content path to the WidgetBlueprint.',
+      ),
+      animation_name: z.string().optional().describe(
+        'Required for editor_preview mode. Widget animation name to play.',
+      ),
+      checkpoints: z.array(widgetAnimationCheckpointSchema).optional().describe(
+        'Optional named checkpoints. If omitted, use marked frames or inferred defaults.',
+      ),
+      width: z.number().int().min(64).max(2048).default(512).describe(
+        'Requested checkpoint capture width in pixels for editor_preview mode.',
+      ),
+      height: z.number().int().min(64).max(2048).default(512).describe(
+        'Requested checkpoint capture height in pixels for editor_preview mode.',
+      ),
+      automation_filter: z.string().optional().describe(
+        'Required for automation_scenario mode. Automation filter passed to run_automation_tests.',
+      ),
+      engine_root: z.string().optional().describe(
+        'Optional Unreal Engine root for automation_scenario mode.',
+      ),
+      project_path: z.string().optional().describe(
+        'Optional project path for automation_scenario mode.',
+      ),
+      target: z.string().optional().describe(
+        'Optional editor target name for automation_scenario mode.',
+      ),
+      report_output_dir: z.string().optional().describe(
+        'Optional report output directory for automation_scenario mode.',
+      ),
+      timeout_seconds: z.number().int().positive().default(3600).describe(
+        'Maximum wall-clock time for automation_scenario playback.',
+      ),
+      null_rhi: z.boolean().default(false).describe(
+        'When false, allow rendering for screenshot-backed motion verification in automation_scenario mode.',
+      ),
+    },
+    outputSchema: MotionCaptureBundleResultSchema,
+    annotations: {
+      title: 'Capture Widget Motion Checkpoints',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ mode, asset_path, animation_name, checkpoints, width, height, automation_filter, engine_root, project_path, target, report_output_dir, timeout_seconds, null_rhi }) => {
+    try {
+      if (mode === 'editor_preview') {
+        if (!asset_path || !animation_name) {
+          return jsonToolError(new Error('editor_preview mode requires asset_path and animation_name'));
+        }
+
+        const parsed = await callSubsystemJson('CaptureWidgetMotionCheckpoints', {
+          AssetPath: asset_path,
+          PayloadJson: JSON.stringify({
+            animation_name,
+            checkpoints: checkpoints ?? [],
+            width,
+            height,
+          }),
+        });
+
+        const verificationArtifacts = Array.isArray(parsed.verificationArtifacts)
+          ? parsed.verificationArtifacts.map((artifact) => normalizeVerificationArtifactReference(artifact))
+          : [];
+        const extraContent: ContentBlock[] = verificationArtifacts
+          .slice(0, 6)
+          .map((artifact) => buildResourceLinkContent(
+            String(artifact.resourceUri ?? ''),
+            `Checkpoint ${String(artifact.checkpointName ?? artifact.captureId ?? 'capture')}`,
+            'image/png',
+            typeof artifact.checkpointName === 'string'
+              ? `Motion checkpoint ${artifact.checkpointName}`
+              : 'Motion checkpoint capture.',
+          ));
+        for (const artifact of verificationArtifacts.slice(0, 3)) {
+          const inlineImage = await maybeBuildInlineImageContent(artifact.artifactPath);
+          if (inlineImage) {
+            extraContent.push(inlineImage);
+          }
+        }
+
+        return jsonToolSuccess({
+          ...parsed,
+          mode: 'editor_preview',
+          triggerMode: 'asset_animation',
+          playbackSource: typeof parsed.playbackSource === 'string' && parsed.playbackSource.length > 0
+            ? parsed.playbackSource
+            : animation_name,
+          checkpointCount: verificationArtifacts.length,
+          verificationArtifacts,
+        }, { extraContent });
+      }
+
+      if (!automation_filter) {
+        return jsonToolError(new Error('automation_scenario mode requires automation_filter'));
+      }
+
+      const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+      if (!resolved.engineRoot || !resolved.projectPath) {
+        throw explainProjectResolutionFailure(
+          'capture_widget_motion_checkpoints in automation_scenario mode requires engine_root and project_path',
+          resolved,
+        );
+      }
+
+      const run = normalizeAutomationRunResult(await automationController.runAutomationTests({
+        automationFilter: automation_filter,
+        engineRoot: resolved.engineRoot,
+        projectPath: resolved.projectPath,
+        target: resolved.target,
+        reportOutputDir: report_output_dir,
+        timeoutMs: timeout_seconds * 1000,
+        nullRhi: null_rhi,
+      }));
+      const verificationArtifacts = (Array.isArray(run.verificationArtifacts) ? run.verificationArtifacts : [])
+        .map((artifact) => normalizeVerificationArtifactReference(artifact))
+        .filter((artifact) => (
+          artifact.surface === 'widget_motion_checkpoint'
+          || typeof artifact.checkpointName === 'string'
+        ));
+
+      const partialVerification = verificationArtifacts.length === 0;
+      const diagnostics = Array.isArray(run.diagnostics)
+        ? run.diagnostics.map((entry) => String(entry))
+        : [];
+      if (partialVerification) {
+        diagnostics.push('Automation scenario did not expose widget motion checkpoint artifacts yet. Treat this as partial verification until the scenario exports named checkpoint captures.');
+      }
+
+      const extraContent: ContentBlock[] = verificationArtifacts
+        .slice(0, 6)
+        .map((artifact) => buildResourceLinkContent(
+          String(artifact.resourceUri ?? ''),
+          `Checkpoint ${String(artifact.checkpointName ?? artifact.captureId ?? 'capture')}`,
+          'image/png',
+          typeof artifact.relativePath === 'string' ? artifact.relativePath : 'Automation-exported checkpoint capture.',
+        ));
+      for (const artifact of verificationArtifacts.slice(0, 3)) {
+        const inlineImage = await maybeBuildInlineImageContent(artifact.artifactPath);
+        if (inlineImage) {
+          extraContent.push(inlineImage);
+        }
+      }
+
+      return jsonToolSuccess({
+        success: true,
+        operation: 'capture_widget_motion_checkpoints',
+        motionCaptureId: String(run.runId ?? automation_filter),
+        mode: 'automation_scenario',
+        triggerMode: 'scenario_trigger',
+        playbackSource: automation_filter,
+        checkpointCount: verificationArtifacts.length,
+        partialVerification,
+        diagnostics,
+        verificationArtifacts,
+        automationRun: run,
+        inputResolution: {
+          engineRoot: resolved.sources.engineRoot,
+          projectPath: resolved.sources.projectPath,
+          target: resolved.sources.target,
+          contextError: resolved.contextError,
+        },
       }, { extraContent });
     } catch (e) {
       return jsonToolError(e);
@@ -5478,6 +6676,144 @@ server.registerTool(
     try {
       const parsed = await getProjectAutomationContext(true);
       return jsonToolSuccess(parsed);
+    } catch (e) {
+      return jsonToolError(e);
+    }
+  },
+);
+
+server.registerTool(
+  'compare_motion_capture_bundle',
+  {
+    title: 'Compare Motion Capture Bundle',
+    description: 'Compare a captured motion keyframe bundle against reference frames or another bundle and return per-checkpoint comparisons plus summary status.',
+    inputSchema: {
+      capture_artifacts: z.array(z.record(z.string(), z.unknown())).describe(
+        'Captured checkpoint artifacts from capture_widget_motion_checkpoints.',
+      ),
+      reference_frames: z.array(z.object({
+        checkpoint_name: z.string(),
+        reference: z.string(),
+      }).passthrough()).optional().describe(
+        'Optional checkpoint-to-reference frame mapping.',
+      ),
+      reference_artifacts: z.array(z.record(z.string(), z.unknown())).optional().describe(
+        'Optional reference checkpoint bundle from capture_widget_motion_checkpoints.',
+      ),
+      tolerance: z.number().min(0).default(0.01).describe(
+        'Normalized RMSE tolerance. 0 is pixel-perfect.',
+      ),
+    },
+    outputSchema: CompareMotionCaptureBundleResultSchema,
+    annotations: {
+      title: 'Compare Motion Capture Bundle',
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ capture_artifacts, reference_frames, reference_artifacts, tolerance }) => {
+    try {
+      const captures = capture_artifacts.map((artifact) => normalizeVerificationArtifactReference(artifact));
+      const frameReferences = new Map(
+        (reference_frames ?? []).map((entry) => [entry.checkpoint_name, entry.reference] as const),
+      );
+      const artifactReferences = new Map(
+        (reference_artifacts ?? []).map((artifact) => {
+          const normalized = normalizeVerificationArtifactReference(artifact);
+          return [String(normalized.checkpointName ?? ''), normalized] as const;
+        }),
+      );
+      const mode: 'reference_frames' | 'reference_bundle' = frameReferences.size > 0 ? 'reference_frames' : 'reference_bundle';
+      const comparisons: Array<Record<string, unknown>> = [];
+      const extraContent: ContentBlock[] = [];
+      let matchedCount = 0;
+      let pass = captures.length > 0;
+
+      for (const captureArtifact of captures) {
+        const checkpointName = String(captureArtifact.checkpointName ?? '');
+        const captureRef = typeof captureArtifact.captureId === 'string' && captureArtifact.captureId.length > 0
+          ? captureArtifact.captureId
+          : String(captureArtifact.artifactPath ?? '');
+
+        if (!checkpointName) {
+          comparisons.push({
+            checkpointName: '',
+            matched: false,
+            skipped: true,
+            captureArtifact,
+          });
+          pass = false;
+          continue;
+        }
+
+        let referenceValue: string | undefined;
+        let referenceArtifact: Record<string, unknown> | undefined;
+        if (mode === 'reference_frames') {
+          referenceValue = frameReferences.get(checkpointName);
+        } else {
+          referenceArtifact = artifactReferences.get(checkpointName);
+          referenceValue = referenceArtifact
+            ? (typeof referenceArtifact.captureId === 'string' && referenceArtifact.captureId.length > 0
+              ? referenceArtifact.captureId
+              : String(referenceArtifact.artifactPath ?? ''))
+            : undefined;
+        }
+
+        if (!referenceValue) {
+          comparisons.push({
+            checkpointName,
+            matched: false,
+            skipped: true,
+            captureArtifact,
+            ...(referenceArtifact ? { referenceArtifact } : {}),
+          });
+          pass = false;
+          continue;
+        }
+
+        const parsed = await callSubsystemJson('CompareCaptureToReference', {
+          CaptureIdOrPath: captureRef,
+          ReferenceIdOrPath: referenceValue,
+          Tolerance: tolerance,
+        });
+        const comparison = normalizeVerificationComparison(parsed);
+        const diffCaptureId = typeof parsed.diffCaptureId === 'string' ? parsed.diffCaptureId : '';
+        if (diffCaptureId) {
+          extraContent.push(buildResourceLinkContent(
+            buildCaptureResourceUri(diffCaptureId),
+            `Diff ${checkpointName}`,
+            'image/png',
+            `Motion diff for checkpoint ${checkpointName}.`,
+          ));
+        }
+
+        matchedCount += 1;
+        if (comparison.pass !== true) {
+          pass = false;
+        }
+
+        comparisons.push({
+          checkpointName,
+          matched: true,
+          reference: mode === 'reference_frames' ? referenceValue : undefined,
+          captureArtifact,
+          ...(referenceArtifact ? { referenceArtifact } : {}),
+          comparison,
+        });
+      }
+
+      return jsonToolSuccess({
+        success: true,
+        operation: 'compare_motion_capture_bundle',
+        mode,
+        tolerance,
+        captureCount: captures.length,
+        matchedCount,
+        pass,
+        comparisons,
+      }, { extraContent });
     } catch (e) {
       return jsonToolError(e);
     }
