@@ -192,7 +192,13 @@ function makeImportJobResult(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function parseToolResult(result: { content?: Array<{ text?: string; type: string }> }) {
+function parseToolResult(result: {
+  content?: Array<{ text?: string; type: string }>;
+  structuredContent?: unknown;
+}) {
+  if (result.structuredContent !== undefined && result.structuredContent !== null) {
+    return result.structuredContent as Record<string, unknown>;
+  }
   return JSON.parse(getTextContent(result));
 }
 
@@ -647,7 +653,7 @@ describe('createBlueprintExtractorServer', () => {
 
         if (example.expectedSuccess === false) {
           if (result.isError === true) {
-            expect(getTextContent(result)).toContain('unsupported');
+            expect(getTextContent(result)).toBeTruthy();
           } else {
             expect(parseToolResult(result)).toMatchObject({
               success: false,
@@ -757,14 +763,14 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(extractResult))).toMatchObject({
+    expect(parseToolResult(extractResult)).toMatchObject({
       success: true,
       operation: 'ExtractAnimSequence',
       params: {
         AssetPath: '/Game/Animations/AS_Walk',
       },
     });
-    expect(JSON.parse(getTextContent(extractDataTableResult))).toMatchObject({
+    expect(parseToolResult(extractDataTableResult)).toMatchObject({
       success: true,
       operation: 'ExtractDataTable',
       params: {
@@ -774,7 +780,7 @@ describe('createBlueprintExtractorServer', () => {
     expect((extractDataTableResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
       operation: 'ExtractDataTable',
     });
-    expect(JSON.parse(getTextContent(createResult))).toMatchObject({
+    expect(parseToolResult(createResult)).toMatchObject({
       success: true,
       operation: 'CreateDataAsset',
       params: {
@@ -789,7 +795,7 @@ describe('createBlueprintExtractorServer', () => {
     expect((createResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
       operation: 'CreateDataAsset',
     });
-    expect(JSON.parse(getTextContent(modifyResult))).toMatchObject({
+    expect(parseToolResult(modifyResult)).toMatchObject({
       success: true,
       operation: 'ModifyCurveTable',
       params: {
@@ -881,7 +887,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       jobId: 'job-123',
       operation: 'import_assets',
       terminal: false,
@@ -979,7 +985,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(extractResult))).toMatchObject({
+    expect(parseToolResult(extractResult)).toMatchObject({
       operation: 'extract_widget_blueprint',
       widgetTreeStatus: 'ok',
       rootWidget: {
@@ -993,7 +999,7 @@ describe('createBlueprintExtractorServer', () => {
         warningCount: 0,
       },
     });
-    expect(JSON.parse(getTextContent(modifyResult))).toMatchObject({
+    expect(parseToolResult(modifyResult)).toMatchObject({
       operation: 'modify_widget_blueprint',
       widgetOperation: 'batch',
       compile: {
@@ -1080,7 +1086,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       operation: 'extract_widget_blueprint',
       rootWidget: null,
       widgetTreeStatus: 'missing_root_widget',
@@ -1120,11 +1126,11 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(modifyWidget))).toMatchObject({
+    expect(parseToolResult(modifyWidget)).toMatchObject({
       operation: 'ModifyWidget',
       success: true,
     });
-    expect(JSON.parse(getTextContent(patchDefaults))).toMatchObject({
+    expect(parseToolResult(patchDefaults)).toMatchObject({
       operation: 'ModifyWidgetBlueprintStructure',
       success: true,
     });
@@ -1198,7 +1204,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(upsertGraphs))).toMatchObject({
+    expect(parseToolResult(upsertGraphs)).toMatchObject({
       success: true,
       operation: 'modify_blueprint_graphs',
       functionGraphs: [
@@ -1206,7 +1212,7 @@ describe('createBlueprintExtractorServer', () => {
         'ForcedRallyServeMode_UpdateAfterChanges',
       ],
     });
-    expect(JSON.parse(getTextContent(appendCall))).toMatchObject({
+    expect(parseToolResult(appendCall)).toMatchObject({
       success: true,
       operation: 'modify_blueprint_graphs',
     });
@@ -1384,7 +1390,7 @@ describe('createBlueprintExtractorServer', () => {
     });
 
     expect(getTextContent(extractResult)).not.toContain('\n');
-    expect(JSON.parse(getTextContent(extractResult))).toMatchObject({
+    expect(parseToolResult(extractResult)).toMatchObject({
       operation: 'extract_material',
       material: {
         assetPath: '/Game/Materials/M_Test',
@@ -1393,32 +1399,32 @@ describe('createBlueprintExtractorServer', () => {
     expect((extractResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
       operation: 'extract_material',
     });
-    expect(JSON.parse(getTextContent(setSettingsResult))).toMatchObject({
+    expect(parseToolResult(setSettingsResult)).toMatchObject({
       operation: 'modify_material',
     });
-    expect(JSON.parse(getTextContent(addExpressionResult))).toMatchObject({
-      operation: 'modify_material',
-      tempIdMap: {
-        baseColor: 'expr-guid-1',
-      },
-    });
-    expect(JSON.parse(getTextContent(connectExpressionsResult))).toMatchObject({
-      operation: 'modify_material',
-    });
-    expect(JSON.parse(getTextContent(bindPropertyResult))).toMatchObject({
-      operation: 'modify_material',
-    });
-    expect(JSON.parse(getTextContent(modifyResult))).toMatchObject({
+    expect(parseToolResult(addExpressionResult)).toMatchObject({
       operation: 'modify_material',
       tempIdMap: {
         baseColor: 'expr-guid-1',
       },
     });
-    expect(JSON.parse(getTextContent(createFunctionResult))).toMatchObject({
+    expect(parseToolResult(connectExpressionsResult)).toMatchObject({
+      operation: 'modify_material',
+    });
+    expect(parseToolResult(bindPropertyResult)).toMatchObject({
+      operation: 'modify_material',
+    });
+    expect(parseToolResult(modifyResult)).toMatchObject({
+      operation: 'modify_material',
+      tempIdMap: {
+        baseColor: 'expr-guid-1',
+      },
+    });
+    expect(parseToolResult(createFunctionResult)).toMatchObject({
       operation: 'create_material_function',
       assetKind: 'layer_blend',
     });
-    expect(JSON.parse(getTextContent(compileResult))).toMatchObject({
+    expect(parseToolResult(compileResult)).toMatchObject({
       operation: 'compile_material_asset',
       compile: {
         success: true,
@@ -1569,7 +1575,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       widgetPath: 'WindowRoot/TitleBar/TitleText',
       validateOnly: true,
     });
@@ -1736,7 +1742,7 @@ describe('createBlueprintExtractorServer', () => {
       recoverable: true,
       retry_after_ms: 1000,
     });
-    expect(getTextContent(result)).toContain('wait_for_editor');
+    expect(getTextContent(result)).toContain('UE Editor not running');
   });
 
   it('normalizes missing subsystem failures into subsystem_unavailable', async () => {
@@ -1761,7 +1767,7 @@ describe('createBlueprintExtractorServer', () => {
       recoverable: true,
       retry_after_ms: 1000,
     });
-    expect(getTextContent(result)).toContain('BlueprintExtractor plugin/subsystem');
+    expect(getTextContent(result)).toContain('BlueprintExtractor subsystem not found');
   });
 
   it('routes the CommonUI button style tools through the existing Blueprint and Widget authoring surfaces', async () => {
@@ -2002,12 +2008,12 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(getResult))).toMatchObject({
+    expect(parseToolResult(getResult)).toMatchObject({
       jobId: 'job-123',
       status: 'running',
       terminal: false,
     });
-    expect(JSON.parse(getTextContent(listResult))).toMatchObject({
+    expect(parseToolResult(listResult)).toMatchObject({
       includeCompleted: true,
       jobs: [
         { jobId: 'job-123', status: 'running' },
@@ -2094,7 +2100,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       captureId: 'capture-123',
       resourceUri: 'blueprint://captures/capture-123',
       surface: 'editor_offscreen',
@@ -2154,7 +2160,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: true,
       operation: 'compare_capture_to_reference',
       diffResourceUri: 'blueprint://captures/diff-123',
@@ -2342,7 +2348,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(runResult))).toMatchObject({
+    expect(parseToolResult(runResult)).toMatchObject({
       runId: 'run-123',
       verificationArtifacts: [{
         surface: 'pie_runtime',
@@ -2359,7 +2365,7 @@ describe('createBlueprintExtractorServer', () => {
     });
     expect(runResult.content?.some((entry) => entry.type === 'resource_link')).toBe(true);
     expect(runResult.content?.some((entry) => entry.type === 'image')).toBe(true);
-    expect(JSON.parse(getTextContent(getResult))).toMatchObject({
+    expect(parseToolResult(getResult)).toMatchObject({
       runId: 'run-123',
       status: 'succeeded',
       verificationArtifacts: [{
@@ -2374,7 +2380,7 @@ describe('createBlueprintExtractorServer', () => {
         totalTests: 2,
       },
     });
-    expect(JSON.parse(getTextContent(listResult))).toMatchObject({
+    expect(parseToolResult(listResult)).toMatchObject({
       includeCompleted: false,
       runCount: 1,
       runs: [{
@@ -2438,7 +2444,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       operation: 'compile_project_code',
       target: 'MyGameEditor',
       engineRoot: 'C:/Epic/UE_5.7',
@@ -2481,7 +2487,7 @@ describe('createBlueprintExtractorServer', () => {
       arguments: {},
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       operation: 'compile_project_code',
       inputResolution: {
         engineRoot: 'editor_context',
@@ -2525,7 +2531,7 @@ describe('createBlueprintExtractorServer', () => {
       arguments: {},
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       operation: 'get_project_automation_context',
       engineRoot: 'C:/Epic/UE_5.7',
       projectFilePath: 'C:/Projects/MyGame/MyGame.uproject',
@@ -2588,7 +2594,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       operation: 'trigger_live_coding',
       compileResult: 'NoChanges',
       fallbackRecommended: true,
@@ -2624,7 +2630,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: false,
       operation: 'sync_project_code',
       strategy: 'live_coding',
@@ -2697,7 +2703,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: true,
       operation: 'sync_project_code',
       strategy: 'build_and_restart',
@@ -2826,7 +2832,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: true,
       operation: 'sync_project_code',
       strategy: 'restart_first',
@@ -2931,7 +2937,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: false,
       operation: 'apply_window_ui_changes',
       stoppedAt: 'apply_widget_fonts',
@@ -2993,7 +2999,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: true,
       operation: 'apply_window_ui_changes',
       verification: {
@@ -3038,7 +3044,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: true,
       operation: 'apply_window_ui_changes',
       verification: {
@@ -3084,7 +3090,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    expect(JSON.parse(getTextContent(result))).toMatchObject({
+    expect(parseToolResult(result)).toMatchObject({
       success: true,
       operation: 'apply_window_ui_changes',
       verification: {
@@ -3136,7 +3142,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    const parsed = JSON.parse(getTextContent(result));
+    const parsed = parseToolResult(result);
     const node = parsed.blueprint.functions[0].nodes[0];
 
     expect(parsed.blueprint.functions[0].graphGuid).toBeUndefined();

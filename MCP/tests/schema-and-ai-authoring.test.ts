@@ -479,6 +479,27 @@ describe('registerSchemaAndAiAuthoringTools', () => {
     );
   });
 
+  it('create_state_tree error has non-empty content[0].text', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => {
+      throw new Error('StateTree schema is required');
+    }));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_Bad',
+      payload: {},
+      validate_only: false,
+    });
+
+    const typed = result as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+    expect(typed.isError).toBe(true);
+    expect(typed.content).toBeDefined();
+    expect(typed.content!.length).toBeGreaterThan(0);
+    expect(typed.content![0].type).toBe('text');
+    expect(typed.content![0].text).toBeTruthy();
+    expect(typed.content![0].text).not.toBe('Unknown error');
+    expect(typed.content![0].text).toContain('StateTree schema is required');
+  });
+
   it('returns an error when modify_state_tree fails', async () => {
     const { registry } = setupRegistry(vi.fn(async () => {
       throw new Error('state tree modification failed');

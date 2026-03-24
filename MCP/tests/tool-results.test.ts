@@ -71,11 +71,17 @@ describe('tool result normalizers', () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toEqual([{
-      type: 'resource_link',
-      uri: 'blueprint://captures/capture-123',
-      name: 'Capture',
-    }]);
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: 'editor unavailable while extracting',
+      },
+      {
+        type: 'resource_link',
+        uri: 'blueprint://captures/capture-123',
+        name: 'Capture',
+      },
+    ]);
     expect(result.structuredContent).toMatchObject({
       success: false,
       operation: 'extract_blueprint',

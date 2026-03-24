@@ -65,5 +65,16 @@ export function classifyRecoverableToolFailure(toolName: string, message: string
     };
   }
 
+  if (message.includes('requires engine_root or UE_ENGINE_ROOT')) {
+    return {
+      code: 'engine_root_missing',
+      recoverable: false,
+      next_steps: [
+        'Pass engine_root explicitly: { "engine_root": "C:/Program Files/Epic Games/UE_5.6" }',
+        'Or set the UE_ENGINE_ROOT environment variable to your Unreal Engine root directory.',
+      ],
+    };
+  }
+
   return null;
 }

@@ -110,7 +110,7 @@ export function createToolResultNormalizers({
       && candidate.message.length > 0
     ));
     const message = typeof payload.message === 'string'
-      ? payload.message
+      ? payload.message.replace(/^Error:\s*/, '')
       : typeof payload.error === 'string'
         ? payload.error
         : (isRecord(firstDiagnostic) && typeof firstDiagnostic.message === 'string')
@@ -154,7 +154,10 @@ export function createToolResultNormalizers({
 
     return {
       ...(existingResult ?? {}),
-      content: extractNonTextContent(existingResult),
+      content: [
+        { type: 'text' as const, text: message },
+        ...extractNonTextContent(existingResult),
+      ],
       structuredContent: envelope,
       isError: true,
     };

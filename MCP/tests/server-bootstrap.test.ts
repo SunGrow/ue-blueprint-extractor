@@ -12,7 +12,13 @@ import {
 } from '../src/server-config.js';
 import { connectInMemoryServer, getTextContent } from './test-helpers.js';
 
-function parseToolResult(result: { content?: Array<{ text?: string; type: string }> }) {
+function parseToolResult(result: {
+  content?: Array<{ text?: string; type: string }>;
+  structuredContent?: unknown;
+}) {
+  if (result.structuredContent !== undefined && result.structuredContent !== null) {
+    return result.structuredContent as Record<string, unknown>;
+  }
   return JSON.parse(getTextContent(result));
 }
 
@@ -163,24 +169,139 @@ describe('server bootstrap helpers', () => {
       expect(toolHelpRegistry.get('thrown_failure_tool')?.outputSchema).toBe(defaultOutputSchema);
 
       expect(handledFailure.isError).toBe(true);
-      expect(parseToolResult(handledFailure)).toMatchObject({
+      expect(handledFailure.structuredContent).toMatchObject({
         success: false,
         code: 'editor_unavailable',
         recoverable: true,
         retry_after_ms: EDITOR_POLL_INTERVAL_MS,
       });
-      expect(handledFailure.content?.some((entry) => entry.type === 'text')).toBe(false);
+      expect(handledFailure.content?.some((entry) => entry.type === 'text')).toBe(true);
+      expect(handledFailure.content?.find((e) => e.type === 'text')?.text).toBeTruthy();
 
       expect(thrownFailure.isError).toBe(true);
-      expect(parseToolResult(thrownFailure)).toMatchObject({
+      expect(thrownFailure.structuredContent).toMatchObject({
         success: false,
         code: 'tool_execution_failed',
         message: 'kaboom',
         recoverable: true,
       });
-      expect(thrownFailure.content?.some((entry) => entry.type === 'text')).toBe(false);
+      expect(thrownFailure.content?.some((entry) => entry.type === 'text')).toBe(true);
+      expect(thrownFailure.content?.find((e) => e.type === 'text')?.text).toBe('kaboom');
     } finally {
       await harness.close();
     }
+  });
+});
+
+describe('normalizeToolError content and prefix stripping', () => {
+  it('always produces content[0].text with the error message', async () => {
+    const toolHelpRegistry = new Map<string, ToolHelpEntry>();
+    const { server } = createWrappedServer(toolHelpRegistry);
+
+    server.registerTool('fail_with_message', {
+      title: 'Fail With Message',
+      description: 'Always throws',
+    }, async () => {
+      throw new Error('subsystem exploded');
+    });
+
+    const harness = await connectInMemoryServer(server);
+
+    try {
+      const result = await harness.client.callTool({
+        name: 'fail_with_message',
+        arguments: {},
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBeDefined();
+      expect(Array.isArray(result.content)).toBe(true);
+      expect(result.content!.length).toBeGreaterThanOrEqual(1);
+      expect(result.content![0]).toMatchObject({
+        type: 'text',
+        text: 'subsystem exploded',
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('strips "Error: " prefix from payload.message', async () => {
+    const toolHelpRegistry = new Map<string, ToolHelpEntry>();
+    const { server } = createWrappedServer(toolHelpRegistry);
+
+    server.registerTool('fail_with_error_prefix', {
+      title: 'Fail With Error Prefix',
+      description: 'Returns isError with Error: prefix in message',
+    }, async () => ({
+      isError: true,
+      message: 'Error: Some failure',
+    }));
+
+    const harness = await connectInMemoryServer(server);
+
+    try {
+      const result = await harness.client.callTool({
+        name: 'fail_with_error_prefix',
+        arguments: {},
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content!.length).toBeGreaterThanOrEqual(1);
+      expect(result.content![0]).toMatchObject({
+        type: 'text',
+      });
+      const textContent = result.content![0] as { type: string; text: string };
+      expect(textContent.text).toBe('Some failure');
+      expect(textContent.text).not.toMatch(/^Error:\s/);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('preserves non-text content alongside new text block', () => {
+    const { normalizeToolError } = createToolResultNormalizers({
+      taskAwareTools,
+      classifyRecoverableToolFailure,
+    });
+
+    const imageBlock = {
+      type: 'image' as const,
+      data: 'base64data',
+      mimeType: 'image/png' as const,
+    };
+
+    const result = normalizeToolError(
+      'some_tool',
+      { message: 'render failed' },
+      { content: [imageBlock] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content.length).toBe(2);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: 'render failed',
+    });
+    expect(result.content[1]).toMatchObject({
+      type: 'image',
+      data: 'base64data',
+      mimeType: 'image/png',
+    });
+  });
+});
+
+describe('classifyRecoverableToolFailure engine_root_missing', () => {
+  it('returns engine_root_missing for messages requiring engine_root or UE_ENGINE_ROOT', () => {
+    const result = classifyRecoverableToolFailure(
+      'compile_project_code',
+      'compile_project_code requires engine_root or UE_ENGINE_ROOT to locate build tools.',
+    );
+
+    expect(result).not.toBeNull();
+    expect(result).toMatchObject({
+      code: 'engine_root_missing',
+      recoverable: false,
+    });
   });
 });

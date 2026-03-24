@@ -472,7 +472,9 @@ export function registerSchemaAndAiAuthoringTools({
         ),
         payload: z.object({
           stateTree: jsonObjectSchema.optional(),
-          schema: z.string().optional(),
+          schema: z.string().optional().describe(
+            'UE class path of the StateTree schema. Required by the editor. E.g. /Script/GameplayStateTreeModule.StateTreeComponentSchema',
+          ),
           states: z.array(jsonObjectSchema).optional(),
           evaluators: z.array(jsonObjectSchema).optional(),
           globalTasks: z.array(jsonObjectSchema).optional(),

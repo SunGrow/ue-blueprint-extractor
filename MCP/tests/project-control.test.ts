@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { registerProjectControlTools } from '../src/tools/project-control.js';
+import { createToolResultNormalizers } from '../src/helpers/tool-results.js';
+import { extractToolPayload } from '../src/helpers/formatting.js';
+import { classifyRecoverableToolFailure, taskAwareTools } from '../src/server-config.js';
 import { createToolRegistry, parseDirectToolResult } from './tool-module-test-helpers.js';
 import { getTextContent } from './test-helpers.js';
 
@@ -398,5 +401,124 @@ describe('registerProjectControlTools', () => {
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
       'editor_context_error=editor missing',
     );
+  });
+
+  it('compile_project_code error has non-empty content[0].text', async () => {
+    const registry = createToolRegistry();
+    const engineRootError = new Error('requires engine_root or UE_ENGINE_ROOT');
+    const resolveProjectInputs = vi.fn()
+      .mockRejectedValueOnce(engineRootError)
+      .mockResolvedValueOnce(createResolvedProjectInputs());
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('compile_project_code').handler({});
+    const typed = result as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+
+    expect(typed.isError).toBe(true);
+    expect(typed.content).toBeDefined();
+    expect(Array.isArray(typed.content)).toBe(true);
+    expect(typed.content!.length).toBeGreaterThanOrEqual(1);
+    expect(typed.content![0].type).toBe('text');
+    expect(typeof typed.content![0].text).toBe('string');
+    expect(typed.content![0].text!.length).toBeGreaterThan(0);
+    expect(typed.content![0].text).toContain('requires engine_root or UE_ENGINE_ROOT');
+  });
+
+  it('compile_project_code missing engine_root produces engine_root_missing code', async () => {
+    const registry = createToolRegistry();
+    const engineRootError = new Error('requires engine_root or UE_ENGINE_ROOT');
+    const resolveProjectInputs = vi.fn()
+      .mockRejectedValueOnce(engineRootError)
+      .mockResolvedValueOnce(createResolvedProjectInputs());
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const rawResult = await registry.getTool('compile_project_code').handler({});
+
+    const { normalizeToolError } = createToolResultNormalizers({
+      taskAwareTools,
+      classifyRecoverableToolFailure,
+    });
+
+    const normalized = normalizeToolError(
+      'compile_project_code',
+      extractToolPayload(rawResult),
+      rawResult as Record<string, unknown>,
+    ) as { isError?: boolean; structuredContent?: Record<string, unknown> };
+
+    expect(normalized.isError).toBe(true);
+    expect(normalized.structuredContent).toBeDefined();
+    expect(normalized.structuredContent!.code).toBe('engine_root_missing');
+    expect(normalized.structuredContent!.recoverable).toBe(false);
+  });
+
+  it('sync_project_code missing engine_root produces engine_root_missing code', async () => {
+    const registry = createToolRegistry();
+    const engineRootError = new Error('requires engine_root or UE_ENGINE_ROOT');
+    const resolveProjectInputs = vi.fn()
+      .mockRejectedValueOnce(engineRootError)
+      .mockResolvedValueOnce(createResolvedProjectInputs());
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const rawResult = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['Source/Test/MyActor.cpp'],
+    });
+
+    const { normalizeToolError } = createToolResultNormalizers({
+      taskAwareTools,
+      classifyRecoverableToolFailure,
+    });
+
+    const normalized = normalizeToolError(
+      'sync_project_code',
+      extractToolPayload(rawResult),
+      rawResult as Record<string, unknown>,
+    ) as { isError?: boolean; structuredContent?: Record<string, unknown> };
+
+    expect(normalized.isError).toBe(true);
+    expect(normalized.structuredContent).toBeDefined();
+    expect(normalized.structuredContent!.code).toBe('engine_root_missing');
+    expect(normalized.structuredContent!.recoverable).toBe(false);
   });
 });
