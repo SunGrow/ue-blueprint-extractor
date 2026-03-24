@@ -221,9 +221,11 @@ describe('createBlueprintExtractorServer', () => {
     const resourceUris = resources.resources.map((resource) => resource.uri);
     const resourceTemplateUris = resourceTemplates.resourceTemplates.map((template) => template.uriTemplate);
     const tools = await harness.client.listTools();
+    const extractAsset = tools.tools.find((tool) => tool.name === 'extract_asset');
     const extractBlueprint = tools.tools.find((tool) => tool.name === 'extract_blueprint');
     const extractWidgetBlueprint = tools.tools.find((tool) => tool.name === 'extract_widget_blueprint');
     const extractMaterial = tools.tools.find((tool) => tool.name === 'extract_material');
+    const materialGraphOperation = tools.tools.find((tool) => tool.name === 'material_graph_operation');
     const createBlueprint = tools.tools.find((tool) => tool.name === 'create_blueprint');
     const extractCascade = tools.tools.find((tool) => tool.name === 'extract_cascade');
     const importAssets = tools.tools.find((tool) => tool.name === 'import_assets');
@@ -246,9 +248,10 @@ describe('createBlueprintExtractorServer', () => {
     const extractCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'extract_commonui_button_style');
     const modifyCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'modify_commonui_button_style');
     const applyCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'apply_commonui_button_style');
+    const getToolHelp = tools.tools.find((tool) => tool.name === 'get_tool_help');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(97);
+    expect(tools.tools).toHaveLength(83);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -270,6 +273,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(resourceTemplateUris).toContain('blueprint://captures/{capture_id}');
     expect(resourceTemplateUris).toContain('blueprint://test-runs/{run_id}/{artifact}');
     expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(Object.keys(promptCatalog).sort());
+    expect(tools.tools.some((tool) => tool.name === 'extract_asset')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'extract_widget_animation')).toBe(true);
@@ -281,10 +285,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'import_meshes')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'extract_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_material')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'set_material_settings')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'add_material_expression')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'connect_material_expressions')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'bind_material_property')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'material_graph_operation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material_function')).toBe(true);
@@ -313,8 +314,27 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'extract_commonui_button_style')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_commonui_button_style')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_commonui_button_style')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'get_tool_help')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_blueprint_graphs')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'extract_statetree')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_dataasset')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_datatable')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_behavior_tree')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_blackboard')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_user_defined_struct')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_user_defined_enum')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_curve')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_curvetable')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_material_instance')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_anim_sequence')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_anim_montage')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'extract_blend_space')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'set_material_settings')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'add_material_expression')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'connect_material_expressions')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'bind_material_property')).toBe(false);
     expect(tools.tools.every((tool) => tool.outputSchema)).toBe(true);
+    expectSchemaProperty(extractAsset, 'success');
     expectSchemaProperty(importAssets, 'jobId');
     expectSchemaProperty(importAssets, 'terminal');
     expectSchemaProperty(listImportJobs, 'jobs');
@@ -324,6 +344,7 @@ describe('createBlueprintExtractorServer', () => {
     expectSchemaProperty(captureWidgetPreview, 'surface');
     expectSchemaProperty(captureWidgetPreview, 'scenarioId');
     expectSchemaProperty(captureWidgetPreview, 'assetPaths');
+    expectSchemaProperty(materialGraphOperation, 'execution');
     expectSchemaProperty(extractWidgetAnimation, 'animation');
     expectSchemaProperty(createWidgetAnimation, 'assetPath');
     expectSchemaProperty(modifyWidgetAnimation, 'assetPath');
@@ -354,6 +375,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(extractCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(true);
     expect(modifyCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
     expect(applyCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
+    expect(getToolHelp?.annotations?.readOnlyHint).toBe(true);
     expect(saveAssets?.annotations?.idempotentHint).toBe(true);
   });
 
@@ -427,7 +449,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(unsupportedSurfaces.contents[0]?.text).toContain('Generic create_data_asset and modify_data_asset reject Enhanced Input asset classes');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('CommonUI wrapper widgets');
     expect(unsupportedSurfaces.contents[0]?.text).toContain('create_commonui_button_style');
-    expect(unsupportedSurfaces.contents[0]?.text).toContain('Dedicated widget animation authoring is supported only for the constrained v2 track subset');
+    expect(unsupportedSurfaces.contents[0]?.text).toContain('Dedicated widget animation authoring is supported only for the constrained supported track subset');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('Safe UI Redesign Workflow');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('capture_widget_preview');
     expect(uiRedesignWorkflow.contents[0]?.text).toContain('partial verification');
@@ -442,7 +464,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(widgetMotionExample.contents[0]?.text).toContain('Example: menu_shell_state_motion');
     expect(widgetMotionExample.contents[0]?.text).toContain('compare_motion_capture_bundle');
     expect(widgetMotionExample.contents[0]?.text).toContain('Example: unsupported_track_request');
-    expect(materialExample.contents[0]?.text).toContain('tool: bind_material_property');
+    expect(materialExample.contents[0]?.text).toContain('tool: material_graph_operation');
     expect(enhancedInputExample.contents[0]?.text).toContain('tool: modify_input_mapping_context');
     expect(windowPolishExample.contents[0]?.text).toContain('tool: apply_window_ui_changes');
     expect(windowPolishExample.contents[0]?.text).toContain('capture_widget_preview');
@@ -679,6 +701,158 @@ describe('createBlueprintExtractorServer', () => {
           Query: 'Player',
           ClassFilter: 'Blueprint',
           MaxResults: 7,
+        },
+      },
+    ]);
+  });
+
+  it('routes extract_asset and data-authoring tools through the shared JSON success path', async () => {
+    const fakeClient = new FakeUEClient((method, params) => JSON.stringify({
+      success: true,
+      operation: method,
+      params,
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const extractResult = await harness.client.callTool({
+      name: 'extract_asset',
+      arguments: {
+        asset_type: 'anim_sequence',
+        asset_path: '/Game/Animations/AS_Walk',
+      },
+    });
+    const extractDataTableResult = await harness.client.callTool({
+      name: 'extract_asset',
+      arguments: {
+        asset_type: 'data_table',
+        asset_path: '/Game/Data/DT_Items',
+      },
+    });
+    const createResult = await harness.client.callTool({
+      name: 'create_data_asset',
+      arguments: {
+        asset_path: '/Game/Data/DA_TestItem',
+        asset_class_path: '/Script/MyModule.MyDataAssetClass',
+        properties: {
+          DisplayName: 'Sword',
+        },
+        validate_only: true,
+      },
+    });
+    const modifyResult = await harness.client.callTool({
+      name: 'modify_curve_table',
+      arguments: {
+        asset_path: '/Game/Data/CT_Difficulty',
+        rows: [
+          {
+            rowName: 'Normal',
+            curve: {
+              defaultValue: 1,
+            },
+          },
+        ],
+        delete_rows: ['Legacy'],
+        replace_rows: true,
+      },
+    });
+
+    expect(JSON.parse(getTextContent(extractResult))).toMatchObject({
+      success: true,
+      operation: 'ExtractAnimSequence',
+      params: {
+        AssetPath: '/Game/Animations/AS_Walk',
+      },
+    });
+    expect(JSON.parse(getTextContent(extractDataTableResult))).toMatchObject({
+      success: true,
+      operation: 'ExtractDataTable',
+      params: {
+        AssetPath: '/Game/Data/DT_Items',
+      },
+    });
+    expect((extractDataTableResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
+      operation: 'ExtractDataTable',
+    });
+    expect(JSON.parse(getTextContent(createResult))).toMatchObject({
+      success: true,
+      operation: 'CreateDataAsset',
+      params: {
+        AssetPath: '/Game/Data/DA_TestItem',
+        AssetClassPath: '/Script/MyModule.MyDataAssetClass',
+        PropertiesJson: JSON.stringify({
+          DisplayName: 'Sword',
+        }),
+        bValidateOnly: true,
+      },
+    });
+    expect((createResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
+      operation: 'CreateDataAsset',
+    });
+    expect(JSON.parse(getTextContent(modifyResult))).toMatchObject({
+      success: true,
+      operation: 'ModifyCurveTable',
+      params: {
+        AssetPath: '/Game/Data/CT_Difficulty',
+        PayloadJson: JSON.stringify({
+          rows: [
+            {
+              rowName: 'Normal',
+              curve: {
+                defaultValue: 1,
+              },
+            },
+          ],
+          deleteRows: ['Legacy'],
+          replaceRows: true,
+        }),
+        bValidateOnly: false,
+      },
+    });
+    expect((modifyResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
+      operation: 'ModifyCurveTable',
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ExtractAnimSequence',
+        params: {
+          AssetPath: '/Game/Animations/AS_Walk',
+        },
+      },
+      {
+        method: 'ExtractDataTable',
+        params: {
+          AssetPath: '/Game/Data/DT_Items',
+        },
+      },
+      {
+        method: 'CreateDataAsset',
+        params: {
+          AssetPath: '/Game/Data/DA_TestItem',
+          AssetClassPath: '/Script/MyModule.MyDataAssetClass',
+          PropertiesJson: JSON.stringify({
+            DisplayName: 'Sword',
+          }),
+          bValidateOnly: true,
+        },
+      },
+      {
+        method: 'ModifyCurveTable',
+        params: {
+          AssetPath: '/Game/Data/CT_Difficulty',
+          PayloadJson: JSON.stringify({
+            rows: [
+              {
+                rowName: 'Normal',
+                curve: {
+                  defaultValue: 1,
+                },
+              },
+            ],
+            deleteRows: ['Legacy'],
+            replaceRows: true,
+          }),
+          bValidateOnly: false,
         },
       },
     ]);
@@ -1069,7 +1243,7 @@ describe('createBlueprintExtractorServer', () => {
     ]);
   });
 
-  it('routes material graph tools through the new subsystem calls and keeps compact text plus structured content', async () => {
+  it('routes material_graph_operation through the expected ModifyMaterial payloads', async () => {
     const fakeClient = new FakeUEClient((method, params) => {
       if (method === 'ExtractMaterial') {
         return JSON.stringify({
@@ -1134,6 +1308,50 @@ describe('createBlueprintExtractorServer', () => {
         verbose: false,
       },
     });
+    const setSettingsResult = await harness.client.callTool({
+      name: 'material_graph_operation',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+        operation: 'set_material_settings',
+        settings: {
+          two_sided: true,
+          blend_mode: 'BLEND_Opaque',
+        },
+      },
+    });
+    const addExpressionResult = await harness.client.callTool({
+      name: 'material_graph_operation',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+        operation: 'add_expression',
+        expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+        expression_name: 'baseColor',
+        expression_properties: {
+          ParameterName: 'BaseColorTint',
+        },
+        node_position: { x: -180, y: 40 },
+      },
+    });
+    const connectExpressionsResult = await harness.client.callTool({
+      name: 'material_graph_operation',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+        operation: 'connect_expressions',
+        from_expression_guid: 'expr-guid-1',
+        to_temp_id: 'baseColor',
+        to_input_index: 2,
+      },
+    });
+    const bindPropertyResult = await harness.client.callTool({
+      name: 'material_graph_operation',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+        operation: 'connect_material_property',
+        from_temp_id: 'baseColor',
+        from_output_index: 1,
+        material_property: 'MP_Roughness',
+      },
+    });
     const modifyResult = await harness.client.callTool({
       name: 'modify_material',
       arguments: {
@@ -1175,6 +1393,21 @@ describe('createBlueprintExtractorServer', () => {
     expect((extractResult as { structuredContent?: unknown }).structuredContent).toMatchObject({
       operation: 'extract_material',
     });
+    expect(JSON.parse(getTextContent(setSettingsResult))).toMatchObject({
+      operation: 'modify_material',
+    });
+    expect(JSON.parse(getTextContent(addExpressionResult))).toMatchObject({
+      operation: 'modify_material',
+      tempIdMap: {
+        baseColor: 'expr-guid-1',
+      },
+    });
+    expect(JSON.parse(getTextContent(connectExpressionsResult))).toMatchObject({
+      operation: 'modify_material',
+    });
+    expect(JSON.parse(getTextContent(bindPropertyResult))).toMatchObject({
+      operation: 'modify_material',
+    });
     expect(JSON.parse(getTextContent(modifyResult))).toMatchObject({
       operation: 'modify_material',
       tempIdMap: {
@@ -1197,6 +1430,83 @@ describe('createBlueprintExtractorServer', () => {
         params: {
           AssetPath: '/Game/Materials/M_Test',
           bVerbose: false,
+        },
+      },
+      {
+        method: 'ModifyMaterial',
+        params: {
+          AssetPath: '/Game/Materials/M_Test',
+          PayloadJson: JSON.stringify({
+            settings: {
+              two_sided: true,
+              blend_mode: 'BLEND_Opaque',
+            },
+            operations: [
+              {
+                operation: 'set_material_settings',
+                settings: {
+                  two_sided: true,
+                  blend_mode: 'BLEND_Opaque',
+                },
+              },
+            ],
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'ModifyMaterial',
+        params: {
+          AssetPath: '/Game/Materials/M_Test',
+          PayloadJson: JSON.stringify({
+            operations: [
+              {
+                operation: 'add_expression',
+                expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+                temp_id: 'baseColor',
+                properties: {
+                  ParameterName: 'BaseColorTint',
+                },
+                node_pos_x: -180,
+                node_pos_y: 40,
+              },
+            ],
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'ModifyMaterial',
+        params: {
+          AssetPath: '/Game/Materials/M_Test',
+          PayloadJson: JSON.stringify({
+            operations: [
+              {
+                operation: 'connect_expressions',
+                from_expression_guid: 'expr-guid-1',
+                to_temp_id: 'baseColor',
+                to_input_index: 2,
+              },
+            ],
+          }),
+          bValidateOnly: false,
+        },
+      },
+      {
+        method: 'ModifyMaterial',
+        params: {
+          AssetPath: '/Game/Materials/M_Test',
+          PayloadJson: JSON.stringify({
+            operations: [
+              {
+                operation: 'connect_material_property',
+                from_temp_id: 'baseColor',
+                from_output_index: 1,
+                material_property: 'MP_Roughness',
+              },
+            ],
+          }),
+          bValidateOnly: false,
         },
       },
       {
@@ -2835,6 +3145,350 @@ describe('createBlueprintExtractorServer', () => {
     expect(node.posY).toBeUndefined();
     expect(node.pins[0].type).toBe('exec');
     expect(node.pins[0].connections).toBeUndefined();
+  });
+
+  it('compacts extract_widget_blueprint responses when requested', async () => {
+    const fakeClient = new FakeUEClient(() => JSON.stringify({
+      success: true,
+      operation: 'extract_widget_blueprint',
+      rootWidget: {
+        class: 'VerticalBox',
+        name: 'WindowRoot',
+        displayLabel: 'WindowRoot',
+        visibility: 'Visible',
+        properties: {},
+        children: [{
+          class: 'TextBlock',
+          name: 'TitleText',
+          displayLabel: '',
+          visibility: 'Visible',
+          properties: {},
+        }],
+      },
+      bindings: {},
+      animations: [],
+      compile: {
+        status: 'UpToDate',
+        errors: [],
+        warnings: [],
+        messages: [],
+      },
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'extract_widget_blueprint',
+      arguments: {
+        asset_path: '/Game/UI/WBP_Window',
+        compact: true,
+      },
+    });
+
+    const parsed = parseToolResult(result);
+    expect(parsed.rootWidget.displayLabel).toBeUndefined();
+    expect(parsed.rootWidget.visibility).toBeUndefined();
+    expect(parsed.rootWidget.properties).toBeUndefined();
+    expect(parsed.rootWidget.children[0].displayLabel).toBeUndefined();
+    expect(parsed.bindings).toBeUndefined();
+    expect(parsed.animations).toBeUndefined();
+    expect(parsed.compile.errors).toBeUndefined();
+    expect(parsed.compile.warnings).toBeUndefined();
+    expect(parsed.compile.messages).toBeUndefined();
+  });
+
+  it('compacts extract_asset behavior_tree responses when requested', async () => {
+    const fakeClient = new FakeUEClient(() => JSON.stringify({
+      schemaVersion: '1.0.0',
+      behaviorTree: {
+        assetPath: '/Game/AI/BT_MainAI',
+        rootNode: {
+          nodeClass: 'BTComposite_Selector',
+          nodePath: 'root',
+          nodeIndex: 0,
+          executionIndex: 1,
+          services: [],
+          decorators: [],
+          children: [{
+            nodeClass: 'BTTask_MoveTo',
+            nodePath: 'root.children[0]',
+            nodeIndex: 1,
+            executionIndex: 2,
+            services: [],
+            decorators: [],
+            decoratorLogic: [],
+            children: [],
+          }],
+        },
+      },
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'extract_asset',
+      arguments: {
+        asset_type: 'behavior_tree',
+        asset_path: '/Game/AI/BT_MainAI',
+        compact: true,
+      },
+    });
+
+    const parsed = parseToolResult(result);
+    expect(parsed.schemaVersion).toBeUndefined();
+    expect(parsed.behaviorTree.rootNode.nodeIndex).toBeUndefined();
+    expect(parsed.behaviorTree.rootNode.executionIndex).toBeUndefined();
+    expect(parsed.behaviorTree.rootNode.services).toBeUndefined();
+    expect(parsed.behaviorTree.rootNode.decorators).toBeUndefined();
+    expect(parsed.behaviorTree.rootNode.children[0].services).toBeUndefined();
+    expect(parsed.behaviorTree.rootNode.children[0].decoratorLogic).toBeUndefined();
+  });
+
+  it('compacts extract_asset statetree responses when requested', async () => {
+    const fakeClient = new FakeUEClient(() => JSON.stringify({
+      schemaVersion: '1.0.0',
+      stateTree: {
+        assetPath: '/Game/AI/ST_Main',
+        evaluators: [],
+        globalTasks: [{
+          id: 'global-task',
+          expressionIndent: 0,
+          nodeProperties: {},
+          instanceProperties: {},
+        }],
+        states: [{
+          id: 'state-1',
+          tasks: [{
+            id: 'task-1',
+            expressionIndent: 0,
+            nodeProperties: {},
+            instanceProperties: {},
+          }],
+          transitions: [{
+            id: 'transition-1',
+            conditions: [{
+              id: 'condition-1',
+              expressionIndent: 0,
+              nodeProperties: {},
+              instanceProperties: {},
+            }],
+          }],
+          children: [],
+        }],
+      },
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'extract_asset',
+      arguments: {
+        asset_type: 'statetree',
+        asset_path: '/Game/AI/ST_Main',
+        compact: true,
+      },
+    });
+
+    const parsed = parseToolResult(result);
+    expect(parsed.schemaVersion).toBeUndefined();
+    expect(parsed.stateTree.evaluators).toBeUndefined();
+    expect(parsed.stateTree.globalTasks[0].expressionIndent).toBeUndefined();
+    expect(parsed.stateTree.globalTasks[0].nodeProperties).toBeUndefined();
+    expect(parsed.stateTree.states[0].tasks[0].instanceProperties).toBeUndefined();
+    expect(parsed.stateTree.states[0].transitions[0].conditions[0].expressionIndent).toBeUndefined();
+    expect(parsed.stateTree.states[0].children).toBeUndefined();
+  });
+
+  it('compacts extract_material and extract_material_function responses when requested', async () => {
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'ExtractMaterial') {
+        return JSON.stringify({
+          success: true,
+          operation: 'extract_material',
+          material: {
+            assetPath: params.AssetPath,
+            parameterGuid: 'param-guid-1',
+            expressions: [
+              {
+                expressionGuid: 'expr-guid-1',
+                posX: 10,
+                posY: 20,
+                class: '/Script/Engine.MaterialExpressionScalarParameter',
+              },
+              {
+                expressionGuid: 'expr-guid-2',
+                posX: 40,
+                posY: 60,
+                inputs: [
+                  {
+                    name: 'Alpha',
+                    expressionGuid: 'expr-guid-1',
+                    outputIndex: 0,
+                  },
+                ],
+                comments: [],
+              },
+            ],
+            propertyConnections: [
+              {
+                property: 'MP_BaseColor',
+                expressionGuid: 'expr-guid-2',
+                outputIndex: 0,
+              },
+            ],
+            comments: [],
+          },
+        });
+      }
+
+      if (method === 'ExtractMaterialFunction') {
+        return JSON.stringify({
+          success: true,
+          operation: 'extract_material_function',
+          materialFunction: {
+            assetKind: 'function',
+            functionGuid: 'function-guid-1',
+            expressions: [
+              {
+                materialExpressionGuid: 'expr-guid-a',
+                posX: 8,
+                posY: 12,
+              },
+              {
+                materialExpressionGuid: 'expr-guid-b',
+                inputs: [
+                  {
+                    expressionGuid: 'expr-guid-a',
+                    outputIndex: 1,
+                  },
+                ],
+              },
+            ],
+            propertyConnections: [],
+          },
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const materialResult = await harness.client.callTool({
+      name: 'extract_material',
+      arguments: {
+        asset_path: '/Game/Materials/M_Test',
+        compact: true,
+      },
+    });
+    const materialFunctionResult = await harness.client.callTool({
+      name: 'extract_material_function',
+      arguments: {
+        asset_path: '/Game/Materials/MF_Test',
+        compact: true,
+      },
+    });
+
+    const material = parseToolResult(materialResult).material;
+    expect(material.parameterGuid).toBeUndefined();
+    expect(material.comments).toBeUndefined();
+    expect(material.expressions[0].id).toBe('e0');
+    expect(material.expressions[0].expressionGuid).toBeUndefined();
+    expect(material.expressions[0].posX).toBeUndefined();
+    expect(material.expressions[1].inputs[0]).toMatchObject({
+      expressionId: 'e0',
+      outputIndex: 0,
+    });
+    expect(material.propertyConnections[0]).toMatchObject({
+      expressionId: 'e1',
+      outputIndex: 0,
+    });
+
+    const materialFunction = parseToolResult(materialFunctionResult).materialFunction;
+    expect(materialFunction.functionGuid).toBeUndefined();
+    expect(materialFunction.expressions[0].id).toBe('e0');
+    expect(materialFunction.expressions[0].materialExpressionGuid).toBeUndefined();
+    expect(materialFunction.expressions[1].inputs[0]).toMatchObject({
+      expressionId: 'e0',
+      outputIndex: 1,
+    });
+    expect(materialFunction.propertyConnections).toBeUndefined();
+  });
+
+  it('compacts generic extract_asset responses when requested', async () => {
+    const fakeClient = new FakeUEClient(() => JSON.stringify({
+      success: true,
+      operation: 'extract_data_asset',
+      dataAsset: {
+        assetPath: '/Game/Data/DA_Test',
+        itemGuid: 'item-guid-1',
+        editorData: {
+          posX: 5,
+          posY: 7,
+        },
+        entries: [
+          {
+            name: 'EntryA',
+            valueGuid: 'value-guid-1',
+            metadata: {},
+            children: [],
+          },
+        ],
+        emptyObject: {},
+        emptyArray: [],
+      },
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'extract_asset',
+      arguments: {
+        asset_type: 'data_asset',
+        asset_path: '/Game/Data/DA_Test',
+        compact: true,
+      },
+    });
+
+    const parsed = parseToolResult(result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.dataAsset.itemGuid).toBeUndefined();
+    expect(parsed.dataAsset.editorData).toBeUndefined();
+    expect(parsed.dataAsset.entries[0].valueGuid).toBeUndefined();
+    expect(parsed.dataAsset.entries[0].metadata).toBeUndefined();
+    expect(parsed.dataAsset.entries[0].children).toBeUndefined();
+    expect(parsed.dataAsset.emptyObject).toBeUndefined();
+    expect(parsed.dataAsset.emptyArray).toBeUndefined();
+  });
+
+  it('returns structured help for registered tools', async () => {
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'get_tool_help',
+      arguments: {
+        tool_name: 'modify_widget_blueprint',
+      },
+    });
+
+    const parsed = parseToolResult(result);
+    expect(parsed.operation).toBe('get_tool_help');
+    expect(parsed.tool.name).toBe('modify_widget_blueprint');
+    expect(parsed.tool.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'operation',
+      }),
+    ]));
+    expect(parsed.tool.relatedResources).toEqual(expect.arrayContaining([
+      'blueprint://selector-conventions',
+      'blueprint://widget-best-practices',
+    ]));
+    expect(parsed.tool.exampleFamilies).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        family: 'widget_blueprint',
+      }),
+    ]));
   });
 
   it('truncates oversized extract_blueprint responses', async () => {

@@ -3,6 +3,7 @@ import { RemoteCallRequest, RemoteCallResponse } from './types.js';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 30010;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000;
+const DEFAULT_CONNECTION_CACHE_TTL_MS = 2_000;
 const TIMEOUT_MS = 60_000;
 const SUBSYSTEM_PATH_ENV = 'UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH';
 
@@ -29,7 +30,9 @@ export interface UEClientOptions {
   fetchImpl?: FetchLike;
   timeoutMs?: number;
   connectionTimeoutMs?: number;
+  connectionCacheTtlMs?: number;
   candidatePaths?: readonly string[];
+  now?: () => number;
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -47,9 +50,14 @@ export class UEClient {
   private fetchImpl: FetchLike;
   private timeoutMs: number;
   private connectionTimeoutMs: number;
+  private connectionCacheTtlMs: number;
   private candidatePaths: readonly string[];
+  private now: () => number;
   private subsystemPath: string | null = null;
   private subsystemPathSource: SubsystemPathSource | null = null;
+  private lastConnectionStatus: boolean | null = null;
+  private lastConnectionCheckAt = 0;
+  private pendingConnectionCheck: Promise<boolean> | null = null;
 
   constructor(options: UEClientOptions = {}) {
     this.host = options.host ?? process.env.UE_REMOTE_CONTROL_HOST ?? DEFAULT_HOST;
@@ -57,7 +65,9 @@ export class UEClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     this.connectionTimeoutMs = options.connectionTimeoutMs ?? DEFAULT_CONNECTION_TIMEOUT_MS;
+    this.connectionCacheTtlMs = options.connectionCacheTtlMs ?? DEFAULT_CONNECTION_CACHE_TTL_MS;
     this.candidatePaths = options.candidatePaths ?? DEFAULT_SUBSYSTEM_CANDIDATE_PATHS;
+    this.now = options.now ?? Date.now;
     this.subsystemPath = options.subsystemPath ?? process.env[SUBSYSTEM_PATH_ENV] ?? null;
     this.subsystemPathSource = this.subsystemPath ? 'explicit' : null;
   }
@@ -66,17 +76,51 @@ export class UEClient {
     return `http://${this.host}:${this.port}`;
   }
 
-  async checkConnection(): Promise<boolean> {
+  private cacheConnectionStatus(status: boolean) {
+    this.lastConnectionStatus = status;
+    this.lastConnectionCheckAt = this.now();
+  }
+
+  private invalidateConnectionStatus() {
+    this.lastConnectionStatus = null;
+    this.lastConnectionCheckAt = 0;
+  }
+
+  private async performConnectionCheck(): Promise<boolean> {
     // GET /remote/info — if it responds, UE is running with Remote Control
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.connectionTimeoutMs);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.connectionTimeoutMs);
       const res = await this.fetchImpl(`${this.baseUrl}/remote/info`, { signal: controller.signal });
-      clearTimeout(timeout);
       return res.ok;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeout);
     }
+  }
+
+  async checkConnection(): Promise<boolean> {
+    const now = this.now();
+    if (this.lastConnectionStatus !== null && now - this.lastConnectionCheckAt < this.connectionCacheTtlMs) {
+      return this.lastConnectionStatus;
+    }
+
+    if (this.pendingConnectionCheck) {
+      return this.pendingConnectionCheck;
+    }
+
+    const probe = this.performConnectionCheck()
+      .then((status) => {
+        this.cacheConnectionStatus(status);
+        return status;
+      })
+      .finally(() => {
+        this.pendingConnectionCheck = null;
+      });
+
+    this.pendingConnectionCheck = probe;
+    return probe;
   }
 
   async discoverSubsystem(): Promise<string> {
@@ -209,6 +253,7 @@ export class UEClient {
     }
 
     if (res.response === null) {
+      this.invalidateConnectionStatus();
       throw new Error(this.formatCallFailure(method, objectPath, res));
     }
 

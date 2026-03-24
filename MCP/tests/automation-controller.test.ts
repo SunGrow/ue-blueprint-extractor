@@ -153,4 +153,51 @@ describe('AutomationController', () => {
     expect(capturedArgs).not.toContain('-NullRHI');
     expect(completed.nullRhi).toBe(false);
   });
+
+  it('evicts the oldest terminal runs when the configured history limit is exceeded', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-automation-history-'));
+    tempDirs.push(root);
+
+    const controller = new AutomationController({
+      maxRunHistory: 2,
+      terminalRunRetentionMs: 60_000,
+      platform: process.platform,
+      resolveEditorCommand: async () => process.execPath,
+      spawnProcess: (_executable, args, options) => spawn(process.execPath, ['-e', `
+        setTimeout(() => process.exit(0), 5);
+      `, ...args], options),
+    });
+
+    const first = await controller.runAutomationTests({
+      engineRoot: root,
+      projectPath: join(root, 'Fixture.uproject'),
+      automationFilter: 'BlueprintExtractor.History.First',
+      timeoutMs: 5_000,
+      nullRhi: true,
+    });
+    await waitForRun(controller, first.runId);
+
+    const second = await controller.runAutomationTests({
+      engineRoot: root,
+      projectPath: join(root, 'Fixture.uproject'),
+      automationFilter: 'BlueprintExtractor.History.Second',
+      timeoutMs: 5_000,
+      nullRhi: true,
+    });
+    await waitForRun(controller, second.runId);
+
+    const third = await controller.runAutomationTests({
+      engineRoot: root,
+      projectPath: join(root, 'Fixture.uproject'),
+      automationFilter: 'BlueprintExtractor.History.Third',
+      timeoutMs: 5_000,
+      nullRhi: true,
+    });
+    await waitForRun(controller, third.runId);
+
+    const allRuns = await controller.listAutomationTestRuns(true);
+    expect(allRuns.runCount).toBe(2);
+    expect(allRuns.runs.map((run) => run.runId)).toEqual(expect.not.arrayContaining([first.runId]));
+    expect(allRuns.runs.map((run) => run.runId)).toEqual(expect.arrayContaining([second.runId, third.runId]));
+  });
 });

@@ -50,6 +50,49 @@ describe('UEClient', () => {
     expect(server.requests[0]?.functionName).toBe('SearchAssets');
   });
 
+  it('reuses a fresh connection probe across consecutive subsystem calls until the TTL expires', async () => {
+    let nowMs = 0;
+    let remoteInfoCalls = 0;
+
+    const client = new UEClient({
+      host: '127.0.0.1',
+      port: 30010,
+      subsystemPath: '/Script/Test.OverrideSubsystem',
+      timeoutMs: 200,
+      connectionCacheTtlMs: 2_000,
+      now: () => nowMs,
+      fetchImpl: async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url.endsWith('/remote/info')) {
+          remoteInfoCalls += 1;
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (url.endsWith('/remote/object/call')) {
+          return new Response(JSON.stringify({
+            ReturnValue: JSON.stringify({ ok: true }),
+          }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+
+    await expect(client.callSubsystem('SearchAssets', { Query: 'Player' })).resolves.toBe(JSON.stringify({ ok: true }));
+    await expect(client.callSubsystem('SearchAssets', { Query: 'Enemy' })).resolves.toBe(JSON.stringify({ ok: true }));
+    expect(remoteInfoCalls).toBe(1);
+
+    nowMs = 2_500;
+    await expect(client.callSubsystem('SearchAssets', { Query: 'NPC' })).resolves.toBe(JSON.stringify({ ok: true }));
+    expect(remoteInfoCalls).toBe(2);
+  });
+
   it('falls back across subsystem probe paths until one responds', async () => {
     const server = await startMockRemoteControlServer({
       onCall: (request) => {

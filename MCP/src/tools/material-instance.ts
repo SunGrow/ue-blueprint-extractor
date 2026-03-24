@@ -1,0 +1,130 @@
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+
+type JsonSubsystemCaller = (
+  method: string,
+  params: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+
+type RegisterMaterialInstanceToolsOptions = {
+  server: Pick<McpServer, 'registerTool'>;
+  callSubsystemJson: JsonSubsystemCaller;
+  materialScalarParameterSchema: z.ZodTypeAny;
+  materialVectorParameterSchema: z.ZodTypeAny;
+  materialTextureParameterSchema: z.ZodTypeAny;
+  materialFontParameterSchema: z.ZodTypeAny;
+  materialStaticSwitchParameterSchema: z.ZodTypeAny;
+  materialLayerStackSchema: z.ZodTypeAny;
+};
+
+export function registerMaterialInstanceTools({
+  server,
+  callSubsystemJson,
+  materialScalarParameterSchema,
+  materialVectorParameterSchema,
+  materialTextureParameterSchema,
+  materialFontParameterSchema,
+  materialStaticSwitchParameterSchema,
+  materialLayerStackSchema,
+}: RegisterMaterialInstanceToolsOptions): void {
+  server.registerTool(
+    'create_material_instance',
+    {
+      title: 'Create MaterialInstance',
+      description: 'Create a UE5 MaterialInstanceConstant from a parent material or material instance.',
+      inputSchema: {
+        asset_path: z.string().describe(
+          'UE content path for the new material instance (e.g. /Game/Materials/MI_NewSurface).',
+        ),
+        parent_material_path: z.string().describe(
+          'UE content path to the parent material or material instance.',
+        ),
+        validate_only: z.boolean().default(false).describe(
+          'Validate without creating the asset.',
+        ),
+      },
+      annotations: {
+        title: 'Create MaterialInstance',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ asset_path, parent_material_path, validate_only }) => {
+      try {
+        const parsed = await callSubsystemJson('CreateMaterialInstance', {
+          AssetPath: asset_path,
+          ParentMaterialPath: parent_material_path,
+          bValidateOnly: validate_only,
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'modify_material_instance',
+    {
+      title: 'Modify MaterialInstance',
+      description: 'Modify a MaterialInstanceConstant by reparenting or applying parameter overrides.',
+      inputSchema: {
+        asset_path: z.string().describe(
+          'UE content path to the MaterialInstanceConstant to modify.',
+        ),
+        parentMaterial: z.string().optional().describe(
+          'Optional new parent material or material instance path.',
+        ),
+        scalarParameters: z.array(materialScalarParameterSchema).optional().describe(
+          'Optional scalar override list.',
+        ),
+        vectorParameters: z.array(materialVectorParameterSchema).optional().describe(
+          'Optional vector override list.',
+        ),
+        textureParameters: z.array(materialTextureParameterSchema).optional().describe(
+          'Optional texture override list. Set value to null to clear an override.',
+        ),
+        runtimeVirtualTextureParameters: z.array(materialTextureParameterSchema).optional().describe(
+          'Optional runtime virtual texture override list.',
+        ),
+        sparseVolumeTextureParameters: z.array(materialTextureParameterSchema).optional().describe(
+          'Optional sparse volume texture override list.',
+        ),
+        fontParameters: z.array(materialFontParameterSchema).optional().describe(
+          'Optional font override list. Set value to null to clear an override.',
+        ),
+        staticSwitchParameters: z.array(materialStaticSwitchParameterSchema).optional().describe(
+          'Optional static switch override list.',
+        ),
+        layerStack: materialLayerStackSchema.optional().describe(
+          'Optional full replacement payload for the classic material layer stack override.',
+        ),
+        validate_only: z.boolean().default(false).describe(
+          'Validate without mutating the asset.',
+        ),
+      },
+      annotations: {
+        title: 'Modify MaterialInstance',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ asset_path, validate_only, ...payload }) => {
+      try {
+        const parsed = await callSubsystemJson('ModifyMaterialInstance', {
+          AssetPath: asset_path,
+          PayloadJson: JSON.stringify(payload),
+          bValidateOnly: validate_only,
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+}

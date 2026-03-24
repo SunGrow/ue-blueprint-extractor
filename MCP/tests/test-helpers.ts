@@ -62,8 +62,18 @@ export async function connectInMemoryServer(server: McpServer) {
   };
 }
 
-export function getTextContent(result: { content?: Array<{ text?: string; type: string }> }): string {
-  return result.content?.find((entry) => entry.type === 'text')?.text ?? '';
+export function getTextContent(result: {
+  content?: Array<{ text?: string; type: string }>;
+  structuredContent?: unknown;
+}): string {
+  const text = result.content?.find((entry) => entry.type === 'text')?.text;
+  if (typeof text === 'string' && text.length > 0) {
+    return text;
+  }
+
+  return result.structuredContent !== undefined
+    ? JSON.stringify(result.structuredContent)
+    : '';
 }
 
 export async function startMockRemoteControlServer(

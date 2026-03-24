@@ -92,9 +92,13 @@ export interface AutomationControllerOptions {
   now?: () => Date;
   spawnProcess?: typeof spawn;
   resolveEditorCommand?: (engineRoot: string, platform: NodeJS.Platform) => Promise<string>;
+  maxRunHistory?: number;
+  terminalRunRetentionMs?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_MAX_RUN_HISTORY = 50;
+const DEFAULT_TERMINAL_RUN_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function defaultNow() {
   return new Date();
@@ -200,6 +204,8 @@ export class AutomationController implements AutomationControllerLike {
   private readonly now: () => Date;
   private readonly spawnProcess: typeof spawn;
   private readonly resolveEditorCommandFn: (engineRoot: string, platform: NodeJS.Platform) => Promise<string>;
+  private readonly maxRunHistory: number;
+  private readonly terminalRunRetentionMs: number;
   private readonly runs = new Map<string, MutableAutomationRun>();
 
   constructor(options: AutomationControllerOptions = {}) {
@@ -208,6 +214,8 @@ export class AutomationController implements AutomationControllerLike {
     this.now = options.now ?? defaultNow;
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.resolveEditorCommandFn = options.resolveEditorCommand ?? resolveEditorCommand;
+    this.maxRunHistory = Math.max(1, options.maxRunHistory ?? DEFAULT_MAX_RUN_HISTORY);
+    this.terminalRunRetentionMs = Math.max(0, options.terminalRunRetentionMs ?? DEFAULT_TERMINAL_RUN_RETENTION_MS);
   }
 
   async runAutomationTests(request: RunAutomationTestsRequest): Promise<AutomationRunResult> {
@@ -276,6 +284,7 @@ export class AutomationController implements AutomationControllerLike {
       artifactMap: new Map<string, AutomationArtifact>(),
     };
     this.runs.set(runId, run);
+    this.pruneRuns(started.getTime());
 
     const stdoutStream = createWriteStream(stdoutPath, { encoding: 'utf8' });
     const stderrStream = createWriteStream(stderrPath, { encoding: 'utf8' });
@@ -338,6 +347,7 @@ export class AutomationController implements AutomationControllerLike {
       }, null, 2), 'utf8');
       this.registerArtifact(run, 'summary', summaryPath, 'application/json');
       run.terminal = true;
+      this.pruneRuns(this.now().getTime());
     };
 
     const timeoutHandle = setTimeout(() => {
@@ -368,11 +378,13 @@ export class AutomationController implements AutomationControllerLike {
   }
 
   async getAutomationTestRun(runId: string): Promise<AutomationRunResult | null> {
+    this.pruneRuns(this.now().getTime());
     const run = this.runs.get(runId);
     return run ? this.cloneRun(run, 'get_automation_test_run') : null;
   }
 
   async listAutomationTestRuns(includeCompleted = true): Promise<AutomationRunListResult> {
+    this.pruneRuns(this.now().getTime());
     const runs = Array.from(this.runs.values())
       .filter((run) => includeCompleted || !run.terminal)
       .sort((left, right) => {
@@ -392,6 +404,7 @@ export class AutomationController implements AutomationControllerLike {
   }
 
   async readAutomationArtifact(runId: string, artifactName: string): Promise<AutomationArtifactReadResult | null> {
+    this.pruneRuns(this.now().getTime());
     const run = this.runs.get(runId);
     if (!run) {
       return null;
@@ -415,6 +428,55 @@ export class AutomationController implements AutomationControllerLike {
       operation,
       artifacts: [...run.artifacts],
     };
+  }
+
+  private getRunSortTime(run: MutableAutomationRun): number {
+    if (run.completedAt) {
+      const completedAt = Date.parse(run.completedAt);
+      if (Number.isFinite(completedAt)) {
+        return completedAt;
+      }
+    }
+
+    if (run.startedAt) {
+      const startedAt = Date.parse(run.startedAt);
+      if (Number.isFinite(startedAt)) {
+        return startedAt;
+      }
+    }
+
+    return 0;
+  }
+
+  private pruneRuns(referenceTime: number) {
+    const terminalRuns: Array<{ runId: string; run: MutableAutomationRun; sortTime: number }> = [];
+
+    for (const [runId, run] of this.runs.entries()) {
+      if (!run.terminal) {
+        continue;
+      }
+
+      const sortTime = this.getRunSortTime(run);
+      if (this.terminalRunRetentionMs >= 0 && sortTime > 0 && referenceTime - sortTime > this.terminalRunRetentionMs) {
+        this.runs.delete(runId);
+        continue;
+      }
+
+      terminalRuns.push({ runId, run, sortTime });
+    }
+
+    const activeRunCount = Array.from(this.runs.values()).filter((run) => !run.terminal).length;
+    const allowedTerminalRuns = Math.max(0, this.maxRunHistory - activeRunCount);
+    if (terminalRuns.length <= allowedTerminalRuns) {
+      return;
+    }
+
+    terminalRuns
+      .sort((left, right) => right.sortTime - left.sortTime)
+      .slice(allowedTerminalRuns)
+      .forEach(({ runId }) => {
+        this.runs.delete(runId);
+      });
   }
 
   private registerArtifact(

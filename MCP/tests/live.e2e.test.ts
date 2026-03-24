@@ -127,53 +127,53 @@ const fixtureSmokeCases: FixtureSmokeCase[] = [
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_STATE_TREE',
-    tool: 'extract_state_tree',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'statetree' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_BEHAVIOR_TREE',
-    tool: 'extract_behavior_tree',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'behavior_tree' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_BLACKBOARD',
-    tool: 'extract_blackboard',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'blackboard' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_DATA_ASSET',
-    tool: 'extract_dataasset',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'data_asset' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_DATA_TABLE',
-    tool: 'extract_datatable',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'data_table' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_STRUCT',
-    tool: 'extract_user_defined_struct',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'user_defined_struct' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_ENUM',
-    tool: 'extract_user_defined_enum',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'user_defined_enum' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_CURVE',
-    tool: 'extract_curve',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'curve' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_CURVE_TABLE',
-    tool: 'extract_curvetable',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'curve_table' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_MATERIAL_INSTANCE',
-    tool: 'extract_material_instance',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'material_instance' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_MATERIAL',
@@ -187,18 +187,18 @@ const fixtureSmokeCases: FixtureSmokeCase[] = [
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE',
-    tool: 'extract_anim_sequence',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'anim_sequence' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE',
-    tool: 'extract_anim_montage',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'anim_montage' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE',
-    tool: 'extract_blend_space',
-    args: {},
+    tool: 'extract_asset',
+    args: { asset_type: 'blend_space' },
   },
 ];
 
@@ -747,8 +747,8 @@ describeLive('live UE e2e', () => {
         },
       },
     });
-    expect(invalidAppend.isError).toBeFalsy();
-    const invalidAppendJson = JSON.parse(getTextContent(invalidAppend)) as Record<string, unknown>;
+    expect(invalidAppend.isError).toBe(true);
+    const invalidAppendJson = (invalidAppend.structuredContent ?? JSON.parse(getTextContent(invalidAppend))) as Record<string, unknown>;
     expect(invalidAppendJson).toMatchObject({
       success: false,
       operation: 'modify_blueprint_graphs',
@@ -897,16 +897,17 @@ describeLive('live UE e2e', () => {
 
     const setMaterialSettings = await callToolJson<Record<string, unknown>>(
       connection.client,
-      'set_material_settings',
+      'material_graph_operation',
       {
         asset_path: materialPath,
+        operation: 'set_material_settings',
         settings: {
           two_sided: true,
           blend_mode: 'BLEND_Opaque',
           material_domain: 'MD_Surface',
         },
       },
-      'set_material_settings live smoke',
+      'material_graph_operation set_material_settings live smoke',
     );
     expect(setMaterialSettings).toMatchObject({
       success: true,
@@ -915,9 +916,10 @@ describeLive('live UE e2e', () => {
 
     const addBaseColor = await callToolJson<Record<string, unknown>>(
       connection.client,
-      'add_material_expression',
+      'material_graph_operation',
       {
         asset_path: materialPath,
+        operation: 'add_expression',
         expression_class: '/Script/Engine.MaterialExpressionVectorParameter',
         expression_name: 'baseColor',
         expression_properties: {
@@ -927,16 +929,17 @@ describeLive('live UE e2e', () => {
         },
         node_position: { x: -360, y: -120 },
       },
-      'add_material_expression baseColor',
+      'material_graph_operation add_expression baseColor',
     );
     const baseColorGuid = (addBaseColor.tempIdMap as Record<string, string> | undefined)?.baseColor;
     expect(baseColorGuid).toBeTruthy();
 
     const addRoughness = await callToolJson<Record<string, unknown>>(
       connection.client,
-      'add_material_expression',
+      'material_graph_operation',
       {
         asset_path: materialPath,
+        operation: 'add_expression',
         expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
         expression_name: 'roughness',
         expression_properties: {
@@ -946,58 +949,62 @@ describeLive('live UE e2e', () => {
         },
         node_position: { x: -360, y: 120 },
       },
-      'add_material_expression roughness',
+      'material_graph_operation add_expression roughness',
     );
     const roughnessGuid = (addRoughness.tempIdMap as Record<string, string> | undefined)?.roughness;
     expect(roughnessGuid).toBeTruthy();
 
     const addMixNode = await callToolJson<Record<string, unknown>>(
       connection.client,
-      'add_material_expression',
+      'material_graph_operation',
       {
         asset_path: materialPath,
+        operation: 'add_expression',
         expression_class: '/Script/Engine.MaterialExpressionLinearInterpolate',
         expression_name: 'mixNode',
         node_position: { x: -60, y: 220 },
       },
-      'add_material_expression mixNode',
+      'material_graph_operation add_expression mixNode',
     );
     const mixNodeGuid = (addMixNode.tempIdMap as Record<string, string> | undefined)?.mixNode;
     expect(mixNodeGuid).toBeTruthy();
 
     await callToolJson<Record<string, unknown>>(
       connection.client,
-      'connect_material_expressions',
+      'material_graph_operation',
       {
         asset_path: materialPath,
+        operation: 'connect_expressions',
         from_expression_guid: roughnessGuid,
         to_expression_guid: mixNodeGuid,
         to_input_index: 2,
       },
-      'connect_material_expressions roughness->mixNode',
+      'material_graph_operation connect_expressions roughness->mixNode',
     );
 
     await callToolJson<Record<string, unknown>>(
       connection.client,
-      'bind_material_property',
+      'material_graph_operation',
       {
         asset_path: materialPath,
+        operation: 'connect_material_property',
         from_expression_guid: baseColorGuid,
         material_property: 'MP_BaseColor',
       },
-      'bind_material_property base color',
+      'material_graph_operation connect_material_property base color',
     );
 
     await callToolJson<Record<string, unknown>>(
       connection.client,
-      'bind_material_property',
+      'material_graph_operation',
       {
         asset_path: materialPath,
+        operation: 'connect_material_property',
         from_expression_guid: baseColorGuid,
         from_output_index: 1,
         material_property: 'MP_Roughness',
       },
-      'bind_material_property roughness',
+      'material_graph_operation connect_material_property roughness',
     );
 
     const extractMaterial = await callToolJson<Record<string, unknown>>(
@@ -1264,21 +1271,23 @@ describeLive('live UE e2e', () => {
     });
 
     const extractedInputAction = await connection.client.callTool({
-      name: 'extract_dataasset',
+      name: 'extract_asset',
       arguments: {
+        asset_type: 'data_asset',
         asset_path: inputActionObjectPath,
       },
     });
-    expect(extractedInputAction.isError, 'extract_dataasset input action').toBeFalsy();
+    expect(extractedInputAction.isError, 'extract_asset input action').toBeFalsy();
     expect(getTextContent(extractedInputAction)).toContain('Live smoke jump action');
 
     const extractedInputMappingContext = await connection.client.callTool({
-      name: 'extract_dataasset',
+      name: 'extract_asset',
       arguments: {
+        asset_type: 'data_asset',
         asset_path: inputMappingContextObjectPath,
       },
     });
-    expect(extractedInputMappingContext.isError, 'extract_dataasset input mapping context').toBeFalsy();
+    expect(extractedInputMappingContext.isError, 'extract_asset input mapping context').toBeFalsy();
     expect(getTextContent(extractedInputMappingContext)).toContain('Updated live gameplay context');
     expect(getTextContent(extractedInputMappingContext)).toContain('Gamepad_FaceButton_Bottom');
 

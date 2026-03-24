@@ -4,19 +4,26 @@ MCP server for the Unreal Engine `BlueprintExtractor` plugin.
 
 This package exposes the `blueprint-extractor` server over stdio and talks to a running Unreal Editor through the Remote Control HTTP API.
 
-The current v2 MCP contract exposes 97 tools, 16 resources, 4 resource templates, and 8 prompts.
-Public tools use canonical `snake_case` inputs and return structured JSON success or error envelopes.
+The current v3 contract exposes consolidated extraction, authoring, automation, import, verification, resource, and prompt surfaces for Blueprint Extractor workflows.
+Public tools use canonical `snake_case` inputs. Structured success payloads are returned through `structuredContent`, and non-text artifacts such as capture links or inline images may be attached in `content`.
 
 Current surface area includes:
 
-- read-only extraction tools for Blueprints, AI assets, data assets, curves, materials, and animation metadata
-- explicit-save authoring tools for the supported editor-side asset families, including compact widget extraction, dedicated widget animation authoring (`extract_widget_animation`, `create_widget_animation`, `modify_widget_animation`), incremental widget-structure ops, widget class-default routing, composable material authoring (`set_material_settings`, `add_material_expression`, `connect_material_expressions`, `bind_material_property`), and the advanced `modify_material` escape hatch
+- read-only extraction tools for Blueprints, widgets, materials, and consolidated asset-family extraction through `extract_asset`
+- explicit-save authoring tools for the supported editor-side asset families, including dedicated widget animation authoring (`extract_widget_animation`, `create_widget_animation`, `modify_widget_animation`), incremental widget-structure ops, widget class-default routing, `material_graph_operation` for single-step classic material graph edits, and the advanced `modify_material` escape hatch
 - dedicated Enhanced Input authoring tools for `InputAction` and `InputMappingContext` assets (`create_input_action`, `modify_input_action`, `create_input_mapping_context`, `modify_input_mapping_context`)
 - dedicated CommonUI button-style tools (`create_commonui_button_style`, `extract_commonui_button_style`, `modify_commonui_button_style`, `apply_commonui_button_style`) for `CommonButtonBase` wrapper surfaces instead of raw `UButton` field mutation
+- utility and discovery helpers such as `search_assets`, `save_assets`, and `get_tool_help` for schema summaries, related resources, and example families
 - async import and reimport tools with polling for generic assets plus typed texture and mesh helpers
 - host-side project automation tools for external builds, Live Coding requests, restart/reconnect orchestration, `wait_for_editor` recovery polling, a thin window-polish helper, and runtime automation artifacts that surface verification screenshots back to the caller
 - a shared visual-verification artifact contract across widget captures, motion checkpoint bundles, capture diffs, and automation-run screenshots so the caller can inspect rendered results instead of relying on semantic success alone
 - static guidance resources, resource templates, and prompts for authoring conventions, selector rules, font roles, project automation, example payloads, widget patterns, multimodal design specs, widget motion authoring, motion verification, unsupported surfaces, safe UI redesign, and classic material graph guidance
+
+## Migration From Legacy Entrypoints
+
+- Use `extract_asset` with `asset_type` for the removed asset-family extract tools, including StateTree, DataAsset, DataTable, BehaviorTree, Blackboard, user-defined struct/enum, curve, curve table, material instance, anim sequence, anim montage, and blend space extraction.
+- Use `material_graph_operation` with `operation` for the removed single-step material graph tools: `set_material_settings`, `add_material_expression`, `connect_material_expressions`, and `bind_material_property`.
+- Call `get_tool_help` when you need the current parameter shape, output summary, related resources, or example families for any registered tool.
 
 ## Requirements
 
@@ -67,6 +74,8 @@ npm test
 npm run test:pack-smoke
 npm run test:publish-gate
 ```
+
+`npm run test:pack-smoke` validates the packaged tarball contract and the packaged README. `npm run test:publish-gate` checks publish readiness for the current version.
 
 For the gated live smoke test:
 

@@ -17,7 +17,9 @@ async function main() {
 
   try {
     await installTarball(installRoot, tarballPath);
-    const entryPoint = await resolvePackagedEntryPoint(installRoot);
+    const packageRoot = resolveInstalledPackageRoot(installRoot);
+    const entryPoint = await resolvePackagedEntryPoint(packageRoot);
+    await verifyPackagedReadme(packageRoot);
     await smokeContractFromTarball(entryPoint, installRoot);
   } finally {
     await rm(installRoot, { recursive: true, force: true });
@@ -47,8 +49,11 @@ async function installTarball(installRoot, tarballPath) {
   );
 }
 
-async function resolvePackagedEntryPoint(installRoot) {
-  const packageRoot = join(installRoot, 'node_modules', 'blueprint-extractor-mcp');
+function resolveInstalledPackageRoot(installRoot) {
+  return join(installRoot, 'node_modules', 'blueprint-extractor-mcp');
+}
+
+async function resolvePackagedEntryPoint(packageRoot) {
   const packageJsonPath = join(packageRoot, 'package.json');
   const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
   const binField = packageJson?.bin;
@@ -63,6 +68,35 @@ async function resolvePackagedEntryPoint(installRoot) {
   const entryPoint = resolve(packageRoot, binRelativePath);
   await access(entryPoint);
   return entryPoint;
+}
+
+async function verifyPackagedReadme(packageRoot) {
+  const readmePath = join(packageRoot, 'README.md');
+  const readme = await readFile(readmePath, 'utf8');
+
+  const requiredSnippets = [
+    '`extract_asset`',
+    '`material_graph_operation`',
+    '`get_tool_help`',
+    '`structuredContent`',
+    '## Migration From Legacy Entrypoints',
+  ];
+  for (const snippet of requiredSnippets) {
+    if (!readme.includes(snippet)) {
+      throw new Error(`Packaged README is missing expected content: ${snippet}`);
+    }
+  }
+
+  const staleSnippets = [
+    'The current v2 MCP contract exposes 97 tools',
+    'current v2 MCP contract',
+    'composable material authoring (`set_material_settings`, `add_material_expression`, `connect_material_expressions`, `bind_material_property`)',
+  ];
+  for (const snippet of staleSnippets) {
+    if (readme.includes(snippet)) {
+      throw new Error(`Packaged README still contains stale content: ${snippet}`);
+    }
+  }
 }
 
 async function smokeContractFromTarball(entryPoint, installRoot) {
