@@ -196,4 +196,171 @@ describe('registerWidgetStructureTools', () => {
       operation: 'CompileWidgetBlueprint',
     });
   });
+
+  it('serializes create_widget_blueprint payloads for the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/UI/WBP_NewWidget',
+    }));
+
+    registerWidgetStructureTools({
+      server: registry.server,
+      callSubsystemJson,
+      widgetNodeSchema,
+      widgetBlueprintMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('create_widget_blueprint').handler({
+      asset_path: '/Game/UI/WBP_NewWidget',
+      parent_class_path: 'UserWidget',
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CreateWidgetBlueprint', {
+      AssetPath: '/Game/UI/WBP_NewWidget',
+      ParentClass: 'UserWidget',
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      assetPath: '/Game/UI/WBP_NewWidget',
+    });
+  });
+
+  it('returns an error when create_widget_blueprint fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('widget blueprint creation failed');
+    });
+
+    registerWidgetStructureTools({
+      server: registry.server,
+      callSubsystemJson,
+      widgetNodeSchema,
+      widgetBlueprintMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('create_widget_blueprint').handler({
+      asset_path: '/Game/UI/WBP_Bad',
+      parent_class_path: 'UserWidget',
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'widget blueprint creation failed',
+    );
+  });
+
+  it('serializes build_widget_tree payloads for the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'BuildWidgetTree',
+      widgetCount: 3,
+    }));
+
+    registerWidgetStructureTools({
+      server: registry.server,
+      callSubsystemJson,
+      widgetNodeSchema,
+      widgetBlueprintMutationOperationSchema,
+    });
+
+    const rootWidget = {
+      class: 'CanvasPanel',
+      name: 'RootPanel',
+      children: [
+        { class: 'TextBlock', name: 'Title' },
+      ],
+    };
+
+    const result = await registry.getTool('build_widget_tree').handler({
+      asset_path: '/Game/UI/WBP_Window',
+      root_widget: rootWidget,
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('BuildWidgetTree', {
+      AssetPath: '/Game/UI/WBP_Window',
+      WidgetTreeJson: JSON.stringify(rootWidget),
+      bValidateOnly: true,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'BuildWidgetTree',
+    });
+  });
+
+  it('returns an error when build_widget_tree fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('widget tree build failed');
+    });
+
+    registerWidgetStructureTools({
+      server: registry.server,
+      callSubsystemJson,
+      widgetNodeSchema,
+      widgetBlueprintMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('build_widget_tree').handler({
+      asset_path: '/Game/UI/WBP_Bad',
+      root_widget: { class: 'CanvasPanel', name: 'Root' },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'widget tree build failed',
+    );
+  });
+
+  it('serializes compile_widget_blueprint payloads for the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'CompileWidgetBlueprint',
+      compile: { success: true, messages: [] },
+    }));
+
+    registerWidgetStructureTools({
+      server: registry.server,
+      callSubsystemJson,
+      widgetNodeSchema,
+      widgetBlueprintMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('compile_widget_blueprint').handler({
+      asset_path: '/Game/UI/WBP_Window',
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CompileWidgetBlueprint', {
+      AssetPath: '/Game/UI/WBP_Window',
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'CompileWidgetBlueprint',
+    });
+  });
+
+  it('returns an error when compile_widget_blueprint fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('compile failed');
+    });
+
+    registerWidgetStructureTools({
+      server: registry.server,
+      callSubsystemJson,
+      widgetNodeSchema,
+      widgetBlueprintMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('compile_widget_blueprint').handler({
+      asset_path: '/Game/UI/WBP_Bad',
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('compile failed');
+  });
 });

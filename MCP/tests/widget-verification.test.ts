@@ -234,4 +234,196 @@ describe('registerWidgetVerificationTools', () => {
       },
     });
   });
+
+  it('lists captures with optional asset path filter', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      captures: [
+        {
+          captureId: 'cap-1',
+          captureType: 'widget_preview',
+          assetPath: '/Game/UI/WBP_Window',
+          artifactPath: 'Z:/nonexistent/cap-1.png',
+        },
+        {
+          captureId: 'cap-2',
+          captureType: 'widget_preview',
+          assetPath: '/Game/UI/WBP_Window',
+          artifactPath: 'Z:/nonexistent/cap-2.png',
+        },
+      ],
+    }));
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson,
+      automationController: { runAutomationTests: vi.fn() } as never,
+      resolveProjectInputs: vi.fn(),
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('list_captures').handler({
+      asset_path_filter: '/Game/UI/WBP_Window',
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ListCaptures', {
+      AssetPathFilter: '/Game/UI/WBP_Window',
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      captureCount: 2,
+    });
+  });
+
+  it('returns an error when list_captures fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('listing captures failed');
+    });
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson,
+      automationController: { runAutomationTests: vi.fn() } as never,
+      resolveProjectInputs: vi.fn(),
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('list_captures').handler({
+      asset_path_filter: '',
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'listing captures failed',
+    );
+  });
+
+  it('cleans up old captures with max_age_days parameter', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      removedCount: 3,
+    }));
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson,
+      automationController: { runAutomationTests: vi.fn() } as never,
+      resolveProjectInputs: vi.fn(),
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('cleanup_captures').handler({
+      max_age_days: 14,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CleanupCaptures', {
+      MaxAgeDays: 14,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      removedCount: 3,
+    });
+  });
+
+  it('returns an error when cleanup_captures fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('cleanup failed');
+    });
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson,
+      automationController: { runAutomationTests: vi.fn() } as never,
+      resolveProjectInputs: vi.fn(),
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('cleanup_captures').handler({
+      max_age_days: 0,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('cleanup failed');
+  });
+
+  it('compares motion capture bundles against reference frames', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      pass: true,
+      rmse: 0.001,
+      mismatchPixelCount: 0,
+      capturePath: '/tmp/start.png',
+      referencePath: '/ref/start.png',
+    }));
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson,
+      automationController: { runAutomationTests: vi.fn() } as never,
+      resolveProjectInputs: vi.fn(),
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('compare_motion_capture_bundle').handler({
+      capture_artifacts: [
+        { checkpointName: 'start', captureId: 'cap-start', artifactPath: '/tmp/start.png' },
+        { checkpointName: 'end', captureId: 'cap-end', artifactPath: '/tmp/end.png' },
+      ],
+      reference_frames: [
+        { checkpoint_name: 'start', reference: '/ref/start.png' },
+      ],
+      tolerance: 0.02,
+    });
+
+    // The 'start' checkpoint should match; 'end' has no reference and is skipped
+    expect(callSubsystemJson).toHaveBeenCalledWith('CompareCaptureToReference', {
+      CaptureIdOrPath: 'cap-start',
+      ReferenceIdOrPath: '/ref/start.png',
+      Tolerance: 0.02,
+    });
+    expect((result as { isError?: boolean }).isError).not.toBe(true);
+    expect(parseDirectToolResult(result)).toMatchObject({
+      operation: 'compare_motion_capture_bundle',
+      mode: 'reference_frames',
+      captureCount: 2,
+      matchedCount: 1,
+    });
+  });
 });

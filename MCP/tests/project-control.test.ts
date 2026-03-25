@@ -1260,4 +1260,66 @@ describe('registerProjectControlTools', () => {
     // failedStep should identify the build step specifically
     expect(parsed.failedStep).toBe('build');
   });
+
+  it('returns project automation context from the subsystem', async () => {
+    const registry = createToolRegistry();
+    const getProjectAutomationContext = vi.fn(async () => ({
+      engineRoot: 'C:/UE',
+      projectFilePath: 'C:/Proj/Proj.uproject',
+      editorTarget: 'ProjEditor',
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext,
+      resolveProjectInputs: vi.fn(async () => createResolvedProjectInputs()),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('get_project_automation_context').handler({});
+
+    expect(getProjectAutomationContext).toHaveBeenCalledWith(true);
+    expect(parseDirectToolResult(result)).toMatchObject({
+      engineRoot: 'C:/UE',
+      projectFilePath: 'C:/Proj/Proj.uproject',
+      editorTarget: 'ProjEditor',
+    });
+  });
+
+  it('returns an error when get_project_automation_context fails', async () => {
+    const registry = createToolRegistry();
+    const getProjectAutomationContext = vi.fn(async () => {
+      throw new Error('editor not connected');
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext,
+      resolveProjectInputs: vi.fn(async () => createResolvedProjectInputs()),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('get_project_automation_context').handler({});
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'editor not connected',
+    );
+  });
 });

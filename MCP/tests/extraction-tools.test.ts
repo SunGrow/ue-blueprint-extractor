@@ -161,4 +161,235 @@ describe('registerExtractionTools', () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('search failed');
   });
+
+  it('forwards extract_material arguments with verbose and compact flags', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      materialName: 'M_Base',
+      expressions: [{ guid: 'expr-guid', posX: 10, posY: 20 }],
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('extract_material').handler({
+      asset_path: '/Game/Materials/M_Base',
+      verbose: true,
+      compact: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ExtractMaterial', {
+      AssetPath: '/Game/Materials/M_Base',
+      bVerbose: true,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      materialName: 'M_Base',
+    });
+  });
+
+  it('returns an error when extract_material fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('material not found');
+    });
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('extract_material').handler({
+      asset_path: '/Game/Materials/M_Missing',
+      verbose: false,
+      compact: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('material not found');
+  });
+
+  it('forwards extract_material_function arguments to the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      functionName: 'MF_Blend',
+      expressions: [],
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('extract_material_function').handler({
+      asset_path: '/Game/Materials/MF_Blend',
+      verbose: false,
+      compact: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ExtractMaterialFunction', {
+      AssetPath: '/Game/Materials/MF_Blend',
+      bVerbose: false,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      functionName: 'MF_Blend',
+    });
+  });
+
+  it('returns an error when extract_material_function fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('function not found');
+    });
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('extract_material_function').handler({
+      asset_path: '/Game/Materials/MF_Missing',
+      verbose: false,
+      compact: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('function not found');
+  });
+
+  it('forwards extract_cascade with asset_paths and returns a structured manifest', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      manifest: [
+        { assetPath: '/Game/BP_A', status: 'extracted' },
+        { assetPath: '/Game/BP_B', status: 'skipped' },
+      ],
+      total_count: 2,
+      extracted_count: 1,
+      skipped_count: 1,
+      output_directory: '/tmp/cascade',
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('extract_cascade').handler({
+      asset_paths: ['/Game/BP_A', '/Game/BP_B'],
+      scope: 'Full',
+      max_depth: 2,
+      compact: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ExtractCascade', {
+      AssetPathsJson: JSON.stringify(['/Game/BP_A', '/Game/BP_B']),
+      Scope: 'Full',
+      MaxDepth: 2,
+      GraphFilter: '',
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      extracted_count: 1,
+      skipped_count: 1,
+      total_count: 2,
+      output_directory: '/tmp/cascade',
+    });
+  });
+
+  it('returns an error when extract_cascade fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('cascade extraction failed');
+    });
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('extract_cascade').handler({
+      asset_paths: ['/Game/BP_Missing'],
+      scope: 'Full',
+      max_depth: 1,
+      compact: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('cascade extraction failed');
+  });
+
+  it('forwards list_assets arguments to the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      assets: [
+        { assetPath: '/Game/Blueprints/BP_Player', className: 'Blueprint' },
+      ],
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('list_assets').handler({
+      package_path: '/Game/Blueprints',
+      recursive: true,
+      class_filter: 'Blueprint',
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ListAssets', {
+      PackagePath: '/Game/Blueprints',
+      bRecursive: true,
+      ClassFilter: 'Blueprint',
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      assets: [{ assetPath: '/Game/Blueprints/BP_Player' }],
+    });
+  });
+
+  it('returns an error when list_assets fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('listing failed');
+    });
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+    });
+
+    const result = await registry.getTool('list_assets').handler({
+      package_path: '/Game/Missing',
+      recursive: false,
+      class_filter: '',
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('listing failed');
+  });
 });

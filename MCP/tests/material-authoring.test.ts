@@ -198,4 +198,146 @@ describe('registerMaterialAuthoringTools', () => {
       operation: 'CompileMaterialAsset',
     });
   });
+
+  it('serializes modify_material payloads with settings and operations', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'ModifyMaterial',
+    }));
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+    });
+
+    const result = await registry.getTool('modify_material').handler({
+      asset_path: '/Game/Materials/M_Base',
+      settings: { two_sided: true },
+      compile_after: true,
+      layout_after: false,
+      operations: [{ operation: 'add_expression', expression_class: 'Scalar' }],
+      validate_only: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyMaterial', {
+      AssetPath: '/Game/Materials/M_Base',
+      PayloadJson: JSON.stringify({
+        settings: { two_sided: true },
+        compile_after: true,
+        layout_after: false,
+        operations: [{ operation: 'add_expression', expression_class: 'Scalar' }],
+      }),
+      bValidateOnly: false,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'ModifyMaterial',
+    });
+  });
+
+  it('returns an error when modify_material fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('material modification failed');
+    });
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+    });
+
+    const result = await registry.getTool('modify_material').handler({
+      asset_path: '/Game/Materials/M_Bad',
+      operations: [],
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'material modification failed',
+    );
+  });
+
+  it('serializes create_material_function payloads with asset_kind', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/Materials/MF_Blend',
+    }));
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+    });
+
+    const result = await registry.getTool('create_material_function').handler({
+      asset_path: '/Game/Materials/MF_Blend',
+      asset_kind: 'layer_blend',
+      settings: { description: 'Blend heights' },
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CreateMaterialFunction', {
+      AssetPath: '/Game/Materials/MF_Blend',
+      AssetKind: 'layer_blend',
+      SettingsJson: JSON.stringify({ description: 'Blend heights' }),
+      bValidateOnly: true,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      assetPath: '/Game/Materials/MF_Blend',
+    });
+  });
+
+  it('returns an error when create_material_function fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('function creation failed');
+    });
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+    });
+
+    const result = await registry.getTool('create_material_function').handler({
+      asset_path: '/Game/Materials/MF_Bad',
+      asset_kind: 'function',
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'function creation failed',
+    );
+  });
 });

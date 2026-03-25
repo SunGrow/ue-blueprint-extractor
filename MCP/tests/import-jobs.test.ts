@@ -125,4 +125,136 @@ describe('registerImportJobTools', () => {
       jobs: [{ jobId: 'job-2', status: 'running' }],
     });
   });
+
+  it('serializes reimport_assets payloads through the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      jobId: 'reimport-1',
+    }));
+
+    registerImportJobTools({
+      server: registry.server,
+      callSubsystemJson,
+      importPayloadSchema,
+      importJobSchema,
+      importJobListSchema,
+      textureImportPayloadSchema,
+      meshImportPayloadSchema,
+    });
+
+    const result = await registry.getTool('reimport_assets').handler({
+      payload: {
+        items: [{
+          asset_path: '/Game/Textures/T_Icon',
+        }],
+      },
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ReimportAssets', {
+      PayloadJson: JSON.stringify({
+        items: [{
+          asset_path: '/Game/Textures/T_Icon',
+        }],
+      }),
+      bValidateOnly: true,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      jobId: 'reimport-1',
+    });
+  });
+
+  it('returns an error when reimport_assets fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('reimport failed');
+    });
+
+    registerImportJobTools({
+      server: registry.server,
+      callSubsystemJson,
+      importPayloadSchema,
+      importJobSchema,
+      importJobListSchema,
+      textureImportPayloadSchema,
+      meshImportPayloadSchema,
+    });
+
+    const result = await registry.getTool('reimport_assets').handler({
+      payload: { items: [] },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('reimport failed');
+  });
+
+  it('serializes import_meshes payloads through the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      jobId: 'mesh-1',
+    }));
+
+    registerImportJobTools({
+      server: registry.server,
+      callSubsystemJson,
+      importPayloadSchema,
+      importJobSchema,
+      importJobListSchema,
+      textureImportPayloadSchema,
+      meshImportPayloadSchema,
+    });
+
+    const result = await registry.getTool('import_meshes').handler({
+      payload: {
+        items: [{
+          file_path: 'C:/Models/Character.fbx',
+          destination_path: '/Game/Meshes',
+        }],
+      },
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ImportMeshes', {
+      PayloadJson: JSON.stringify({
+        items: [{
+          file_path: 'C:/Models/Character.fbx',
+          destination_path: '/Game/Meshes',
+        }],
+      }),
+      bValidateOnly: true,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      jobId: 'mesh-1',
+    });
+  });
+
+  it('returns an error when import_meshes fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('mesh import failed');
+    });
+
+    registerImportJobTools({
+      server: registry.server,
+      callSubsystemJson,
+      importPayloadSchema,
+      importJobSchema,
+      importJobListSchema,
+      textureImportPayloadSchema,
+      meshImportPayloadSchema,
+    });
+
+    const result = await registry.getTool('import_meshes').handler({
+      payload: { items: [] },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('mesh import failed');
+  });
 });

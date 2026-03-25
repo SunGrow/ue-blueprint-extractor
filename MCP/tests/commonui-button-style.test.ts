@@ -129,4 +129,69 @@ describe('registerCommonUIButtonStyleTools', () => {
       styleClassPath: '/Game/UI/Styles/BP_ButtonStyle.BP_ButtonStyle_C',
     });
   });
+
+  it('modifies CommonUI button styles by normalizing style input into class defaults patch', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'ModifyBlueprintMembers',
+    }));
+
+    registerCommonUIButtonStyleTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+    });
+
+    const result = await registry.getTool('modify_commonui_button_style').handler({
+      asset_path: '/Game/UI/Styles/BP_ButtonStyle',
+      style: {
+        normal: { TintColor: 'Red' },
+        padding: {
+          button: { Left: 8, Right: 8 },
+        },
+      },
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyBlueprintMembers', {
+      AssetPath: '/Game/UI/Styles/BP_ButtonStyle',
+      Operation: 'patch_class_defaults',
+      PayloadJson: JSON.stringify({
+        classDefaults: {
+          NormalBase: { TintColor: 'Red' },
+          ButtonPadding: { Left: 8, Right: 8 },
+        },
+      }),
+      bValidateOnly: true,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'modify_commonui_button_style',
+    });
+  });
+
+  it('returns an error when modify_commonui_button_style fails', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('style modification failed');
+    });
+
+    registerCommonUIButtonStyleTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+    });
+
+    const result = await registry.getTool('modify_commonui_button_style').handler({
+      asset_path: '/Game/UI/Styles/BP_Bad',
+      style: { normal: {} },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'style modification failed',
+    );
+  });
 });
