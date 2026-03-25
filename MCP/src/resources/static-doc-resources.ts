@@ -94,7 +94,7 @@ export function registerStaticDocResources(server: Pick<McpServer, 'resource'>):
       '- AnimSequence: notify selector by notifyId/notifyGuid with notifyIndex or track metadata as fallback; operations replace_notifies, patch_notify, replace_sync_markers, replace_curve_metadata.',
       '- AnimMontage: notify selector by notifyId/notifyGuid with notifyIndex or track metadata as fallback; operations replace_notifies, patch_notify, replace_sections, replace_slots.',
       '- BlendSpace: sample selector by sampleIndex; operations replace_samples, patch_sample, set_axes.',
-      '- Blueprint members: selectors by variableName, componentName, and functionName; operations replace_variables, patch_variable, replace_components, patch_component, replace_function_stubs, patch_class_defaults, compile.',
+      '- Blueprint members: selectors by variableName, componentName, and functionName; operations replace_variables, patch_variable, replace_components, patch_component, add_component, replace_function_stubs, patch_class_defaults, compile.',
       '- Blueprint graphs: operation upsert_function_graphs preserves unrelated graphs; append_function_call_to_sequence patches an existing sequence-style initializer without replacing the whole graph.',
       '',
       'WidgetBlueprint guidance:',

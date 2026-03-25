@@ -8,6 +8,7 @@ const jsonObjectSchema = z.record(z.string(), z.unknown());
 const blueprintMemberMutationOperationSchema = z.enum([
   'replace_variables',
   'patch_variable',
+  'add_component',
   'patch_class_defaults',
 ]);
 const blueprintGraphMutationOperationSchema = z.enum([
@@ -88,6 +89,56 @@ describe('registerBlueprintAuthoringTools', () => {
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
       'member patch failed',
     );
+  });
+
+  it('accepts add_component operation and passes payload to subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'add_component',
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Blueprints/BP_Test',
+      operation: 'add_component',
+      payload: {
+        componentName: 'NewStaticMesh',
+        component: {
+          componentClass: '/Script/Engine.StaticMeshComponent',
+          properties: {
+            StaticMesh: '/Game/Meshes/SM_Cube',
+          },
+        },
+      },
+      validate_only: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyBlueprintMembers', {
+      AssetPath: '/Game/Blueprints/BP_Test',
+      Operation: 'add_component',
+      PayloadJson: JSON.stringify({
+        componentName: 'NewStaticMesh',
+        component: {
+          componentClass: '/Script/Engine.StaticMeshComponent',
+          properties: {
+            StaticMesh: '/Game/Meshes/SM_Cube',
+          },
+        },
+      }),
+      bValidateOnly: false,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'add_component',
+    });
   });
 
   it('routes member and graph mutations through distinct subsystem methods with their original payload shapes', async () => {
