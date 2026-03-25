@@ -131,28 +131,33 @@ All agent-developers MUST:
 
 ### Root Cause
 
-Multi-layer information loss in error pipeline:
-1. C++ Subsystem returns generic "Failed to create StateTree" instead of propagating ValidationErrors
-2. `callSubsystemJson()` throws bare `Error(parsed.error)` — loses full response context
-3. `normalizeToolError()` can only extract `.message` from Error objects — no diagnostics, no step info
-4. `ue-client.ts` `formatCallFailure()` doesn't include response body
+The C++ layer already returns structured errors via `FAssetMutationContext.BuildResult(false)` with diagnostics arrays. The `MakeErrorJson("Failed to create StateTree")` at `BlueprintExtractorSubsystem.cpp:2452` is dead code — `BuildResult()` always returns a valid shared pointer.
+
+The actual bug is in the TS layer:
+1. `callSubsystemJson()` (lines 26-49) does NOT throw for `{ success: false }` responses that lack explicit `message`/`errorMessage` fields — it treats them as success and returns the parsed JSON.
+2. Tool handlers in `schema-and-ai-authoring.ts` call `jsonToolSuccess(result)` on `{ success: false }` responses, passing error payloads as "successes" to the MCP layer.
+3. `normalizeToolError()` only receives errors that actually throw — structured `{ success: false, diagnostics: [...] }` responses bypass it entirely.
+4. `ue-client.ts` `formatCallFailure()` doesn't include response body.
+5. For tools where `callSubsystemJson` DOES throw (e.g., `sync_project_code`), only `error.message` is preserved — full UE response context is lost.
 
 ### C++ Squad Tasks
 
 | ID | File | Lines | Change |
 |----|------|-------|--------|
-| 0.1 | `BlueprintExtractorSubsystem.cpp` | 2450-2453 | Replace generic `MakeErrorJson("Failed to create StateTree")` with propagation of `ValidationErrors` from `FAssetMutationContext`. Return structured error with all collected errors. |
-| 0.2 | `StateTreeAuthoring.cpp` | 1859-1964 | Enrich Create() errors: include which step failed (schema resolution, preview validation, compile), what exactly failed validation. Propagate `ValidationErrors` array through each step. |
-| 0.3 | `BlueprintAuthoring.cpp` | mutation functions | Propagate `OutErrors` through mutation context instead of swallowing. Ensure all authoring files return structured errors with step context. |
+| 0.1 | `BlueprintExtractorSubsystem.cpp` | 2450-2453 | Verify that `FAssetMutationContext.BuildResult(false)` correctly populates error fields (`success: false`, `diagnostics` array with validation messages). Confirm this is dead code and remove the unreachable `MakeErrorJson` branch, or add a safety fallback that serializes any unstructured failure. |
+| 0.2 | `StateTreeAuthoring.cpp` | 1859-1964 | Verify `Create()` correctly populates `FAssetMutationContext` at each step (schema resolution, preview validation, compile). Ensure the `BuildResult(false)` response includes step-specific diagnostics (which step failed, what nodeStructType was unresolvable, etc.). |
+| 0.3 | `BlueprintAuthoring.cpp` | mutation dispatch (lines 1429-1496) | Audit all mutation operations: verify each returns structured errors via `FAssetMutationContext` (not swallowing `OutErrors`). Specific functions: `ReplaceComponents` (line 878), `PatchComponent` (line 964), `ReplaceVariables`, `PatchVariable`, `ReplaceFunctionStubs`. |
 
 ### TS Squad Tasks
 
 | ID | File | Lines | Change |
 |----|------|-------|--------|
-| 0.4 | `helpers/subsystem.ts` | 26-42 | Preserve full UE response in error object: `const err = new Error(parsed.error); (err as any).ueResponse = parsed; throw err;` |
-| 0.5 | `helpers/tool-results.ts` | 98-186 | Improve `normalizeToolError()`: extract diagnostics from `ueResponse` property on Error objects, inspect object keys when no message found, populate diagnostics array with available context. |
-| 0.6 | `helpers/error-diagnostics.ts` | new file | Create `ToolErrorContext` interface with fields: `toolName`, `step?`, `stepErrors?`, `ueResponse?`, `originalError?`. Create `buildDiagnosticsFromContext()` helper that extracts all available info into diagnostics array. |
+| 0.4 | `helpers/subsystem.ts` | 26-49 | Add check for `{ success: false }` responses with diagnostics: `if (parsed.success === false && Array.isArray(parsed.diagnostics) && parsed.diagnostics.length > 0)` — synthesize error message from diagnostics and throw. Also preserve full UE response on ALL thrown errors: `(err as any).ueResponse = parsed`. |
+| 0.5 | `helpers/tool-results.ts` | 98-186 | Extend `normalizeToolError()`: when `payloadOrError` is an Error with `.ueResponse` property, extract diagnostics array from it and merge into the output diagnostics. Inspect object keys when no message found. This supplements (not replaces) existing logic. |
+| 0.6 | Tool handlers audit | all `tools/*.ts` | Audit all tool handlers that call `callSubsystemJson()` then `jsonToolSuccess(result)` — verify they check `result.success !== false` before calling `jsonToolSuccess`. Add guard: `if (result.success === false) return jsonToolError(result)`. |
 | 0.7 | `ue-client.ts` | 179 | Include truncated response body (max 500 chars) in error message from `formatCallFailure()`. |
+
+**Note:** Task 0.6 replaces the previously proposed `error-diagnostics.ts` helper file. The existing `normalizeToolError` pipeline already handles diagnostics comprehensively — the gap is upstream (tool handlers passing errors as successes, `callSubsystemJson` not catching `success: false`). No new abstraction layer needed.
 
 ### Sync Point
 
@@ -160,6 +165,7 @@ Multi-layer information loss in error pipeline:
 - `npm run build` succeeds
 - `npm run test:unit` passes (existing tests)
 - Verify: a tool that previously returned "Unknown error" now returns structured diagnostics
+- Verify: `callSubsystemJson` throws on `{ success: false, diagnostics: [...] }` responses
 
 ---
 
@@ -176,7 +182,7 @@ Outer try-catch at `project-control.ts:752-759` wraps 250+ lines of orchestratio
 | ID | File | Lines | Change |
 |----|------|-------|--------|
 | 1.1 | `tools/project-control.ts` | 493-759 | Refactor: wrap each internal step (live_coding, save, build, restart, reconnect) in its own try-catch. Each catch records the error in `stepErrors` and decides whether to continue or abort. |
-| 1.2 | `tools/project-control.ts` | 752-759 | Outer catch: include step context (which step was executing), accumulated `stepErrors`, stack trace in error payload. Use `ToolErrorContext` from Phase 0. |
+| 1.2 | `tools/project-control.ts` | 752-759 | Outer catch: include step context (which step was executing), accumulated `stepErrors`, stack trace in error payload. Return via `jsonToolError()` with structured payload containing `{ stepErrors, failedStep, diagnostics }`. |
 | 1.3 | `tools/project-control.ts` | overall | Ensure `stepErrors` is always included in the final response — both in success path (line 751) and exception path (lines 752-759). |
 
 ### Issue #1 — add_component (C++ Squad + TS Squad)
@@ -216,6 +222,9 @@ Outer try-catch at `project-control.ts:752-759` wraps 250+ lines of orchestratio
     }
   }
 }
+```
+
+**Note:** `parentComponentName` is used to find the parent `USCS_Node*` and call `ParentNode->AddChildNode(Node)` — it determines the SCS hierarchy parent. This is distinct from the existing `attachToName` property in `BuildComponentTree` which sets the scene attachment target. Both can coexist: `parentComponentName` controls the SCS tree structure, `attachToName` controls runtime attachment.
 ```
 
 ### Sync Point
@@ -286,11 +295,13 @@ Complete absence in codebase. Bindings are editor-only metadata in `UStateTreeEd
 
 ## Phase 3: Test Coverage (34% -> 60%+)
 
+All tests are located in `MCP/tests/` (not under `src/`). Test framework: **Vitest 3.1.1**.
+
 ### New Tests for Modified Code
 
 | Area | Test File | Tests to Add |
 |------|-----------|-------------|
-| Error pipeline | `tool-results.test.ts` | `normalizeToolError` with enriched ueResponse payload; error-diagnostics helper; callSubsystemJson error preservation |
+| Error pipeline | `tool-results.test.ts` | `normalizeToolError` with enriched ueResponse payload; callSubsystemJson throwing on `{ success: false }` responses; tool handler `success: false` guard coverage |
 | sync_project_code | `project-control.test.ts` | Per-step error accumulation; stepErrors in exception path; each step catch behavior |
 | add_component | `blueprint-authoring.test.ts` | Additive creation (existing components preserved); duplicate name handling; parent attachment; missing parent error |
 | create_state_tree | `schema-and-ai-authoring.test.ts` | Complex C++ USTRUCT payloads; schema resolution errors with details; validation error propagation |
