@@ -165,7 +165,7 @@ it('preserves ueResponse on errors thrown from { error: "..." } responses', asyn
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd MCP && npx vitest run tests/tool-results.test.ts --reporter=verbose`
+Run: `cd MCP && npx vitest run tests/subsystem.test.ts --reporter=verbose`
 Expected: FAIL — `err.ueResponse` is undefined
 
 - [ ] **Step 3: Implement — attach ueResponse to all thrown errors**
@@ -201,13 +201,13 @@ In `MCP/src/helpers/subsystem.ts`, modify the three existing throw points:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd MCP && npx vitest run tests/tool-results.test.ts --reporter=verbose`
+Run: `cd MCP && npx vitest run tests/subsystem.test.ts --reporter=verbose`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd MCP && git add src/helpers/subsystem.ts tests/tool-results.test.ts
+cd MCP && git add src/helpers/subsystem.ts tests/subsystem.test.ts
 git commit -m "fix: preserve full ueResponse on all callSubsystemJson errors"
 ```
 
