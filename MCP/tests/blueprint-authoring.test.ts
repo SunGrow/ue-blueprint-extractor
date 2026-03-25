@@ -141,6 +141,93 @@ describe('registerBlueprintAuthoringTools', () => {
     });
   });
 
+  it('passes parentComponentName through in add_component payload', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'add_component',
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Blueprints/BP_Test',
+      operation: 'add_component',
+      payload: {
+        componentName: 'ChildMesh',
+        component: {
+          componentClass: '/Script/Engine.BoxComponent',
+          parentComponentName: 'RootComponent',
+          properties: {
+            BoxExtent: { X: 50, Y: 50, Z: 50 },
+          },
+        },
+      },
+      validate_only: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyBlueprintMembers', {
+      AssetPath: '/Game/Blueprints/BP_Test',
+      Operation: 'add_component',
+      PayloadJson: JSON.stringify({
+        componentName: 'ChildMesh',
+        component: {
+          componentClass: '/Script/Engine.BoxComponent',
+          parentComponentName: 'RootComponent',
+          properties: {
+            BoxExtent: { X: 50, Y: 50, Z: 50 },
+          },
+        },
+      }),
+      bValidateOnly: false,
+    });
+    const payloadJson = callSubsystemJson.mock.calls[0][1].PayloadJson as string;
+    const parsedPayload = JSON.parse(payloadJson);
+    expect(parsedPayload.component).toHaveProperty('parentComponentName', 'RootComponent');
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'add_component',
+    });
+  });
+
+  it('returns an error when subsystem fails for add_component', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('component class not found: /Script/Engine.InvalidComponent');
+    });
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Blueprints/BP_Test',
+      operation: 'add_component',
+      payload: {
+        componentName: 'BadComponent',
+        component: {
+          componentClass: '/Script/Engine.InvalidComponent',
+        },
+      },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'component class not found',
+    );
+  });
+
   it('routes member and graph mutations through distinct subsystem methods with their original payload shapes', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async (method) => ({
