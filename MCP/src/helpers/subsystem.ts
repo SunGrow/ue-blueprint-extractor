@@ -79,6 +79,17 @@ export function jsonToolSuccess(
   } = {},
 ): CallToolResult & { structuredContent: Record<string, unknown> } {
   const structuredContent = isRecord(parsed) ? parsed : { data: parsed };
+
+  // Guard: if the UE response indicates failure, route through error path.
+  // This prevents tool handlers from accidentally passing error payloads as successes.
+  if (isRecord(parsed) && parsed.success === false) {
+    return {
+      content: [{ type: 'text' as const, text: `Error: ${typeof parsed.message === 'string' ? parsed.message : 'Operation failed'}` }],
+      structuredContent,
+      isError: true,
+    };
+  }
+
   return {
     content: options.extraContent ? [...options.extraContent] : [],
     structuredContent,

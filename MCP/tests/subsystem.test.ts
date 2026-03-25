@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { callSubsystemJson, normalizeUStructPath, normalizeUStructPaths } from '../src/helpers/subsystem.js';
+import { callSubsystemJson, jsonToolSuccess, normalizeUStructPath, normalizeUStructPaths } from '../src/helpers/subsystem.js';
 
 function fakeClient(response: string) {
   return {
@@ -225,5 +225,21 @@ describe('normalizeUStructPaths', () => {
     const result = normalizeUStructPaths(['/Script/Mod.Foo', '/Script/Mod.Bar']);
     expect(result.normalized).toEqual(['/Script/Mod.Foo', '/Script/Mod.Bar']);
     expect(result.warnings).toEqual([]);
+  });
+});
+
+describe('jsonToolSuccess', () => {
+  it('returns isError when passed { success: false } payload', () => {
+    const result = jsonToolSuccess({
+      success: false,
+      diagnostics: [{ message: 'Schema not found' }],
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it('passes through { success: true } normally', () => {
+    const result = jsonToolSuccess({ success: true, data: 'ok' });
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual({ success: true, data: 'ok' });
   });
 });
