@@ -21,6 +21,7 @@ interface RawCallResult {
   status?: number;
   error?: string;
   timedOut?: boolean;
+  responseBody?: string;  // Raw response text for error diagnostics
 }
 
 export interface UEClientOptions {
@@ -175,6 +176,12 @@ export class UEClient {
     if (result.timedOut) {
       details.push(`timeoutMs=${this.timeoutMs}`);
     }
+    if (typeof result.responseBody === 'string' && result.responseBody.length > 0) {
+      const truncated = result.responseBody.length > 500
+        ? result.responseBody.slice(0, 500) + '…'
+        : result.responseBody;
+      details.push(`body=${truncated}`);
+    }
 
     return `Failed to call ${method} on BlueprintExtractorSubsystem (${details.join(', ')})`;
   }
@@ -216,11 +223,14 @@ export class UEClient {
           response: null,
           status: res.status,
           error: errorDetail,
+          responseBody,
         };
       }
 
+      const text = await res.text();
       return {
-        response: await res.json() as RemoteCallResponse,
+        response: JSON.parse(text) as RemoteCallResponse,
+        responseBody: text,
       };
     } catch (error) {
       clearTimeout(timeout);
