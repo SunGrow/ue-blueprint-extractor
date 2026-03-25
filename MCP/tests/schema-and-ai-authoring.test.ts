@@ -1299,4 +1299,68 @@ describe('registerSchemaAndAiAuthoringTools', () => {
       w.includes('NestedTask'),
     )).toBe(false);
   });
+
+  it('patch_state passes selector.statePath in PayloadJson', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Main',
+      operation: 'patch_state',
+      payload: {
+        selector: { statePath: 'Root.Combat' },
+        state: { name: 'CombatRenamed' },
+      },
+      validate_only: false,
+    });
+
+    const callArgs = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(callArgs.PayloadJson as string) as Record<string, unknown>;
+    expect(callArgs.Operation).toBe('patch_state');
+    expect(sentPayload.selector).toEqual({ statePath: 'Root.Combat' });
+    expect((sentPayload.state as Record<string, unknown>).name).toBe('CombatRenamed');
+  });
+
+  it('patch_state passes top-level stateId in PayloadJson', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Main',
+      operation: 'patch_state',
+      payload: {
+        stateId: 'abc-123',
+        state: { name: 'Patched' },
+      },
+      validate_only: false,
+    });
+
+    const callArgs = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(callArgs.PayloadJson as string) as Record<string, unknown>;
+    expect(sentPayload.stateId).toBe('abc-123');
+    expect((sentPayload.state as Record<string, unknown>).name).toBe('Patched');
+  });
+
+  it('patch_state passes top-level statePath in PayloadJson', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Main',
+      operation: 'patch_state',
+      payload: {
+        statePath: 'Root.Idle',
+        state: { name: 'IdleRenamed' },
+      },
+      validate_only: false,
+    });
+
+    const callArgs = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(callArgs.PayloadJson as string) as Record<string, unknown>;
+    expect(sentPayload.statePath).toBe('Root.Idle');
+    expect((sentPayload.state as Record<string, unknown>).name).toBe('IdleRenamed');
+  });
 });

@@ -1599,7 +1599,12 @@ static bool PatchState(UStateTree* StateTree,
 
 	FStateSelector Selector;
 	FString SelectorError;
-	if (!ParseStateSelector(EffectivePayload, Selector, SelectorError))
+	TSharedPtr<FJsonObject> SelectorSource = Payload;
+	if (Payload->HasField(TEXT("selector")))
+	{
+		SelectorSource = Payload->GetObjectField(TEXT("selector"));
+	}
+	if (!ParseStateSelector(SelectorSource, Selector, SelectorError))
 	{
 		OutErrors.Add(SelectorError);
 		return false;
