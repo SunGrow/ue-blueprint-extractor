@@ -941,4 +941,48 @@ describe('registerProjectControlTools', () => {
     expect(parsed).toHaveProperty('changedPaths');
     expect(parsed.operation).toBe('sync_project_code');
   });
+
+  it('identifies failedStep as "build" when build step throws', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+      compileProjectCode: vi.fn(async () => {
+        throw new Error('linker error LNK2019');
+      }),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true })),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.cpp'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.stepErrors).toBeDefined();
+    expect((parsed.stepErrors as Record<string, string>).build).toBe('linker error LNK2019');
+    // failedStep should identify the build step specifically
+    expect(parsed.failedStep).toBe('build');
+  });
 });

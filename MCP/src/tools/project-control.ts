@@ -491,6 +491,7 @@ export function registerProjectControlTools({
       restart_first,
     }) => {
       const stepErrors: Record<string, string> = {};
+      let currentStep = 'init';
       try {
         const resolvedProjectInputs = await resolveProjectInputs({ engine_root, project_path, target });
 
@@ -524,6 +525,7 @@ export function registerProjectControlTools({
           structuredResult.pathWarnings = pathWarnings;
         }
 
+        currentStep = 'live_coding';
         if (plan.strategy === 'live_coding') {
           if (!projectController.liveCodingSupported) {
             structuredResult.plan = {
@@ -555,6 +557,7 @@ export function registerProjectControlTools({
                 changedPaths: normalizedPaths,
                 plan,
                 liveCoding,
+                failedStep: liveCoding.success !== true ? currentStep : undefined,
               };
               if (pathWarnings.length > 0) lcResult.pathWarnings = pathWarnings;
               if (Object.keys(stepErrors).length > 0) lcResult.stepErrors = stepErrors;
@@ -571,6 +574,7 @@ export function registerProjectControlTools({
         }
 
         if (restart_first) {
+          currentStep = 'pre_save';
           if (Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
             try {
               const preSave = await callSubsystemJson('SaveAssets', {
@@ -583,6 +587,7 @@ export function registerProjectControlTools({
             }
           }
 
+          currentStep = 'pre_restart';
           try {
             const preRestart = await callSubsystemJson('RestartEditor', {
               bWarn: false,
@@ -594,6 +599,7 @@ export function registerProjectControlTools({
             if (preRestart.success === false) {
               stepErrors.preRestart = 'RestartEditor returned success=false';
               structuredResult.strategy = 'restart_first';
+              structuredResult.failedStep = currentStep;
               if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
               return jsonToolSuccess(structuredResult);
             }
@@ -601,6 +607,7 @@ export function registerProjectControlTools({
             stepErrors.preRestart = preRestartError instanceof Error ? preRestartError.message : String(preRestartError);
             structuredResult.strategy = 'restart_first';
             structuredResult.success = false;
+            structuredResult.failedStep = currentStep;
             if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
@@ -615,6 +622,7 @@ export function registerProjectControlTools({
             if (!preDisconnect.success) {
               stepErrors.preDisconnect = 'Editor did not disconnect within timeout';
               structuredResult.strategy = 'restart_first';
+              structuredResult.failedStep = currentStep;
               if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
               return jsonToolSuccess(structuredResult);
             }
@@ -622,11 +630,13 @@ export function registerProjectControlTools({
             stepErrors.preDisconnect = preDisconnectError instanceof Error ? preDisconnectError.message : String(preDisconnectError);
             structuredResult.strategy = 'restart_first';
             structuredResult.success = false;
+            structuredResult.failedStep = currentStep;
             if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
         }
 
+        currentStep = 'build';
         let build: CompileProjectCodeResult;
         try {
           build = await projectController.compileProjectCode({
@@ -644,6 +654,7 @@ export function registerProjectControlTools({
           stepErrors.build = buildError instanceof Error ? buildError.message : String(buildError);
           structuredResult.strategy = restart_first ? 'restart_first' : 'build_and_restart';
           structuredResult.success = false;
+          structuredResult.failedStep = currentStep;
           if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
           return jsonToolSuccess(structuredResult);
         }
@@ -652,10 +663,12 @@ export function registerProjectControlTools({
         structuredResult.build = build;
 
         if (!build.success) {
+          structuredResult.failedStep = currentStep;
           if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
           return jsonToolSuccess(structuredResult);
         }
 
+        currentStep = 'save';
         if (!restart_first && Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
           try {
             const saveResult = await callSubsystemJson('SaveAssets', {
@@ -664,6 +677,7 @@ export function registerProjectControlTools({
             structuredResult.save = saveResult;
             if (saveResult.success === false) {
               stepErrors.save = 'SaveAssets returned success=false';
+              structuredResult.failedStep = currentStep;
               if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
               return jsonToolSuccess(structuredResult);
             }
@@ -673,6 +687,7 @@ export function registerProjectControlTools({
           }
         }
 
+        currentStep = 'restart';
         let reconnect: Awaited<ReturnType<ProjectControllerLike['waitForEditorRestart']>> | undefined;
         if (restart_first) {
           try {
@@ -684,16 +699,19 @@ export function registerProjectControlTools({
             structuredResult.editorLaunch = launch;
             if (!launch.success) {
               stepErrors.editorLaunch = 'launchEditor returned success=false';
+              structuredResult.failedStep = currentStep;
               if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
               return jsonToolSuccess(structuredResult);
             }
           } catch (launchError) {
             stepErrors.editorLaunch = launchError instanceof Error ? launchError.message : String(launchError);
             structuredResult.success = false;
+            structuredResult.failedStep = currentStep;
             if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
 
+          currentStep = 'reconnect';
           try {
             reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
               disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
@@ -715,16 +733,19 @@ export function registerProjectControlTools({
             structuredResult.restartRequestSaveDirtyAssetsAccepted = save_dirty_assets;
             if (restartRequest.success === false) {
               stepErrors.restart = 'RestartEditor returned success=false';
+              structuredResult.failedStep = currentStep;
               if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
               return jsonToolSuccess(structuredResult);
             }
           } catch (restartError) {
             stepErrors.restart = restartError instanceof Error ? restartError.message : String(restartError);
             structuredResult.success = false;
+            structuredResult.failedStep = currentStep;
             if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
 
+          currentStep = 'reconnect';
           try {
             reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
               disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
@@ -756,7 +777,7 @@ export function registerProjectControlTools({
           success: false,
           operation: 'sync_project_code',
           message: String(explainProjectResolutionFailure(errorMessage, resolved as Parameters<typeof explainProjectResolutionFailure>[1])),
-          failedStep: 'unknown',
+          failedStep: currentStep,
           stepErrors,
           changedPaths: changed_paths,
         };
