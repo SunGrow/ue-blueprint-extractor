@@ -624,14 +624,24 @@ static UClass* ResolveInstanceObjectClass(const TSharedPtr<FJsonObject>& NodeObj
 		FString ObjectPath;
 		if (NodeObject->TryGetStringField(TEXT("instanceObjectPath"), ObjectPath) && !ObjectPath.IsEmpty())
 		{
-			if (UObject* ExistingObject = FAuthoringHelpers::ResolveObject(ObjectPath))
+			UObject* ExistingObject = FAuthoringHelpers::ResolveObject(ObjectPath);
+			if (!ExistingObject)
 			{
-				UClass* ExistingClass = ExistingObject->GetClass();
-				if (!RequiredBaseClass || ExistingClass->IsChildOf(RequiredBaseClass))
-				{
-					return ExistingClass;
-				}
+				OutErrors.Add(FString::Printf(
+					TEXT("%s.instanceObjectPath '%s' could not be resolved."),
+					*Path, *ObjectPath));
+				return nullptr;
 			}
+			UClass* ExistingClass = ExistingObject->GetClass();
+			if (!RequiredBaseClass || ExistingClass->IsChildOf(RequiredBaseClass))
+			{
+				return ExistingClass;
+			}
+			OutErrors.Add(FString::Printf(
+				TEXT("%s.instanceObjectPath '%s' resolved to class '%s' which is not a subclass of '%s'."),
+				*Path, *ObjectPath, *ExistingClass->GetPathName(),
+				*RequiredBaseClass->GetPathName()));
+			return nullptr;
 		}
 		return nullptr;
 	}
@@ -682,6 +692,12 @@ static bool ConfigureBlueprintWrapperClass(FStateTreeEditorNode& EditorNode,
 		if (FStateTreeBlueprintTaskWrapper* Wrapper = EditorNode.Node.GetMutablePtr<FStateTreeBlueprintTaskWrapper>())
 		{
 			Wrapper->TaskClass = ResolveInstanceObjectClass(NodeObject, UStateTreeTaskBlueprintBase::StaticClass(), OutErrors, Path);
+			if (!Wrapper->TaskClass)
+			{
+				OutErrors.AddUnique(FString::Printf(
+					TEXT("%s: Blueprint task wrapper requires 'instanceObjectClass' specifying a UStateTreeTaskBlueprintBase subclass."),
+					*Path));
+			}
 			return Wrapper->TaskClass != nullptr;
 		}
 	}
@@ -691,6 +707,12 @@ static bool ConfigureBlueprintWrapperClass(FStateTreeEditorNode& EditorNode,
 		if (FStateTreeBlueprintEvaluatorWrapper* Wrapper = EditorNode.Node.GetMutablePtr<FStateTreeBlueprintEvaluatorWrapper>())
 		{
 			Wrapper->EvaluatorClass = ResolveInstanceObjectClass(NodeObject, UStateTreeEvaluatorBlueprintBase::StaticClass(), OutErrors, Path);
+			if (!Wrapper->EvaluatorClass)
+			{
+				OutErrors.AddUnique(FString::Printf(
+					TEXT("%s: Blueprint evaluator wrapper requires 'instanceObjectClass' specifying a UStateTreeEvaluatorBlueprintBase subclass."),
+					*Path));
+			}
 			return Wrapper->EvaluatorClass != nullptr;
 		}
 	}
@@ -700,6 +722,12 @@ static bool ConfigureBlueprintWrapperClass(FStateTreeEditorNode& EditorNode,
 		if (FStateTreeBlueprintConditionWrapper* Wrapper = EditorNode.Node.GetMutablePtr<FStateTreeBlueprintConditionWrapper>())
 		{
 			Wrapper->ConditionClass = ResolveInstanceObjectClass(NodeObject, UStateTreeConditionBlueprintBase::StaticClass(), OutErrors, Path);
+			if (!Wrapper->ConditionClass)
+			{
+				OutErrors.AddUnique(FString::Printf(
+					TEXT("%s: Blueprint condition wrapper requires 'instanceObjectClass' specifying a UStateTreeConditionBlueprintBase subclass."),
+					*Path));
+			}
 			return Wrapper->ConditionClass != nullptr;
 		}
 	}
@@ -709,6 +737,12 @@ static bool ConfigureBlueprintWrapperClass(FStateTreeEditorNode& EditorNode,
 		if (FStateTreeBlueprintConsiderationWrapper* Wrapper = EditorNode.Node.GetMutablePtr<FStateTreeBlueprintConsiderationWrapper>())
 		{
 			Wrapper->ConsiderationClass = ResolveInstanceObjectClass(NodeObject, UStateTreeConsiderationBlueprintBase::StaticClass(), OutErrors, Path);
+			if (!Wrapper->ConsiderationClass)
+			{
+				OutErrors.AddUnique(FString::Printf(
+					TEXT("%s: Blueprint consideration wrapper requires 'instanceObjectClass' specifying a UStateTreeConsiderationBlueprintBase subclass."),
+					*Path));
+			}
 			return Wrapper->ConsiderationClass != nullptr;
 		}
 	}
