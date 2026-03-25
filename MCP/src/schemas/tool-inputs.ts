@@ -382,6 +382,9 @@ export const StateTreeMutationOperationSchema = z.enum([
   'patch_editor_node',
   'patch_transition',
   'set_schema',
+  'set_bindings',
+  'add_binding',
+  'remove_binding',
 ]);
 
 export const AnimSequenceMutationOperationSchema = z.enum([
@@ -468,12 +471,25 @@ export const StateTreeTransitionSelectorSchema = z.object({
   id: z.string().optional(),
 }).passthrough();
 
-export const StateTreeBindingSchema = z.object({
-  sourceTask: z.string().describe('Name of the source task whose output provides the value'),
-  sourceProperty: z.string().describe('Property name on the source task to read from'),
-  targetTask: z.string().describe('Name of the target task whose input receives the value'),
-  targetProperty: z.string().describe('Property name on the target task to write to'),
-}).describe('Task output-to-input binding (requires C++ plugin support — not yet implemented)');
+const PropertyPathSegmentSchema = z.object({
+  name: z.string().describe('Property name'),
+  arrayIndex: z.number().int().optional().describe('Array element index (for array properties)'),
+  instanceStruct: z.string().optional().describe('Script struct/class path for the property type (e.g., /Script/Module.FStructName)'),
+}).passthrough();
+
+const PropertyPathSchema = z.object({
+  structId: z.string().optional().describe('GUID of the struct owning the property (from extract_asset output)'),
+  segments: z.array(PropertyPathSegmentSchema).min(1).describe('Property path segments from owner to leaf property'),
+}).passthrough();
+
+export const PropertyPathBindingSchema = z.object({
+  sourcePath: PropertyPathSchema.describe('Property path to read the value from (task/evaluator output)'),
+  targetPath: PropertyPathSchema.describe('Property path to write the value to (task input)'),
+}).passthrough();
+
+export const StateTreeBindingsObjectSchema = z.object({
+  propertyBindings: z.array(PropertyPathBindingSchema),
+}).passthrough().describe('StateTree property bindings container matching C++ bindings.propertyBindings structure');
 
 export const AnimationNotifySelectorSchema = z.object({
   notifyId: z.string().optional(),

@@ -129,6 +129,28 @@ function summarizeStep(entry: Record<string, unknown>): Record<string, unknown> 
   };
 }
 
+/**
+ * Wraps callSubsystemJson so that thrown UE error responses are returned as
+ * result objects instead of propagating. This lets the step-by-step orchestrator
+ * inspect `result.success === false` rather than losing control to the outer catch.
+ */
+async function safeCallSubsystemJson(
+  callSubsystemJson: (method: string, params: Record<string, unknown>, options?: { timeoutMs?: number }) => Promise<Record<string, unknown>>,
+  method: string,
+  params: Record<string, unknown>,
+  options?: { timeoutMs?: number },
+): Promise<Record<string, unknown>> {
+  try {
+    return options
+      ? await callSubsystemJson(method, params, options)
+      : await callSubsystemJson(method, params);
+  } catch (error) {
+    const ueResponse = (error as Record<string, unknown>).ueResponse as Record<string, unknown> | undefined;
+    if (ueResponse) return ueResponse;
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function buildStoppedResult(
   stoppedAt: string,
   steps: Array<Record<string, unknown>>,
@@ -242,6 +264,10 @@ export function registerWindowUiTools({
           save_asset_paths,
           sync_project_code,
         } = args as ApplyWindowUiArgs;
+        // Use safe wrapper so thrown UE error responses become result objects
+        // that the step-by-step orchestrator can inspect via result.success === false.
+        const safeCall = (method: string, params: Record<string, unknown>, options?: { timeoutMs?: number }) =>
+          safeCallSubsystemJson(callSubsystemJson, method, params, options);
         const steps: Array<Record<string, unknown>> = [];
         const buildVerification = () => {
           const status: 'compile_pending' | 'unverified' = compile_after ? 'unverified' : 'compile_pending';
@@ -288,7 +314,7 @@ export function registerWindowUiTools({
             return null;
           }
 
-          const result = await callSubsystemJson('SaveAssets', {
+          const result = await safeCall('SaveAssets', {
             AssetPathsJson: JSON.stringify(collectCheckpointAssetPaths(extraPaths)),
           });
           steps.push({
@@ -311,7 +337,7 @@ export function registerWindowUiTools({
             return jsonToolError(new Error('variable_widgets entries require widget_name or widget_path'));
           }
 
-          const result = await callSubsystemJson('ModifyWidget', {
+          const result = await safeCall('ModifyWidget', {
             AssetPath: asset_path,
             WidgetName: widgetIdentifier,
             PropertiesJson: JSON.stringify({}),
@@ -334,7 +360,7 @@ export function registerWindowUiTools({
         }
 
         if (class_defaults) {
-          const result = await callSubsystemJson('ModifyWidgetBlueprintStructure', {
+          const result = await safeCall('ModifyWidgetBlueprintStructure', {
             AssetPath: asset_path,
             Operation: 'patch_class_defaults',
             PayloadJson: JSON.stringify({ classDefaults: class_defaults }),
@@ -354,7 +380,7 @@ export function registerWindowUiTools({
         }
 
         if (font_import) {
-          const result = await callSubsystemJson('ImportFonts', {
+          const result = await safeCall('ImportFonts', {
             PayloadJson: JSON.stringify(font_import),
             bValidateOnly: false,
           });
@@ -377,7 +403,7 @@ export function registerWindowUiTools({
         }
 
         if (font_applications && font_applications.length > 0) {
-          const result = await callSubsystemJson('ApplyWidgetFonts', {
+          const result = await safeCall('ApplyWidgetFonts', {
             AssetPath: asset_path,
             PayloadJson: JSON.stringify({ applications: font_applications }),
             bValidateOnly: false,
@@ -396,7 +422,7 @@ export function registerWindowUiTools({
         }
 
         if (compile_after) {
-          const result = await callSubsystemJson('CompileWidgetBlueprint', {
+          const result = await safeCall('CompileWidgetBlueprint', {
             AssetPath: asset_path,
           });
           steps.push({
@@ -421,7 +447,7 @@ export function registerWindowUiTools({
             assetPaths.add(font_import.font_asset_path);
           }
 
-          const result = await callSubsystemJson('SaveAssets', {
+          const result = await safeCall('SaveAssets', {
             AssetPathsJson: JSON.stringify(Array.from(assetPaths)),
           });
           steps.push({
@@ -446,7 +472,7 @@ export function registerWindowUiTools({
           let needsBuildRestart = syncPlan.strategy === 'build_and_restart' || !projectController.liveCodingSupported;
 
           if (syncPlan.strategy === 'live_coding' && projectController.liveCodingSupported) {
-            const liveCoding = enrichLiveCodingResult(await callSubsystemJson('TriggerLiveCoding', {
+            const liveCoding = enrichLiveCodingResult(await safeCall('TriggerLiveCoding', {
               bEnableForSession: true,
               bWaitForCompletion: true,
             }), sync_project_code.changed_paths, getLastExternalBuildContext());
@@ -473,7 +499,7 @@ export function registerWindowUiTools({
             const useRestartFirst = sync_project_code.restart_first ?? false;
 
             if (useRestartFirst) {
-              const preRestart = await callSubsystemJson('RestartEditor', {
+              const preRestart = await safeCall('RestartEditor', {
                 bWarn: false,
                 bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
                 bRelaunch: false,
@@ -538,7 +564,7 @@ export function registerWindowUiTools({
                 return buildStoppedResult('sync_project_code', steps);
               }
             } else {
-              const restartRequest = await callSubsystemJson('RestartEditor', {
+              const restartRequest = await safeCall('RestartEditor', {
                 bWarn: false,
                 bSaveDirtyAssets: sync_project_code.save_dirty_assets ?? true,
                 bRelaunch: true,

@@ -497,4 +497,92 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
       },
     ],
   },
+  state_tree_bindings: {
+    summary: 'Wire task outputs to task inputs using property path bindings. Extract an existing StateTree to discover structIds and property names, then use binding operations to set up data flow.',
+    recommended_flow: [
+      'extract_asset (discover structIds and property names)',
+      'modify_state_tree (add_binding / set_bindings)',
+      'extract_asset (verify bindings)',
+      'save_assets',
+    ],
+    examples: [
+      {
+        title: 'add_single_binding',
+        tool: 'modify_state_tree',
+        arguments: {
+          asset_path: '/Game/AI/ST_Character',
+          operation: 'add_binding',
+          payload: {
+            sourcePath: {
+              structId: 'EAB9611F4B07D7E2C25A948AFC790A50',
+              segments: [{ name: 'SelectedGestureTag' }],
+            },
+            targetPath: {
+              structId: 'F2A3B44C4D08E6A1C25A948AFC790A50',
+              segments: [{ name: 'MontageTag' }],
+            },
+          },
+        },
+        context: { description: 'Wire SelectRandomGesture output → PlayMontage input. structIds from extract_asset output.' },
+      },
+      {
+        title: 'set_all_bindings',
+        tool: 'modify_state_tree',
+        arguments: {
+          asset_path: '/Game/AI/ST_Character',
+          operation: 'set_bindings',
+          payload: {
+            propertyBindings: [
+              {
+                sourcePath: { segments: [{ name: 'SelectedTag' }] },
+                targetPath: { segments: [{ name: 'MontageTag' }] },
+              },
+              {
+                sourcePath: { segments: [{ name: 'Duration' }] },
+                targetPath: { segments: [{ name: 'WaitTime' }] },
+              },
+            ],
+          },
+        },
+        context: { description: 'Replace all bindings on the StateTree with a new set.' },
+      },
+      {
+        title: 'remove_binding_by_target',
+        tool: 'modify_state_tree',
+        arguments: {
+          asset_path: '/Game/AI/ST_Character',
+          operation: 'remove_binding',
+          payload: {
+            targetPath: { segments: [{ name: 'MontageTag' }] },
+          },
+        },
+        context: { description: 'Remove all bindings targeting the MontageTag property.' },
+      },
+      {
+        title: 'create_with_bindings',
+        tool: 'create_state_tree',
+        arguments: {
+          asset_path: '/Game/AI/ST_NewWithBindings',
+          payload: {
+            schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+            states: [{
+              name: 'Root',
+              type: 'State',
+              tasks: [
+                { nodeStructType: '/Script/MyMod.STCSelectGesture', name: 'SelectGesture' },
+                { nodeStructType: '/Script/MyMod.STCPlayMontage', name: 'PlayMontage' },
+              ],
+            }],
+            bindings: {
+              propertyBindings: [{
+                sourcePath: { segments: [{ name: 'SelectedGestureTag' }] },
+                targetPath: { segments: [{ name: 'MontageTag' }] },
+              }],
+            },
+          },
+        },
+        context: { description: 'Create a StateTree with tasks and bindings in a single call.' },
+      },
+    ],
+  },
 };
