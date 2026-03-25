@@ -899,4 +899,46 @@ describe('registerProjectControlTools', () => {
       'Play-In-Editor',
     );
   });
+
+  it('includes accumulated stepErrors and failedStep in outer catch error payload', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    // classifyChangedPaths throws — this is NOT wrapped in an inner try/catch,
+    // so the error propagates to the outer catch block.
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => {
+        throw new Error('unexpected classify crash');
+      }),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true })),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.cpp'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    // The outer catch should produce a structured error with stepErrors, failedStep, changedPaths
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed).toHaveProperty('stepErrors');
+    expect(parsed).toHaveProperty('failedStep');
+    expect(parsed).toHaveProperty('changedPaths');
+    expect(parsed.operation).toBe('sync_project_code');
+  });
 });

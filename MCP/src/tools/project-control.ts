@@ -490,6 +490,7 @@ export function registerProjectControlTools({
       clear_uht_cache,
       restart_first,
     }) => {
+      const stepErrors: Record<string, string> = {};
       try {
         const resolvedProjectInputs = await resolveProjectInputs({ engine_root, project_path, target });
 
@@ -510,8 +511,6 @@ export function registerProjectControlTools({
             pathWarnings.push(`Normalized relative path: "${original}" → "${normalizedPaths[i]}"`);
           }
         });
-
-        const stepErrors: Record<string, string> = {};
 
         const plan = projectController.classifyChangedPaths(normalizedPaths, force_rebuild);
         const structuredResult: Record<string, unknown> = {
@@ -750,12 +749,21 @@ export function registerProjectControlTools({
         }
         return jsonToolSuccess(structuredResult);
       } catch (error) {
-        const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+        // Preserve accumulated step context even in unhandled exception path.
+        const resolved = await resolveProjectInputs({ engine_root, project_path, target }).catch(() => ({}));
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return jsonToolError(explainProjectResolutionFailure(
-          errorMessage,
-          resolved,
-        ));
+        const failurePayload: Record<string, unknown> = {
+          success: false,
+          operation: 'sync_project_code',
+          message: String(explainProjectResolutionFailure(errorMessage, resolved as Parameters<typeof explainProjectResolutionFailure>[1])),
+          failedStep: 'unknown',
+          stepErrors,
+          changedPaths: changed_paths,
+        };
+        if (error instanceof Error && error.stack) {
+          failurePayload.stack = error.stack;
+        }
+        return jsonToolSuccess(failurePayload);
       }
     },
   );
