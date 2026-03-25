@@ -66,6 +66,7 @@ export interface CompileProjectCodeResult {
   stdout?: string;
   stderr?: string;
   uhtCacheFilesDeleted?: string[];
+  compilationSucceeded: boolean;
   errorCategory?: BuildErrorCategory;
   errorSummary?: string;
   lockedFiles?: string[];
@@ -586,6 +587,7 @@ export class ProjectController implements ProjectControllerLike {
       },
       durationMs: Date.now() - startedAt,
       exitCode: completed.exitCode,
+      compilationSucceeded: completed.exitCode === 0,
       restartRequired: true,
       restartReasons: ['external_build_completed'],
       outputIncluded: includeOutput,
@@ -614,6 +616,9 @@ export class ProjectController implements ProjectControllerLike {
       if (classification.lockedFiles.length > 0) {
         result.lockedFiles = classification.lockedFiles;
       }
+      // Compilation itself succeeded if the failure is only at the link/lock stage
+      result.compilationSucceeded = classification.errorCategory === 'locked_file'
+        || classification.errorCategory === 'link';
     }
 
     return result;

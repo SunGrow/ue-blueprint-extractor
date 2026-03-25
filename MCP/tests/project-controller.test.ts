@@ -211,6 +211,98 @@ describe('ProjectController', () => {
     expect(result.errorSummary).toContain('locked by another process');
   });
 
+  it('sets compilationSucceeded true when errorCategory is locked_file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-locked-'));
+    tempDirs.push(root);
+
+    const engineRoot = join(root, 'UE_5.7');
+    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
+    const projectPath = join(root, 'MyGame.uproject');
+    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
+    await writeFile(buildScript, '#!/usr/bin/env bash\n');
+    await writeFile(projectPath, '{}');
+
+    const controller = new ProjectController({
+      env: {
+        UE_ENGINE_ROOT: engineRoot,
+        UE_PROJECT_PATH: projectPath,
+        UE_PROJECT_TARGET: 'MyGameEditor',
+      },
+      platform: 'linux',
+      runCommand: async () => ({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'LINK : fatal error LNK1104: cannot open file \'UnrealEditor-MyGame.dll\'\nAccess is denied',
+      }),
+    });
+
+    const result = await controller.compileProjectCode({});
+    expect(result.success).toBe(false);
+    expect(result.errorCategory).toBe('locked_file');
+    expect(result.compilationSucceeded).toBe(true);
+  });
+
+  it('sets compilationSucceeded false when errorCategory is compilation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-comperr-'));
+    tempDirs.push(root);
+
+    const engineRoot = join(root, 'UE_5.7');
+    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
+    const projectPath = join(root, 'MyGame.uproject');
+    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
+    await writeFile(buildScript, '#!/usr/bin/env bash\n');
+    await writeFile(projectPath, '{}');
+
+    const controller = new ProjectController({
+      env: {
+        UE_ENGINE_ROOT: engineRoot,
+        UE_PROJECT_PATH: projectPath,
+        UE_PROJECT_TARGET: 'MyGameEditor',
+      },
+      platform: 'linux',
+      runCommand: async () => ({
+        exitCode: 1,
+        stdout: 'Source/MyActor.cpp(42): error C2065: undeclared identifier\n',
+        stderr: '',
+      }),
+    });
+
+    const result = await controller.compileProjectCode({});
+    expect(result.success).toBe(false);
+    expect(result.errorCategory).toBe('compilation');
+    expect(result.compilationSucceeded).toBe(false);
+  });
+
+  it('sets compilationSucceeded true when build succeeds', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-ok-'));
+    tempDirs.push(root);
+
+    const engineRoot = join(root, 'UE_5.7');
+    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
+    const projectPath = join(root, 'MyGame.uproject');
+    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
+    await writeFile(buildScript, '#!/usr/bin/env bash\n');
+    await writeFile(projectPath, '{}');
+
+    const controller = new ProjectController({
+      env: {
+        UE_ENGINE_ROOT: engineRoot,
+        UE_PROJECT_PATH: projectPath,
+        UE_PROJECT_TARGET: 'MyGameEditor',
+      },
+      platform: 'linux',
+      runCommand: async () => ({
+        exitCode: 0,
+        stdout: 'Build succeeded',
+        stderr: '',
+      }),
+    });
+
+    const result = await controller.compileProjectCode({});
+    expect(result.success).toBe(true);
+    expect(result.compilationSucceeded).toBe(true);
+  });
+
   it('classifies compilation errors distinctly from locked file errors', () => {
     const result = classifyBuildError(
       'Source/MyActor.cpp(42): error C2065: \'undeclared\': undeclared identifier\n',
