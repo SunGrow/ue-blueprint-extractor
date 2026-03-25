@@ -17,6 +17,12 @@ const stateTreeMutationOperationSchema = z.enum(['patch_state', 'patch_transitio
 const stateTreeStateSelectorSchema = z.object({}).passthrough();
 const stateTreeEditorNodeSelectorSchema = z.object({}).passthrough();
 const stateTreeTransitionSelectorSchema = z.object({}).passthrough();
+const stateTreeBindingSchema = z.object({
+  sourceTask: z.string(),
+  sourceProperty: z.string(),
+  targetTask: z.string(),
+  targetProperty: z.string(),
+});
 
 function setupRegistry(callSubsystemJson = vi.fn(async () => ({ success: true }))) {
   const registry = createToolRegistry();
@@ -36,6 +42,7 @@ function setupRegistry(callSubsystemJson = vi.fn(async () => ({ success: true })
     stateTreeStateSelectorSchema,
     stateTreeEditorNodeSelectorSchema,
     stateTreeTransitionSelectorSchema,
+    stateTreeBindingSchema,
   });
   return { registry, callSubsystemJson };
 }
@@ -1026,5 +1033,270 @@ describe('registerSchemaAndAiAuthoringTools', () => {
     const warnings = parsed.warnings as string[];
     expect(warnings).toBeDefined();
     expect(warnings.some((w: string) => w.includes('does not match expected /Script/'))).toBe(true);
+  });
+
+  // --- Task 14: StateTree binding schema tests ---
+
+  it('accepts bindings array in create_state_tree payload and passes it through to subsystem', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_Bound',
+    })));
+
+    const payload = {
+      schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+      states: [
+        {
+          name: 'Root',
+          tasks: [
+            { name: 'ProduceTask', nodeStructType: '/Script/MyMod.STCProduce' },
+            { name: 'ConsumeTask', nodeStructType: '/Script/MyMod.STCConsume' },
+          ],
+        },
+      ],
+      bindings: [
+        {
+          sourceTask: 'ProduceTask',
+          sourceProperty: 'OutputValue',
+          targetTask: 'ConsumeTask',
+          targetProperty: 'InputValue',
+        },
+      ],
+    };
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_Bound',
+      payload,
+      validate_only: false,
+    });
+
+    const payloadArg = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(payloadArg.PayloadJson as string) as Record<string, unknown>;
+    expect(sentPayload.bindings).toEqual([
+      {
+        sourceTask: 'ProduceTask',
+        sourceProperty: 'OutputValue',
+        targetTask: 'ConsumeTask',
+        targetProperty: 'InputValue',
+      },
+    ]);
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      assetPath: '/Game/AI/ST_Bound',
+    });
+    // No warnings because task names are valid
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.warnings).toBeUndefined();
+  });
+
+  it('accepts bindings array in modify_state_tree replace_tree payload', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      operation: 'replace_tree',
+    })));
+
+    const payload = {
+      stateTree: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Main',
+            tasks: [
+              { name: 'SensorTask', nodeStructType: '/Script/MyMod.STCSensor' },
+              { name: 'ActuatorTask', nodeStructType: '/Script/MyMod.STCActuator' },
+            ],
+          },
+        ],
+        bindings: [
+          {
+            sourceTask: 'SensorTask',
+            sourceProperty: 'DetectedTarget',
+            targetTask: 'ActuatorTask',
+            targetProperty: 'TargetActor',
+          },
+        ],
+      },
+    };
+
+    const result = await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Main',
+      operation: 'replace_tree',
+      payload,
+      validate_only: false,
+    });
+
+    const payloadArg = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(payloadArg.PayloadJson as string) as Record<string, unknown>;
+    const stateTree = sentPayload.stateTree as Record<string, unknown>;
+    expect(stateTree.bindings).toEqual([
+      {
+        sourceTask: 'SensorTask',
+        sourceProperty: 'DetectedTarget',
+        targetTask: 'ActuatorTask',
+        targetProperty: 'TargetActor',
+      },
+    ]);
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'replace_tree',
+    });
+  });
+
+  it('warns when binding references a sourceTask not found in states tasks', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_BadBind',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_BadBind',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Root',
+            tasks: [
+              { name: 'ConsumeTask', nodeStructType: '/Script/MyMod.STCConsume' },
+            ],
+          },
+        ],
+        bindings: [
+          {
+            sourceTask: 'NonExistentProducer',
+            sourceProperty: 'Output',
+            targetTask: 'ConsumeTask',
+            targetProperty: 'Input',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) =>
+      w.includes('NonExistentProducer') && w.includes('sourceTask'),
+    )).toBe(true);
+  });
+
+  it('warns when binding references a targetTask not found in states tasks', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_BadTarget',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_BadTarget',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Root',
+            tasks: [
+              { name: 'ProduceTask', nodeStructType: '/Script/MyMod.STCProduce' },
+            ],
+          },
+        ],
+        bindings: [
+          {
+            sourceTask: 'ProduceTask',
+            sourceProperty: 'Output',
+            targetTask: 'GhostConsumer',
+            targetProperty: 'Input',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) =>
+      w.includes('GhostConsumer') && w.includes('targetTask'),
+    )).toBe(true);
+  });
+
+  it('does not warn when bindings reference valid task names', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_ValidBind',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_ValidBind',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Root',
+            tasks: [
+              { name: 'TaskA', nodeStructType: '/Script/MyMod.STCTaskA' },
+              { name: 'TaskB', nodeStructType: '/Script/MyMod.STCTaskB' },
+            ],
+          },
+        ],
+        bindings: [
+          {
+            sourceTask: 'TaskA',
+            sourceProperty: 'Out',
+            targetTask: 'TaskB',
+            targetProperty: 'In',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.warnings).toBeUndefined();
+  });
+
+  it('validates binding task references in nested child states', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_NestedBind',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_NestedBind',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Root',
+            children: [
+              {
+                name: 'Child',
+                tasks: [
+                  { name: 'NestedTask', nodeStructType: '/Script/MyMod.STCNested' },
+                ],
+              },
+            ],
+          },
+        ],
+        bindings: [
+          {
+            sourceTask: 'NestedTask',
+            sourceProperty: 'Out',
+            targetTask: 'MissingTask',
+            targetProperty: 'In',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    // NestedTask should be found (no warning), but MissingTask should trigger a warning
+    expect(warnings.some((w: string) =>
+      w.includes('MissingTask') && w.includes('targetTask'),
+    )).toBe(true);
+    expect(warnings.some((w: string) =>
+      w.includes('NestedTask'),
+    )).toBe(false);
   });
 });

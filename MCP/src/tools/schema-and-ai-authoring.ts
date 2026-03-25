@@ -24,6 +24,7 @@ type RegisterSchemaAndAiAuthoringToolsOptions = {
   stateTreeStateSelectorSchema: z.ZodTypeAny;
   stateTreeEditorNodeSelectorSchema: z.ZodTypeAny;
   stateTreeTransitionSelectorSchema: z.ZodTypeAny;
+  stateTreeBindingSchema: z.ZodTypeAny;
 };
 
 /**
@@ -128,6 +129,56 @@ function validateTransitionTargets(payload: Record<string, unknown> | undefined,
   }
 }
 
+/**
+ * Collects all task names from a states array, recursively walking children.
+ */
+function collectTaskNames(states: Array<Record<string, unknown>>): Set<string> {
+  const taskNames = new Set<string>();
+  function walkStates(stateList: Array<Record<string, unknown>>): void {
+    for (const state of stateList) {
+      const tasks = state.tasks as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(tasks)) {
+        for (const task of tasks) {
+          if (typeof task.name === 'string') taskNames.add(task.name);
+        }
+      }
+      const children = state.children as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(children)) walkStates(children);
+    }
+  }
+  walkStates(states);
+  return taskNames;
+}
+
+/**
+ * Validates that binding sourceTask and targetTask references point to task
+ * names that exist in the payload's states. Collects warnings for unresolvable references.
+ */
+function validateBindingTaskReferences(payload: Record<string, unknown> | undefined, warnings: string[]): void {
+  if (!payload) return;
+  const bindings = (payload.bindings ?? (payload.stateTree as Record<string, unknown> | undefined)?.bindings) as
+    Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(bindings) || bindings.length === 0) return;
+
+  const states = (payload.states ?? (payload.stateTree as Record<string, unknown> | undefined)?.states) as
+    Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(states) || states.length === 0) return;
+
+  const taskNames = collectTaskNames(states);
+  if (taskNames.size === 0) return;
+
+  for (const binding of bindings) {
+    const source = binding.sourceTask as string | undefined;
+    const target = binding.targetTask as string | undefined;
+    if (typeof source === 'string' && source.length > 0 && !taskNames.has(source)) {
+      warnings.push(`Warning: binding references sourceTask "${source}" which is not found in the states' tasks`);
+    }
+    if (typeof target === 'string' && target.length > 0 && !taskNames.has(target)) {
+      warnings.push(`Warning: binding references targetTask "${target}" which is not found in the states' tasks`);
+    }
+  }
+}
+
 export function registerSchemaAndAiAuthoringTools({
   server,
   callSubsystemJson,
@@ -144,6 +195,7 @@ export function registerSchemaAndAiAuthoringTools({
   stateTreeStateSelectorSchema,
   stateTreeEditorNodeSelectorSchema,
   stateTreeTransitionSelectorSchema,
+  stateTreeBindingSchema,
 }: RegisterSchemaAndAiAuthoringToolsOptions): void {
   server.registerTool(
     'create_user_defined_struct',
@@ -581,6 +633,9 @@ export function registerSchemaAndAiAuthoringTools({
           states: z.array(jsonObjectSchema).optional(),
           evaluators: z.array(jsonObjectSchema).optional(),
           globalTasks: z.array(jsonObjectSchema).optional(),
+          bindings: z.array(stateTreeBindingSchema).optional().describe(
+            'Task output-to-input bindings. Declares data flow between tasks (requires C++ plugin support — not yet implemented).',
+          ),
         }).passthrough().default({}).describe(
           'Extractor-shaped StateTree payload.',
         ),
@@ -624,6 +679,7 @@ export function registerSchemaAndAiAuthoringTools({
           warnings.push(`Warning: schema path "${schema}" does not match expected /Script/... pattern`);
         }
         validateTransitionTargets(payload, warnings);
+        validateBindingTaskReferences(payload, warnings);
 
         const normWarnings: string[] = [];
         const normalizedPayload = normalizePayloadPaths(payload ?? {}, normWarnings);
@@ -679,6 +735,9 @@ export function registerSchemaAndAiAuthoringTools({
           statePath: z.string().optional(),
           editorNodeId: z.string().optional(),
           transitionId: z.string().optional(),
+          bindings: z.array(stateTreeBindingSchema).optional().describe(
+            'Task output-to-input bindings. Declares data flow between tasks (requires C++ plugin support — not yet implemented).',
+          ),
         }).passthrough().default({}).describe(
           'Operation payload. Selectors support stateId/statePath, editorNodeId, and transitionId.',
         ),
@@ -709,6 +768,7 @@ export function registerSchemaAndAiAuthoringTools({
 
         const warnings: string[] = [];
         validateTransitionTargets(payload, warnings);
+        validateBindingTaskReferences(payload, warnings);
 
         const normWarnings: string[] = [];
         const normalizedPayload = normalizePayloadPaths(payload ?? {}, normWarnings);

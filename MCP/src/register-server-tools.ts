@@ -62,6 +62,7 @@ import {
   StateTreeMutationOperationSchema,
   StateTreeStateSelectorSchema,
   StateTreeTransitionSelectorSchema,
+  StateTreeBindingSchema,
   TextureImportPayloadSchema,
   UserDefinedEnumEntrySchema,
   UserDefinedEnumMutationOperationSchema,
@@ -322,6 +323,7 @@ export function registerServerTools({
     stateTreeStateSelectorSchema: StateTreeStateSelectorSchema,
     stateTreeEditorNodeSelectorSchema: StateTreeEditorNodeSelectorSchema,
     stateTreeTransitionSelectorSchema: StateTreeTransitionSelectorSchema,
+    stateTreeBindingSchema: StateTreeBindingSchema,
   });
 
   registerAnimationAuthoringTools({
