@@ -90,7 +90,7 @@ export function registerStaticDocResources(server: Pick<McpServer, 'resource'>):
       '- UserDefinedEnum: entry selector by name; operations replace_entries, rename_entry, remove_entry, reorder_entries.',
       '- Blackboard: key selector by entryName; operations replace_keys, patch_key, remove_key, set_parent.',
       '- BehaviorTree: node selector by nodePath; operations replace_tree, patch_node, patch_attachment, set_blackboard.',
-      '- StateTree: selectors by stateId/statePath, editorNodeId, or transitionId; operations replace_tree, patch_state, patch_editor_node, patch_transition, set_schema.',
+      '- StateTree: selectors by stateId/statePath, editorNodeId, or transitionId; operations replace_tree, patch_state, patch_editor_node, patch_transition, set_schema. Blueprint-wrapped nodes (StateTreeBlueprintTaskWrapper / StateTreeBlueprintConditionWrapper) require instanceObjectClass for the backing instance to exist at runtime.',
       '- AnimSequence: notify selector by notifyId/notifyGuid with notifyIndex or track metadata as fallback; operations replace_notifies, patch_notify, replace_sync_markers, replace_curve_metadata.',
       '- AnimMontage: notify selector by notifyId/notifyGuid with notifyIndex or track metadata as fallback; operations replace_notifies, patch_notify, replace_sections, replace_slots.',
       '- BlendSpace: sample selector by sampleIndex; operations replace_samples, patch_sample, set_axes.',

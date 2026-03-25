@@ -1363,4 +1363,139 @@ describe('registerSchemaAndAiAuthoringTools', () => {
     expect(sentPayload.statePath).toBe('Root.Idle');
     expect((sentPayload.state as Record<string, unknown>).name).toBe('IdleRenamed');
   });
+
+  // --- instanceObjectClass validation warnings ---
+
+  it('create_state_tree warns when Blueprint wrapper node is missing instanceObjectClass', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_BPWrapper',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Root',
+            tasks: [
+              {
+                name: 'MyBPTask',
+                nodeStructType: '/Script/StateTreeModule.StateTreeBlueprintTaskWrapper',
+              },
+            ],
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) => w.includes('instanceObjectClass'))).toBe(true);
+    expect(warnings.some((w: string) => w.includes('MyBPTask'))).toBe(true);
+  });
+
+  it('create_state_tree does not warn when Blueprint wrapper node has instanceObjectClass', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_BPWrapper',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Root',
+            tasks: [
+              {
+                name: 'MyBPTask',
+                nodeStructType: '/Script/StateTreeModule.StateTreeBlueprintTaskWrapper',
+                instanceObjectClass: '/Game/AI/BP_MyTask.BP_MyTask_C',
+              },
+            ],
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[] | undefined;
+    if (warnings) {
+      expect(warnings.some((w: string) => w.includes('instanceObjectClass'))).toBe(false);
+    }
+  });
+
+  it('modify_state_tree replace_tree warns for Blueprint condition wrapper missing instanceObjectClass', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    const result = await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Main',
+      operation: 'replace_tree',
+      payload: {
+        stateTree: {
+          states: [
+            {
+              name: 'Root',
+              conditions: [
+                {
+                  name: 'BPCondition',
+                  nodeStructType: '/Script/StateTreeModule.StateTreeBlueprintConditionWrapper',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) => w.includes('instanceObjectClass'))).toBe(true);
+    expect(warnings.some((w: string) => w.includes('BPCondition'))).toBe(true);
+  });
+
+  it('instanceObjectClass is preserved in serialized PayloadJson for replace_tree', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    const payload = {
+      stateTree: {
+        states: [
+          {
+            name: 'Root',
+            tasks: [
+              {
+                name: 'MyBPTask',
+                nodeStructType: '/Script/StateTreeModule.StateTreeBlueprintTaskWrapper',
+                instanceObjectClass: '/Game/AI/BP_MyTask.BP_MyTask_C',
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Main',
+      operation: 'replace_tree',
+      payload,
+      validate_only: true,
+    });
+
+    const callArgs = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(callArgs.PayloadJson as string) as Record<string, unknown>;
+    const stateTree = sentPayload.stateTree as Record<string, unknown>;
+    const states = stateTree.states as Array<Record<string, unknown>>;
+    const tasks = states[0].tasks as Array<Record<string, unknown>>;
+    expect(tasks[0].instanceObjectClass).toBe('/Game/AI/BP_MyTask.BP_MyTask_C');
+  });
 });

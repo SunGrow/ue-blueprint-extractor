@@ -99,6 +99,38 @@ function validateNodeStructTypes(obj: unknown, warnings: string[]): void {
 }
 
 /**
+ * Walks the payload tree and warns when Blueprint-wrapped StateTree nodes
+ * (StateTreeBlueprintTaskWrapper / StateTreeBlueprintConditionWrapper)
+ * are missing the `instanceObjectClass` field, which is required for the
+ * backing Blueprint instance to exist at runtime.
+ */
+function warnMissingInstanceObjectClass(obj: unknown, warnings: string[]): void {
+  if (Array.isArray(obj)) {
+    for (const item of obj) warnMissingInstanceObjectClass(item, warnings);
+    return;
+  }
+  if (obj && typeof obj === 'object') {
+    const record = obj as Record<string, unknown>;
+    const nodeStructType = typeof record.nodeStructType === 'string' ? record.nodeStructType : '';
+    if (
+      (nodeStructType.includes('StateTreeBlueprintTaskWrapper')
+        || nodeStructType.includes('StateTreeBlueprintConditionWrapper'))
+      && !record.instanceObjectClass
+    ) {
+      const nodeName = typeof record.name === 'string' ? record.name : '<unnamed>';
+      warnings.push(
+        `Blueprint-wrapped node "${nodeName}" is missing instanceObjectClass. `
+        + 'Without it, the node will compile but have no backing instance at runtime. '
+        + 'Use extract_asset to get the correct instanceObjectClass path.',
+      );
+    }
+    for (const value of Object.values(record)) {
+      warnMissingInstanceObjectClass(value, warnings);
+    }
+  }
+}
+
+/**
  * Checks transition targetState.stateName references against the flat list of
  * state names in the payload. Collects warnings for unresolvable targets.
  */
@@ -687,6 +719,7 @@ export function registerSchemaAndAiAuthoringTools({
 
         // Validate nodeStructType path formats after normalization
         validateNodeStructTypes(normalizedPayload, warnings);
+        warnMissingInstanceObjectClass(normalizedPayload, warnings);
 
         const timeoutMs = (timeout_seconds ?? 120) * 1000;
         const parsed = await callSubsystemJson('CreateStateTree', {
@@ -776,6 +809,7 @@ export function registerSchemaAndAiAuthoringTools({
 
         // Validate nodeStructType path formats after normalization
         validateNodeStructTypes(normalizedPayload, warnings);
+        warnMissingInstanceObjectClass(normalizedPayload, warnings);
 
         const timeoutMs = (timeout_seconds ?? 90) * 1000;
         const parsed = await callSubsystemJson('ModifyStateTree', {
