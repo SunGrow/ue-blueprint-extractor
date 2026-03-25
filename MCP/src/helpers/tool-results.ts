@@ -104,6 +104,19 @@ export function createToolResultNormalizers({
     const diagnostics = Array.isArray(payload.diagnostics)
       ? payload.diagnostics
       : [];
+
+    // Merge diagnostics from ueResponse if the error carries one (set by callSubsystemJson).
+    if (
+      diagnostics.length === 0
+      && payloadOrError instanceof Error
+      && isRecord((payloadOrError as any).ueResponse)
+    ) {
+      const ueResp = (payloadOrError as any).ueResponse as Record<string, unknown>;
+      if (Array.isArray(ueResp.diagnostics)) {
+        diagnostics.push(...ueResp.diagnostics);
+      }
+    }
+
     const firstDiagnostic = diagnostics.find((candidate) => (
       isRecord(candidate)
       && typeof candidate.message === 'string'

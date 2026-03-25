@@ -170,6 +170,22 @@ describe('tool result normalizers', () => {
     expect(msg).toBe('plain failure reason');
   });
 
+  it('extracts diagnostics from Error.ueResponse when available', () => {
+    const err = new Error('Schema class not found');
+    (err as any).ueResponse = {
+      success: false,
+      diagnostics: [
+        { severity: 'error', code: 'SCHEMA_NOT_FOUND', message: 'Schema class not found: /Script/Foo.Bar' },
+        { severity: 'warning', message: 'F-prefix was auto-normalized' },
+      ],
+    };
+
+    const result = normalizeToolError('create_state_tree', err);
+    const structured = result.structuredContent as Record<string, unknown>;
+    expect(structured.diagnostics).toHaveLength(2);
+    expect((structured.diagnostics as any[])[0].code).toBe('SCHEMA_NOT_FOUND');
+  });
+
   it('normalizes errors without re-emitting text blocks and preserves non-text artifacts', () => {
     const result = normalizeToolError(
       'extract_blueprint',
