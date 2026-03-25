@@ -29,6 +29,7 @@ type RegisterSchemaAndAiAuthoringToolsOptions = {
 /**
  * Recursively walks a payload object and normalizes all `nodeStructType` values
  * by stripping the C++ F-prefix from USTRUCT script paths.
+ * Also validates that nodeStructType paths match the expected `/Script/...` pattern.
  */
 function normalizePayloadPaths(obj: unknown, warnings: string[]): unknown {
   if (Array.isArray(obj)) return obj.map(item => normalizePayloadPaths(item, warnings));
@@ -49,6 +50,51 @@ function normalizePayloadPaths(obj: unknown, warnings: string[]): unknown {
     return result;
   }
   return obj;
+}
+
+/**
+ * Validates that all `nodeStructType` values in the payload use the correct
+ * `/Script/Module.ClassName` path format. Collects warnings for paths that
+ * look like Blueprint asset paths, raw class names, or other incorrect formats.
+ *
+ * This runs AFTER normalizePayloadPaths so F-prefix issues are already resolved.
+ */
+function validateNodeStructTypes(obj: unknown, warnings: string[]): void {
+  if (Array.isArray(obj)) {
+    for (const item of obj) validateNodeStructTypes(item, warnings);
+    return;
+  }
+  if (obj && typeof obj === 'object') {
+    const record = obj as Record<string, unknown>;
+    for (const [key, value] of Object.entries(record)) {
+      if (key === 'nodeStructType' && typeof value === 'string') {
+        if (!value.startsWith('/Script/')) {
+          if (value.startsWith('/Game/') || value.startsWith('/Content/')) {
+            warnings.push(
+              `Warning: nodeStructType "${value}" looks like a Blueprint asset path. `
+              + 'nodeStructType should be a C++ USTRUCT script path (e.g., "/Script/Module.ClassName")',
+            );
+          } else if (!value.includes('/')) {
+            warnings.push(
+              `Warning: nodeStructType "${value}" is a bare class name. `
+              + 'Use the full script path format: "/Script/ModuleName.ClassName"',
+            );
+          } else {
+            warnings.push(
+              `Warning: nodeStructType "${value}" does not match the expected /Script/Module.ClassName pattern`,
+            );
+          }
+        } else if (!value.includes('.')) {
+          warnings.push(
+            `Warning: nodeStructType "${value}" is missing the class name after the module path. `
+            + 'Expected format: "/Script/Module.ClassName"',
+          );
+        }
+      } else {
+        validateNodeStructTypes(value, warnings);
+      }
+    }
+  }
 }
 
 /**
@@ -583,6 +629,9 @@ export function registerSchemaAndAiAuthoringTools({
         const normalizedPayload = normalizePayloadPaths(payload ?? {}, normWarnings);
         warnings.push(...normWarnings);
 
+        // Validate nodeStructType path formats after normalization
+        validateNodeStructTypes(normalizedPayload, warnings);
+
         const timeoutMs = (timeout_seconds ?? 120) * 1000;
         const parsed = await callSubsystemJson('CreateStateTree', {
           AssetPath: asset_path,
@@ -592,8 +641,9 @@ export function registerSchemaAndAiAuthoringTools({
         const result = warnings.length > 0
           ? { ...parsed as Record<string, unknown>, warnings }
           : parsed;
-        const extraContent = normWarnings.length > 0
-          ? [{ type: 'text' as const, text: normWarnings.join('\n') }]
+        const allWarnings = [...normWarnings, ...warnings.filter(w => !normWarnings.includes(w))];
+        const extraContent = allWarnings.length > 0
+          ? [{ type: 'text' as const, text: allWarnings.join('\n') }]
           : undefined;
         return jsonToolSuccess(result, { extraContent });
       } catch (error) {
@@ -664,6 +714,9 @@ export function registerSchemaAndAiAuthoringTools({
         const normalizedPayload = normalizePayloadPaths(payload ?? {}, normWarnings);
         warnings.push(...normWarnings);
 
+        // Validate nodeStructType path formats after normalization
+        validateNodeStructTypes(normalizedPayload, warnings);
+
         const timeoutMs = (timeout_seconds ?? 90) * 1000;
         const parsed = await callSubsystemJson('ModifyStateTree', {
           AssetPath: asset_path,
@@ -674,8 +727,9 @@ export function registerSchemaAndAiAuthoringTools({
         const result = warnings.length > 0
           ? { ...parsed as Record<string, unknown>, warnings }
           : parsed;
-        const extraContent = normWarnings.length > 0
-          ? [{ type: 'text' as const, text: normWarnings.join('\n') }]
+        const allWarnings = [...normWarnings, ...warnings.filter(w => !normWarnings.includes(w))];
+        const extraContent = allWarnings.length > 0
+          ? [{ type: 'text' as const, text: allWarnings.join('\n') }]
           : undefined;
         return jsonToolSuccess(result, { extraContent });
       } catch (error) {

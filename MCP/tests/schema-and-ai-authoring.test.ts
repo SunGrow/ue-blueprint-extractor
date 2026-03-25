@@ -751,4 +751,280 @@ describe('registerSchemaAndAiAuthoringTools', () => {
     const parsed = parseDirectToolResult(result) as Record<string, unknown>;
     expect(parsed.warnings).toBeUndefined();
   });
+
+  // --- Task 12: Extended validation tests ---
+
+  it('create_state_tree warns when nodeStructType uses Blueprint asset path format', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_BadPath',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_BadPath',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Active',
+            nodeStructType: '/Game/Blueprints/BP_MyTask.BP_MyTask_C',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) =>
+      w.includes('/Game/Blueprints/BP_MyTask.BP_MyTask_C')
+      && w.includes('Blueprint asset path'),
+    )).toBe(true);
+  });
+
+  it('create_state_tree warns when nodeStructType is a bare class name', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_Bare',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_Bare',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Active',
+            nodeStructType: 'STCMyTask',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) =>
+      w.includes('STCMyTask')
+      && w.includes('bare class name'),
+    )).toBe(true);
+  });
+
+  it('create_state_tree warns when nodeStructType is missing class name after module', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_NoDot',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_NoDot',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Active',
+            nodeStructType: '/Script/MyModule',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) =>
+      w.includes('/Script/MyModule')
+      && w.includes('missing the class name'),
+    )).toBe(true);
+  });
+
+  it('create_state_tree warns for unrecognized nodeStructType path format', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_Odd',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_Odd',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Active',
+            nodeStructType: '/Content/Custom/MyTask',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) =>
+      w.includes('/Content/Custom/MyTask')
+      && w.includes('Blueprint asset path'),
+    )).toBe(true);
+  });
+
+  it('create_state_tree does not warn for valid /Script/Module.ClassName nodeStructType', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_Good',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_Good',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Active',
+            nodeStructType: '/Script/MyModule.STCMyTask',
+          },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.warnings).toBeUndefined();
+  });
+
+  it('create_state_tree normalizes F-prefix in deeply nested tasks and conditions', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_Deep',
+    })));
+
+    await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_Deep',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [
+          {
+            name: 'Root',
+            type: 'State',
+            children: [
+              {
+                name: 'Combat',
+                type: 'State',
+                tasks: [
+                  { nodeStructType: '/Script/MyMod.FSTCAttack', name: 'AttackTask' },
+                  { nodeStructType: '/Script/MyMod.FSTCDefend', name: 'DefendTask' },
+                ],
+                enterConditions: [
+                  { nodeStructType: '/Script/MyMod.FSTCHasTarget' },
+                ],
+                transitions: [
+                  {
+                    targetState: { stateName: 'Root' },
+                    conditions: [
+                      { nodeStructType: '/Script/MyMod.FSTCHealthLow' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        globalTasks: [
+          { nodeStructType: '/Script/MyMod.FSTCGlobalEval', name: 'GlobalEval' },
+        ],
+      },
+      validate_only: false,
+    });
+
+    const payloadArg = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(payloadArg.PayloadJson as string) as Record<string, unknown>;
+
+    // Check nested task normalization
+    const states = sentPayload.states as Array<Record<string, unknown>>;
+    const rootChildren = states[0].children as Array<Record<string, unknown>>;
+    const combatTasks = rootChildren[0].tasks as Array<Record<string, unknown>>;
+    expect(combatTasks[0].nodeStructType).toBe('/Script/MyMod.STCAttack');
+    expect(combatTasks[1].nodeStructType).toBe('/Script/MyMod.STCDefend');
+
+    // Check nested condition normalization
+    const enterConditions = rootChildren[0].enterConditions as Array<Record<string, unknown>>;
+    expect(enterConditions[0].nodeStructType).toBe('/Script/MyMod.STCHasTarget');
+
+    // Check transition condition normalization
+    const transitions = rootChildren[0].transitions as Array<Record<string, unknown>>;
+    const transConditions = transitions[0].conditions as Array<Record<string, unknown>>;
+    expect(transConditions[0].nodeStructType).toBe('/Script/MyMod.STCHealthLow');
+
+    // Check globalTasks normalization
+    const globalTasks = sentPayload.globalTasks as Array<Record<string, unknown>>;
+    expect(globalTasks[0].nodeStructType).toBe('/Script/MyMod.STCGlobalEval');
+  });
+
+  it('modify_state_tree validates nodeStructType paths in replace_tree payload', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    const result = await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Main',
+      operation: 'replace_tree',
+      payload: {
+        stateTree: {
+          states: [
+            {
+              name: 'A',
+              nodeStructType: '/Game/BadPath/BP_Task.BP_Task_C',
+            },
+          ],
+        },
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) => w.includes('Blueprint asset path'))).toBe(true);
+  });
+
+  it('create_state_tree schema validation error has actionable message', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_NoSchema',
+      payload: { states: [{ name: 'Idle' }] },
+      validate_only: false,
+    });
+
+    const typed = result as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+    expect(typed.isError).toBe(true);
+    expect(typed.content![0].text).toContain('schema is required');
+    expect(typed.content![0].text).toContain('payload.schema');
+    expect(typed.content![0].text).toContain('/Script/');
+  });
+
+  it('create_state_tree warns for schema path that does not start with /Script/', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_BadSchema',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_BadSchema',
+      payload: {
+        schema: 'GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [{ name: 'Idle' }],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) => w.includes('does not match expected /Script/'))).toBe(true);
+  });
 });
