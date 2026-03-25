@@ -942,6 +942,281 @@ describe('registerProjectControlTools', () => {
     expect(parsed.operation).toBe('sync_project_code');
   });
 
+  it('reports failedStep as "live_coding" when live coding throws and cannot fallback', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'live_coding',
+        restartRequired: false,
+        reasons: [],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async (method) => {
+        if (method === 'TriggerLiveCoding') throw new Error('live coding module crashed');
+        return { success: true };
+      }),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.cpp'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.strategy).toBe('live_coding');
+    expect(parsed.failedStep).toBe('live_coding');
+    expect(parsed.stepErrors).toBeDefined();
+    expect((parsed.stepErrors as Record<string, string>).liveCoding).toBe('live coding module crashed');
+  });
+
+  it('reports failedStep as "save" when SaveAssets returns success=false', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async (method) => {
+        if (method === 'SaveAssets') return { success: false, error: 'disk full' };
+        return { success: true };
+      }),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.h'],
+      save_asset_paths: ['/Game/Maps/MainLevel'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.stepErrors).toBeDefined();
+    expect((parsed.stepErrors as Record<string, string>).save).toBe('SaveAssets returned success=false');
+    expect(parsed.failedStep).toBe('save');
+  });
+
+  it('reports failedStep as "restart" when RestartEditor returns success=false', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async (method) => {
+        if (method === 'SaveAssets') return { success: true };
+        if (method === 'RestartEditor') return { success: false, error: 'editor busy' };
+        throw new Error(`Unexpected method ${method}`);
+      }),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.h'],
+      save_asset_paths: ['/Game/Maps/MainLevel'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.stepErrors).toBeDefined();
+    expect((parsed.stepErrors as Record<string, string>).restart).toBe('RestartEditor returned success=false');
+    expect(parsed.failedStep).toBe('restart');
+  });
+
+  it('reports stepErrors for reconnect when waitForEditorRestart throws', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+      waitForEditorRestart: vi.fn(async () => {
+        throw new Error('reconnect timed out');
+      }),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async (method) => {
+        if (method === 'SaveAssets') return { success: true };
+        if (method === 'RestartEditor') return { success: true, operation: 'RestartEditor' };
+        throw new Error(`Unexpected method ${method}`);
+      }),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.h'],
+      save_asset_paths: ['/Game/Maps/MainLevel'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.stepErrors).toBeDefined();
+    expect((parsed.stepErrors as Record<string, string>).reconnect).toBe('reconnect timed out');
+  });
+
+  it('includes stepErrors in success response when save throws but is non-critical', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async (method) => {
+        if (method === 'SaveAssets') throw new Error('asset lock conflict');
+        if (method === 'RestartEditor') return { success: true, operation: 'RestartEditor' };
+        throw new Error(`Unexpected method ${method}`);
+      }),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.h'],
+      save_asset_paths: ['/Game/Maps/MainLevel'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    // Save is non-critical, so the overall operation should still succeed if reconnect succeeds
+    expect(parsed.success).toBe(true);
+    expect(parsed.stepErrors).toBeDefined();
+    expect((parsed.stepErrors as Record<string, string>).save).toBe('asset lock conflict');
+    // No failedStep since the overall operation succeeded
+    expect(parsed.failedStep).toBeUndefined();
+  });
+
+  it('outer catch preserves stepErrors and failedStep from earlier steps', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    // classifyChangedPaths is NOT wrapped in a try/catch inside the handler.
+    // If it throws after the init step, the outer catch will fire
+    // with currentStep still at 'init' and any prior stepErrors.
+    // To test with accumulated stepErrors we need to reach the outer catch
+    // after an inner step recorded a stepError. The most realistic scenario
+    // is a crash in an unwrapped area. Since classifyChangedPaths throws
+    // before inner steps, stepErrors will be empty — but the outer catch
+    // should still include the empty stepErrors and the correct failedStep.
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => {
+        throw new Error('unexpected path classification error');
+      }),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true })),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.cpp'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.operation).toBe('sync_project_code');
+    // Outer catch always includes stepErrors (even if empty) and failedStep
+    expect(parsed).toHaveProperty('stepErrors');
+    expect(parsed).toHaveProperty('failedStep');
+    expect(parsed.failedStep).toBe('init');
+    expect(parsed).toHaveProperty('changedPaths');
+    expect(parsed.message).toContain('unexpected path classification error');
+  });
+
   it('identifies failedStep as "build" when build step throws', async () => {
     const registry = createToolRegistry();
     const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
