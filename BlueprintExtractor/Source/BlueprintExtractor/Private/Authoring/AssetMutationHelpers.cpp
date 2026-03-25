@@ -306,6 +306,30 @@ TSharedPtr<FJsonObject> FAssetMutationContext::BuildResult(const bool bSuccess) 
 	Result->SetArrayField(TEXT("dirtyPackages"), ToJsonArray(DirtyPackages));
 	Result->SetArrayField(TEXT("diagnostics"), ToDiagnosticsArray(Diagnostics));
 
+	// Synthesize a top-level message from diagnostics so the MCP layer
+	// always has a human-readable summary even without parsing the array.
+	if (!bSuccess)
+	{
+		FString Message;
+		for (const FAssetMutationDiagnostic& Diag : Diagnostics)
+		{
+			if (Diag.Severity == TEXT("error") && !Diag.Message.IsEmpty())
+			{
+				if (!Message.IsEmpty())
+				{
+					Message += TEXT("; ");
+				}
+				Message += Diag.Message;
+			}
+		}
+		if (Message.IsEmpty())
+		{
+			Message = FString::Printf(TEXT("%s failed for '%s' with no diagnostic details."),
+				*Operation, *AssetPath);
+		}
+		Result->SetStringField(TEXT("message"), Message);
+	}
+
 	if (ValidationSummary.IsValid())
 	{
 		Result->SetObjectField(TEXT("validation"), ValidationSummary);
