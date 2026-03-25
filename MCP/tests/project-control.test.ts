@@ -1360,4 +1360,190 @@ describe('registerProjectControlTools', () => {
       'editor not connected',
     );
   });
+
+  // --- Phase 5: critical coverage gaps ---
+
+  it('sync_project_code restart_first=true orchestrates shutdown-build-launch sequence', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'RestartEditor') return { success: true, operation: 'RestartEditor' };
+      return { success: true };
+    });
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_changes'],
+      })),
+      waitForEditorRestart: vi.fn(async () => ({
+        success: true,
+        operation: 'restart_editor',
+        disconnected: true,
+        reconnected: true,
+        disconnectTimeoutMs: 2000,
+        reconnectTimeoutMs: 3000,
+        diagnostics: [],
+      })),
+    });
+    const clearProjectAutomationContext = vi.fn();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.cpp'],
+      restart_first: true,
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 2,
+      reconnect_timeout_seconds: 3,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.strategy).toBe('restart_first');
+    // RestartEditor should be called with bRelaunch: false (shutdown only)
+    expect(callSubsystemJson).toHaveBeenCalledWith('RestartEditor', {
+      bWarn: false,
+      bSaveDirtyAssets: true,
+      bRelaunch: false,
+    });
+    // launchEditor should be called after build
+    expect(projectController.launchEditor).toHaveBeenCalled();
+  });
+
+  it('compile_project_code locked_file contract: success=false, compilationSucceeded=true, errorCategory=locked_file', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      compileProjectCode: vi.fn(async () => ({
+        success: false,
+        operation: 'compile_project_code',
+        strategy: 'external_build',
+        engineRoot: 'C:/UE',
+        projectPath: 'C:/Proj/Proj.uproject',
+        projectDir: 'C:/Proj',
+        target: 'ProjEditor',
+        platform: 'Win64',
+        configuration: 'Development',
+        command: { executable: 'Build.bat', args: [] },
+        durationMs: 5000,
+        exitCode: 1,
+        compilationSucceeded: true,
+        restartRequired: true,
+        restartReasons: ['external_build_completed'],
+        outputIncluded: false,
+        errorCategory: 'locked_file',
+        errorSummary: 'Build failed: UnrealEditor-MyGame.dll locked by another process.',
+        lockedFiles: ['UnrealEditor-MyGame.dll'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true })),
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('compile_project_code').handler({
+      include_output: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.compilationSucceeded).toBe(true);
+    expect(parsed.errorCategory).toBe('locked_file');
+    expect(parsed.lockedFiles).toEqual(['UnrealEditor-MyGame.dll']);
+  });
+
+  it('trigger_live_coding NoChanges at tool level includes new-file warning', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      compileResult: 'NoChanges',
+      noOp: true,
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('trigger_live_coding').handler({
+      changed_paths: ['Source/NewFile.cpp'],
+      wait_for_completion: true,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.fallbackRecommended).toBe(true);
+    expect(parsed.reason).toBe('live_coding_reported_nochanges');
+    const warnings = parsed.warnings as string[];
+    expect(warnings.some((w: string) => w.includes('newly added'))).toBe(true);
+  });
+
+  it('restart_editor returns error when subsystem throws on both attempts', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('Remote Control connection refused');
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: true,
+      force_kill: false,
+      wait_for_reconnect: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = getTextContent(result as { content?: Array<{ text?: string; type: string }> });
+    expect(text).toContain('restart_editor failed after retry');
+    expect(text).toContain('Remote Control connection refused');
+    expect(callSubsystemJson).toHaveBeenCalledTimes(2);
+  });
 });
