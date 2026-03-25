@@ -1036,6 +1036,54 @@ static bool PatchComponent(UBlueprint* Blueprint,
 	return OutErrors.Num() == 0;
 }
 
+static bool AddComponent(UBlueprint* Blueprint,
+                         const TSharedPtr<FJsonObject>& Payload,
+                         TArray<FString>& OutErrors)
+{
+	if (!Blueprint || !Blueprint->SimpleConstructionScript)
+	{
+		OutErrors.Add(TEXT("Blueprint does not support component authoring (no SimpleConstructionScript)."));
+		return false;
+	}
+
+	USCS_Node* ParentNode = nullptr;
+	FString ParentComponentName;
+	if (Payload->TryGetStringField(TEXT("parentComponentName"), ParentComponentName)
+		&& !ParentComponentName.IsEmpty())
+	{
+		ParentNode =
+			Blueprint->SimpleConstructionScript->FindSCSNode(FName(*ParentComponentName));
+		if (!ParentNode)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Parent component '%s' was not found."),
+				*ParentComponentName));
+			return false;
+		}
+	}
+
+	// Collect existing component names to avoid duplicates
+	TSet<FName> UsedNames;
+	for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+	{
+		if (Node)
+		{
+			UsedNames.Add(Node->GetVariableName());
+		}
+	}
+
+	// Use the component definition from payload — either nested under "component" or the payload itself
+	const TSharedPtr<FJsonObject>* ComponentObject = nullptr;
+	TSharedPtr<FJsonObject> EffectivePayload = Payload;
+	if (Payload->TryGetObjectField(TEXT("component"), ComponentObject)
+		&& ComponentObject && (*ComponentObject).IsValid())
+	{
+		EffectivePayload = *ComponentObject;
+	}
+
+	return BuildComponentTree(Blueprint, ParentNode, EffectivePayload, UsedNames, OutErrors);
+}
+
 static bool ApplyFunctionStub(UEdGraph* Graph,
                               const TSharedPtr<FJsonObject>& FunctionObject,
                               TArray<FString>& OutErrors)
@@ -1464,6 +1512,13 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 		OutMutationFlags |=
 			EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
 		return PatchComponent(Blueprint, Payload, OutErrors);
+	}
+
+	if (Operation == TEXT("add_component"))
+	{
+		OutMutationFlags |=
+			EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		return AddComponent(Blueprint, Payload, OutErrors);
 	}
 
 	if (Operation == TEXT("replace_function_stubs"))
