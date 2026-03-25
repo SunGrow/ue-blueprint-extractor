@@ -1867,7 +1867,11 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Create(const FString& AssetPath,
 
 	if (DoesAssetExist(AssetPath))
 	{
-		Context.AddError(TEXT("asset_exists"), FString::Printf(TEXT("Asset already exists: %s"), *AssetPath), AssetPath);
+		Context.AddError(TEXT("asset_exists"),
+			FString::Printf(TEXT("[Step 1/4: Pre-check] Asset already exists at '%s'. "
+				"Use modify_state_tree to update an existing StateTree, or choose a different path."),
+				*AssetPath),
+			AssetPath);
 		return Context.BuildResult(false);
 	}
 
@@ -1875,7 +1879,9 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Create(const FString& AssetPath,
 	UStateTree* PreviewTree = CreateTransientStateTree(Payload, PreviewErrors);
 	for (const FString& Error : PreviewErrors)
 	{
-		Context.AddError(TEXT("validation_error"), Error, AssetPath);
+		Context.AddError(TEXT("validation_error"),
+			FString::Printf(TEXT("[Step 2/4: Preview Validation] %s"), *Error),
+			AssetPath);
 	}
 	if (!PreviewTree)
 	{
@@ -1886,15 +1892,17 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Create(const FString& AssetPath,
 	ApplyOperation(PreviewTree, TEXT("replace_tree"), Payload, ValidationErrors, true);
 	if (ValidationErrors.Num() > 0)
 	{
-		Context.SetValidationSummary(false, TEXT("StateTree payload failed validation."), ValidationErrors);
+		Context.SetValidationSummary(false, TEXT("[Step 2/4: Preview Validation] StateTree payload failed validation."), ValidationErrors);
 		for (const FString& Error : ValidationErrors)
 		{
-			Context.AddError(TEXT("validation_error"), Error, AssetPath);
+			Context.AddError(TEXT("validation_error"),
+				FString::Printf(TEXT("[Step 2/4: Preview Validation] %s"), *Error),
+				AssetPath);
 		}
 		return Context.BuildResult(false);
 	}
 
-	if (!ValidateAndCompile(PreviewTree, Context, TEXT("StateTree payload validated."), TEXT("StateTree payload failed validation.")))
+	if (!ValidateAndCompile(PreviewTree, Context, TEXT("StateTree payload validated."), TEXT("[Step 2/4: Preview Validation] StateTree payload failed compile validation.")))
 	{
 		return Context.BuildResult(false);
 	}
@@ -1909,7 +1917,11 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Create(const FString& AssetPath,
 	UPackage* Package = CreatePackage(*AssetPath);
 	if (!Package)
 	{
-		Context.AddError(TEXT("package_create_failed"), FString::Printf(TEXT("Failed to create package: %s"), *AssetPath), AssetPath);
+		Context.AddError(TEXT("package_create_failed"),
+			FString::Printf(TEXT("[Step 3/4: Asset Creation] Failed to create package for '%s'. "
+				"Verify the path is valid and the parent directory exists."),
+				*AssetPath),
+			AssetPath);
 		return Context.BuildResult(false);
 	}
 
@@ -1917,7 +1929,11 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Create(const FString& AssetPath,
 	UStateTree* StateTree = NewObject<UStateTree>(Package, AssetName, RF_Public | RF_Standalone | RF_Transactional);
 	if (!StateTree)
 	{
-		Context.AddError(TEXT("asset_create_failed"), FString::Printf(TEXT("Failed to create StateTree asset: %s"), *AssetPath), AssetPath);
+		Context.AddError(TEXT("asset_create_failed"),
+			FString::Printf(TEXT("[Step 3/4: Asset Creation] Failed to create StateTree object '%s' in package '%s'. "
+				"The object name may conflict with an existing object."),
+				*AssetName.ToString(), *AssetPath),
+			AssetPath);
 		return Context.BuildResult(false);
 	}
 
@@ -1926,7 +1942,9 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Create(const FString& AssetPath,
 	{
 		for (const FString& Error : ValidationErrors)
 		{
-			Context.AddError(TEXT("apply_error"), Error, AssetPath);
+			Context.AddError(TEXT("apply_error"),
+				FString::Printf(TEXT("[Step 3/4: Asset Creation — Schema Application] %s"), *Error),
+				AssetPath);
 		}
 		return Context.BuildResult(false);
 	}
@@ -1942,12 +1960,14 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Create(const FString& AssetPath,
 	{
 		for (const FString& Error : ValidationErrors)
 		{
-			Context.AddError(TEXT("apply_error"), Error, AssetPath);
+			Context.AddError(TEXT("apply_error"),
+				FString::Printf(TEXT("[Step 3/4: Asset Creation — Tree Population] %s"), *Error),
+				AssetPath);
 		}
 		return Context.BuildResult(false);
 	}
 
-	if (!ValidateAndCompile(StateTree, Context, TEXT("StateTree compiled successfully."), TEXT("StateTree compile failed.")))
+	if (!ValidateAndCompile(StateTree, Context, TEXT("StateTree compiled successfully."), TEXT("[Step 4/4: Final Compile] StateTree compile failed after asset creation.")))
 	{
 		return Context.BuildResult(false);
 	}

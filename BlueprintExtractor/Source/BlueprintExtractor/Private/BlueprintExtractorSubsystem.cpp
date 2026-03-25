@@ -2453,7 +2453,7 @@ FString UBlueprintExtractorSubsystem::CreateStateTree(
 	{
 		TSharedPtr<FJsonObject> Fallback = MakeShared<FJsonObject>();
 		Fallback->SetBoolField(TEXT("success"), false);
-		Fallback->SetStringField(TEXT("error"), TEXT("StateTree creation failed with no diagnostic context"));
+		Fallback->SetStringField(TEXT("error"), TEXT("StateTree creation failed with no diagnostic context — this is a bug, please report"));
 		return SerializeJsonObject(Fallback);
 	}
 
