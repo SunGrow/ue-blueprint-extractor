@@ -37,6 +37,23 @@ export async function callSubsystemJson(
     }
   }
 
+  // Catch structured error responses with diagnostics but no explicit message.
+  // These come from FAssetMutationContext.BuildResult(false) in the C++ plugin.
+  if (parsed.success === false
+    && Array.isArray(parsed.diagnostics)
+    && parsed.diagnostics.length > 0) {
+    const messages = parsed.diagnostics
+      .filter((d: unknown): d is Record<string, unknown> =>
+        typeof d === 'object' && d !== null && typeof (d as Record<string, unknown>).message === 'string')
+      .map((d: Record<string, unknown>) => d.message as string);
+    const synthesized = messages.length > 0
+      ? messages.join('; ')
+      : `Operation failed with ${parsed.diagnostics.length} diagnostic(s)`;
+    const err = new Error(synthesized);
+    (err as any).ueResponse = parsed;
+    throw err;
+  }
+
   if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
     const firstError = parsed.errors[0];
     throw new Error(typeof firstError === 'string' ? firstError : JSON.stringify(firstError));

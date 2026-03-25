@@ -109,6 +109,34 @@ describe('callSubsystemJson', () => {
     expect(stderrSpy).not.toHaveBeenCalled();
     stderrSpy.mockRestore();
   });
+
+  it('throws on { success: false } with diagnostics array', async () => {
+    const fakeClient = {
+      callSubsystem: async () => JSON.stringify({
+        success: false,
+        diagnostics: [
+          { severity: 'error', message: 'Schema class not found: /Script/Foo.BarSchema' },
+          { severity: 'error', message: 'nodeStructType not resolved: /Script/Foo.BazTask' },
+        ],
+      }),
+    };
+
+    await expect(callSubsystemJson(fakeClient, 'CreateStateTree', {}))
+      .rejects.toThrow('Schema class not found');
+  });
+
+  it('passes through { success: false } without diagnostics for orchestration', async () => {
+    const fakeClient = {
+      callSubsystem: async () => JSON.stringify({
+        success: false,
+        strategy: 'build_and_restart',
+      }),
+    };
+
+    const result = await callSubsystemJson(fakeClient, 'SyncProjectCode', {});
+    expect(result.success).toBe(false);
+    expect(result.strategy).toBe('build_and_restart');
+  });
 });
 
 describe('normalizeUStructPath', () => {
