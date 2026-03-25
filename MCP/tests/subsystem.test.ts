@@ -137,6 +137,26 @@ describe('callSubsystemJson', () => {
     expect(result.success).toBe(false);
     expect(result.strategy).toBe('build_and_restart');
   });
+
+  it('preserves ueResponse on errors thrown from { error: "..." } responses', async () => {
+    const fakeClient = {
+      callSubsystem: async () => JSON.stringify({
+        error: 'Component not found',
+        errorCode: 'COMPONENT_NOT_FOUND',
+        details: { componentName: 'Foo' },
+      }),
+    };
+
+    try {
+      await callSubsystemJson(fakeClient, 'PatchComponent', {});
+      expect.fail('Should have thrown');
+    } catch (err: any) {
+      expect(err.message).toBe('Component not found');
+      expect(err.ueResponse).toBeDefined();
+      expect(err.ueResponse.errorCode).toBe('COMPONENT_NOT_FOUND');
+      expect(err.ueResponse.details).toEqual({ componentName: 'Foo' });
+    }
+  });
 });
 
 describe('normalizeUStructPath', () => {

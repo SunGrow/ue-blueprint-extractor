@@ -24,7 +24,9 @@ export async function callSubsystemJson(
   const parsed = JSON.parse(result) as Record<string, unknown>;
 
   if (typeof parsed.error === 'string' && parsed.error.length > 0) {
-    throw new Error(parsed.error);
+    const err = new Error(parsed.error);
+    (err as any).ueResponse = parsed;
+    throw err;
   }
 
   // Check for error-only failure responses (success: false with an explicit error message
@@ -33,7 +35,9 @@ export async function callSubsystemJson(
   if (parsed.success === false) {
     const explicitMessage = parsed.message ?? parsed.errorMessage;
     if (typeof explicitMessage === 'string' && explicitMessage.length > 0) {
-      throw new Error(explicitMessage);
+      const err = new Error(explicitMessage);
+      (err as any).ueResponse = parsed;
+      throw err;
     }
   }
 
@@ -56,7 +60,9 @@ export async function callSubsystemJson(
 
   if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
     const firstError = parsed.errors[0];
-    throw new Error(typeof firstError === 'string' ? firstError : JSON.stringify(firstError));
+    const err = new Error(typeof firstError === 'string' ? firstError : JSON.stringify(firstError));
+    (err as any).ueResponse = parsed;
+    throw err;
   }
 
   if (Object.keys(parsed).length === 0) {
