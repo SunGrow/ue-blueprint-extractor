@@ -16,6 +16,7 @@
 #include "StateTreeEditingSubsystem.h"
 #include "StateTreeEditorData.h"
 #include "StateTreeEditorModule.h"
+#include "StateTreeEditorPropertyBindings.h"
 #include "StateTreeSchema.h"
 #include "StateTreeState.h"
 #include "StateTreeTaskBase.h"
@@ -1556,6 +1557,19 @@ static bool ReplaceTree(UStateTree* StateTree,
 	}
 
 	ResolveDeferredLinks(EditorData, Scratch, OutErrors);
+
+	// Apply bindings if provided
+	if (const TSharedPtr<FJsonObject>* BindingsObj = nullptr;
+		Payload.IsValid() && Payload->TryGetObjectField(TEXT("bindings"), BindingsObj)
+		&& BindingsObj && BindingsObj->IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* BindingValues = nullptr;
+		if ((*BindingsObj)->TryGetArrayField(TEXT("propertyBindings"), BindingValues) && BindingValues)
+		{
+			ApplyBindingsFromJson(EditorData, *BindingValues, OutErrors, TEXT("bindings.propertyBindings"));
+		}
+	}
+
 	return OutErrors.Num() == 0;
 }
 
@@ -1823,6 +1837,263 @@ static bool SetSchema(UStateTree* StateTree,
 	return SchemaClass && EnsureEditorData(StateTree, SchemaClass, OutErrors) != nullptr;
 }
 
+static bool ParsePropertyPathFromJson(const TSharedPtr<FJsonObject>& PathObject,
+                                      FPropertyBindingPath& OutPath,
+                                      TArray<FString>& OutErrors,
+                                      const FString& Path)
+{
+	if (!PathObject.IsValid())
+	{
+		OutErrors.Add(FString::Printf(TEXT("%s must be an object."), *Path));
+		return false;
+	}
+
+#if WITH_EDITORONLY_DATA
+	FString StructIdString;
+	if (PathObject->TryGetStringField(TEXT("structId"), StructIdString) && !StructIdString.IsEmpty())
+	{
+		FGuid StructId;
+		if (ParseGuidString(StructIdString, StructId))
+		{
+			OutPath.SetStructID(StructId);
+		}
+		else
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s.structId '%s' is not a valid GUID."), *Path, *StructIdString));
+			return false;
+		}
+	}
+#endif
+
+	const TArray<TSharedPtr<FJsonValue>>* Segments = nullptr;
+	if (PathObject->TryGetArrayField(TEXT("segments"), Segments) && Segments)
+	{
+		for (int32 Index = 0; Index < Segments->Num(); ++Index)
+		{
+			const TSharedPtr<FJsonObject> SegObj = (*Segments)[Index].IsValid() ? (*Segments)[Index]->AsObject() : nullptr;
+			if (!SegObj.IsValid())
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s.segments[%d] must be an object."), *Path, Index));
+				continue;
+			}
+
+			FString SegName;
+			if (!SegObj->TryGetStringField(TEXT("name"), SegName) || SegName.IsEmpty())
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s.segments[%d].name is required."), *Path, Index));
+				continue;
+			}
+
+			int32 ArrayIndex = INDEX_NONE;
+			double ArrayIndexDouble = 0;
+			if (SegObj->TryGetNumberField(TEXT("arrayIndex"), ArrayIndexDouble))
+			{
+				ArrayIndex = static_cast<int32>(ArrayIndexDouble);
+			}
+
+			const UStruct* InstanceStruct = nullptr;
+			FString InstanceStructPath;
+			if (SegObj->TryGetStringField(TEXT("instanceStruct"), InstanceStructPath) && !InstanceStructPath.IsEmpty())
+			{
+				InstanceStruct = FAuthoringHelpers::ResolveScriptStruct(InstanceStructPath);
+				if (!InstanceStruct)
+				{
+					InstanceStruct = FAuthoringHelpers::ResolveClass(InstanceStructPath, nullptr);
+				}
+				if (!InstanceStruct)
+				{
+					OutErrors.Add(FString::Printf(TEXT("%s.segments[%d].instanceStruct '%s' could not be resolved."),
+						*Path, Index, *InstanceStructPath));
+				}
+			}
+
+			OutPath.AddPathSegment(FName(*SegName), ArrayIndex, InstanceStruct);
+		}
+	}
+
+	return OutErrors.Num() == 0;
+}
+
+static bool ApplyBindingsFromJson(UStateTreeEditorData* EditorData,
+                                  const TArray<TSharedPtr<FJsonValue>>& BindingValues,
+                                  TArray<FString>& OutErrors,
+                                  const FString& Path)
+{
+	if (!EditorData)
+	{
+		OutErrors.Add(TEXT("EditorData is null."));
+		return false;
+	}
+
+	FStateTreeEditorPropertyBindings* Bindings = EditorData->GetPropertyEditorBindings();
+	if (!Bindings)
+	{
+		OutErrors.Add(TEXT("Could not get property editor bindings."));
+		return false;
+	}
+
+	for (int32 Index = 0; Index < BindingValues.Num(); ++Index)
+	{
+		const TSharedPtr<FJsonObject> BindingObj = BindingValues[Index].IsValid() ? BindingValues[Index]->AsObject() : nullptr;
+		if (!BindingObj.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s[%d] must be an object."), *Path, Index));
+			continue;
+		}
+
+		const TSharedPtr<FJsonObject>* SourcePathObj = nullptr;
+		const TSharedPtr<FJsonObject>* TargetPathObj = nullptr;
+		if (!BindingObj->TryGetObjectField(TEXT("sourcePath"), SourcePathObj) || !SourcePathObj || !SourcePathObj->IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s[%d].sourcePath is required."), *Path, Index));
+			continue;
+		}
+		if (!BindingObj->TryGetObjectField(TEXT("targetPath"), TargetPathObj) || !TargetPathObj || !TargetPathObj->IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s[%d].targetPath is required."), *Path, Index));
+			continue;
+		}
+
+		FPropertyBindingPath SourcePath;
+		FPropertyBindingPath TargetPath;
+
+		TArray<FString> PathErrors;
+		ParsePropertyPathFromJson(*SourcePathObj, SourcePath, PathErrors, FString::Printf(TEXT("%s[%d].sourcePath"), *Path, Index));
+		ParsePropertyPathFromJson(*TargetPathObj, TargetPath, PathErrors, FString::Printf(TEXT("%s[%d].targetPath"), *Path, Index));
+		OutErrors.Append(PathErrors);
+
+		if (PathErrors.Num() == 0)
+		{
+			Bindings->AddBinding(SourcePath, TargetPath);
+		}
+	}
+
+	return OutErrors.Num() == 0;
+}
+
+static bool SetBindings(UStateTree* StateTree,
+                        const TSharedPtr<FJsonObject>& Payload,
+                        TArray<FString>& OutErrors,
+                        const bool bValidationOnly)
+{
+	UStateTreeEditorData* EditorData = GetExistingEditorData(StateTree, OutErrors);
+	if (!EditorData)
+	{
+		return false;
+	}
+
+	FStateTreeEditorPropertyBindings* Bindings = EditorData->GetPropertyEditorBindings();
+	if (!Bindings)
+	{
+		OutErrors.Add(TEXT("Could not get property editor bindings."));
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* BindingValues = nullptr;
+	if (!Payload.IsValid()
+		|| !Payload->TryGetArrayField(TEXT("propertyBindings"), BindingValues)
+		|| !BindingValues)
+	{
+		OutErrors.Add(TEXT("set_bindings requires a 'propertyBindings' array."));
+		return false;
+	}
+
+	if (!bValidationOnly)
+	{
+		// Clear existing bindings by removing all
+		Bindings->RemoveBindings([](FPropertyBindingBinding&) { return true; });
+	}
+
+	return ApplyBindingsFromJson(EditorData, *BindingValues, OutErrors, TEXT("propertyBindings"));
+}
+
+static bool AddBinding(UStateTree* StateTree,
+                       const TSharedPtr<FJsonObject>& Payload,
+                       TArray<FString>& OutErrors,
+                       const bool bValidationOnly)
+{
+	UStateTreeEditorData* EditorData = GetExistingEditorData(StateTree, OutErrors);
+	if (!EditorData)
+	{
+		return false;
+	}
+
+	if (!Payload.IsValid())
+	{
+		OutErrors.Add(TEXT("add_binding requires a payload."));
+		return false;
+	}
+
+	// Support both single binding and array of bindings
+	const TArray<TSharedPtr<FJsonValue>>* BindingValues = nullptr;
+	if (Payload->TryGetArrayField(TEXT("propertyBindings"), BindingValues) && BindingValues)
+	{
+		return ApplyBindingsFromJson(EditorData, *BindingValues, OutErrors, TEXT("propertyBindings"));
+	}
+
+	// Single binding specified at the top level
+	const TSharedPtr<FJsonObject>* SourcePathObj = nullptr;
+	const TSharedPtr<FJsonObject>* TargetPathObj = nullptr;
+	if (Payload->TryGetObjectField(TEXT("sourcePath"), SourcePathObj)
+		&& Payload->TryGetObjectField(TEXT("targetPath"), TargetPathObj)
+		&& SourcePathObj && SourcePathObj->IsValid()
+		&& TargetPathObj && TargetPathObj->IsValid())
+	{
+		TArray<TSharedPtr<FJsonValue>> SingleArray;
+		SingleArray.Add(MakeShared<FJsonValueObject>(Payload));
+		return ApplyBindingsFromJson(EditorData, SingleArray, OutErrors, TEXT("binding"));
+	}
+
+	OutErrors.Add(TEXT("add_binding requires either 'propertyBindings' array or 'sourcePath'/'targetPath' objects."));
+	return false;
+}
+
+static bool RemoveBinding(UStateTree* StateTree,
+                          const TSharedPtr<FJsonObject>& Payload,
+                          TArray<FString>& OutErrors,
+                          const bool bValidationOnly)
+{
+	UStateTreeEditorData* EditorData = GetExistingEditorData(StateTree, OutErrors);
+	if (!EditorData)
+	{
+		return false;
+	}
+
+	FStateTreeEditorPropertyBindings* Bindings = EditorData->GetPropertyEditorBindings();
+	if (!Bindings)
+	{
+		OutErrors.Add(TEXT("Could not get property editor bindings."));
+		return false;
+	}
+
+	if (!Payload.IsValid())
+	{
+		OutErrors.Add(TEXT("remove_binding requires a payload."));
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* TargetPathObj = nullptr;
+	if (!Payload->TryGetObjectField(TEXT("targetPath"), TargetPathObj) || !TargetPathObj || !TargetPathObj->IsValid())
+	{
+		OutErrors.Add(TEXT("remove_binding requires a 'targetPath' object."));
+		return false;
+	}
+
+	FPropertyBindingPath TargetPath;
+	ParsePropertyPathFromJson(*TargetPathObj, TargetPath, OutErrors, TEXT("targetPath"));
+	if (OutErrors.Num() > 0)
+	{
+		return false;
+	}
+
+	if (!bValidationOnly)
+	{
+		Bindings->RemoveBindings(TargetPath);
+	}
+
+	return true;
+}
+
 static bool ApplyOperation(UStateTree* StateTree,
                            const FString& Operation,
                            const TSharedPtr<FJsonObject>& Payload,
@@ -1848,6 +2119,18 @@ static bool ApplyOperation(UStateTree* StateTree,
 	if (Operation == TEXT("set_schema"))
 	{
 		return SetSchema(StateTree, Payload, OutErrors);
+	}
+	if (Operation == TEXT("set_bindings"))
+	{
+		return SetBindings(StateTree, Payload, OutErrors, bValidationOnly);
+	}
+	if (Operation == TEXT("add_binding"))
+	{
+		return AddBinding(StateTree, Payload, OutErrors, bValidationOnly);
+	}
+	if (Operation == TEXT("remove_binding"))
+	{
+		return RemoveBinding(StateTree, Payload, OutErrors, bValidationOnly);
 	}
 
 	OutErrors.Add(FString::Printf(TEXT("Unsupported StateTree operation '%s'."), *Operation));

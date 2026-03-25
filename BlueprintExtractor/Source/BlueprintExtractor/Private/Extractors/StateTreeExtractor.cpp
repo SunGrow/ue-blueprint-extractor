@@ -4,6 +4,8 @@
 #include "BlueprintJsonSchema.h"
 #include "StateTree.h"
 #include "StateTreeEditorData.h"
+#include "StateTreeEditorPropertyBindings.h"
+#include "StateTreePropertyBindings.h"
 #include "StateTreeState.h"
 #include "StateTreeTypes.h"
 #include "StructUtils/InstancedStruct.h"
@@ -76,6 +78,13 @@ TSharedPtr<FJsonObject> FStateTreeExtractor::Extract(const UStateTree* StateTree
 		}
 	}
 	STObj->SetArrayField(TEXT("states"), States);
+
+	// Property bindings
+	TSharedPtr<FJsonObject> BindingsObj = ExtractBindings(EditorData);
+	if (BindingsObj)
+	{
+		STObj->SetObjectField(TEXT("bindings"), BindingsObj);
+	}
 
 #endif // WITH_EDITORONLY_DATA
 
@@ -399,4 +408,76 @@ TSharedPtr<FJsonObject> FStateTreeExtractor::ExtractStructProperties(const UScri
 	}
 
 	return Props;
+}
+
+TSharedPtr<FJsonObject> FStateTreeExtractor::ExtractPropertyPath(const FPropertyBindingPath& Path)
+{
+	TSharedPtr<FJsonObject> PathObj = MakeShared<FJsonObject>();
+
+#if WITH_EDITORONLY_DATA
+	if (Path.GetStructID().IsValid())
+	{
+		PathObj->SetStringField(TEXT("structId"), Path.GetStructID().ToString());
+	}
+#endif
+
+	TConstArrayView<FPropertyBindingPathSegment> Segments = Path.GetSegments();
+	if (Segments.Num() > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> SegmentArray;
+		for (const FPropertyBindingPathSegment& Segment : Segments)
+		{
+			TSharedPtr<FJsonObject> SegObj = MakeShared<FJsonObject>();
+			SegObj->SetStringField(TEXT("name"), Segment.GetName().ToString());
+
+			if (Segment.GetArrayIndex() != INDEX_NONE)
+			{
+				SegObj->SetNumberField(TEXT("arrayIndex"), Segment.GetArrayIndex());
+			}
+
+			if (Segment.GetInstanceStruct())
+			{
+				SegObj->SetStringField(TEXT("instanceStruct"), Segment.GetInstanceStruct()->GetPathName());
+			}
+
+			SegmentArray.Add(MakeShared<FJsonValueObject>(SegObj));
+		}
+		PathObj->SetArrayField(TEXT("segments"), SegmentArray);
+	}
+
+	return PathObj;
+}
+
+TSharedPtr<FJsonObject> FStateTreeExtractor::ExtractBindings(const UStateTreeEditorData* EditorData)
+{
+	if (!EditorData)
+	{
+		return nullptr;
+	}
+
+	const FStateTreeEditorPropertyBindings& Bindings = *EditorData->GetPropertyEditorBindings();
+	TConstArrayView<FStateTreePropertyPathBinding> PropertyBindings = Bindings.GetBindings();
+
+	if (PropertyBindings.Num() == 0)
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FJsonObject> BindingsObj = MakeShared<FJsonObject>();
+
+	TArray<TSharedPtr<FJsonValue>> BindingArray;
+	for (const FStateTreePropertyPathBinding& Binding : PropertyBindings)
+	{
+		TSharedPtr<FJsonObject> BindingObj = MakeShared<FJsonObject>();
+
+		BindingObj->SetObjectField(TEXT("sourcePath"), ExtractPropertyPath(Binding.GetSourcePath()));
+		BindingObj->SetObjectField(TEXT("targetPath"), ExtractPropertyPath(Binding.GetTargetPath()));
+
+		BindingArray.Add(MakeShared<FJsonValueObject>(BindingObj));
+	}
+
+	BindingsObj->SetArrayField(TEXT("propertyBindings"), BindingArray);
+	BindingsObj->SetNumberField(TEXT("count"), PropertyBindings.Num());
+
+	return BindingsObj;
 }
