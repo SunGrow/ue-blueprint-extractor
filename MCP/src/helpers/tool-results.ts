@@ -109,6 +109,14 @@ export function createToolResultNormalizers({
       && typeof candidate.message === 'string'
       && candidate.message.length > 0
     ));
+    const existingContentText = existingResult
+      && Array.isArray(existingResult.content)
+      && isRecord(existingResult.content[0])
+      && existingResult.content[0].type === 'text'
+      && typeof existingResult.content[0].text === 'string'
+      ? (existingResult.content[0].text as string).replace(/^Error:\s*/, '')
+      : undefined;
+
     const message = typeof payload.message === 'string'
       ? payload.message.replace(/^Error:\s*/, '')
       : typeof payload.error === 'string'
@@ -119,7 +127,21 @@ export function createToolResultNormalizers({
             ? payloadOrError.message
             : typeof payloadOrError === 'string'
               ? payloadOrError.replace(/^Error:\s*/, '')
-              : `Tool '${toolName}' failed.`;
+              : typeof existingContentText === 'string'
+                ? existingContentText
+                : payloadOrError == null
+                  ? `Tool '${toolName}' failed with no error details (received ${String(payloadOrError)})`
+                  : (() => {
+                      const type = (payloadOrError as Record<string, unknown>)?.constructor?.name ?? typeof payloadOrError;
+                      const keys = isRecord(payloadOrError) ? Object.keys(payloadOrError).join(', ') : '';
+                      const truncatedJson = (() => {
+                        try { const s = JSON.stringify(payloadOrError); return s.length > 500 ? s.slice(0, 500) + '…' : s; }
+                        catch { return '[unserializable]'; }
+                      })();
+                      return keys
+                        ? `Tool '${toolName}' failed — received ${type} with keys [${keys}]: ${truncatedJson}`
+                        : `Tool '${toolName}' failed — received ${type}: ${truncatedJson}`;
+                    })();
     const classification = classifyRecoverableToolFailure(toolName, message);
     const envelope: Record<string, unknown> = {
       ...payload,

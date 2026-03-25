@@ -17,7 +17,7 @@ import { firstDefinedString } from './helpers/formatting.js';
 import type { ToolHelpEntry } from './helpers/tool-help.js';
 import { installNormalizedToolRegistration } from './helpers/tool-registration.js';
 import { createToolResultNormalizers } from './helpers/tool-results.js';
-import { callSubsystemJson as callSubsystemJsonWithClient } from './helpers/subsystem.js';
+import { callSubsystemJson as callSubsystemJsonWithClient, type SubsystemCallOptions } from './helpers/subsystem.js';
 import {
   getProjectAutomationContext as getProjectAutomationContextWithState,
   rememberExternalBuild as buildExternalBuildContext,
@@ -46,7 +46,7 @@ export function createBlueprintExtractorServer(
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '3.0.1',
+    version: '3.1.0',
   }, {
     instructions: serverInstructions,
   });
@@ -67,8 +67,8 @@ export function createBlueprintExtractorServer(
     normalizeToolSuccess,
   });
 
-  const callSubsystemJson = (method: string, params: Record<string, unknown>) => (
-    callSubsystemJsonWithClient(client, method, params)
+  const callSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
+    callSubsystemJsonWithClient(client, method, params, options)
   );
 
   function rememberExternalBuild(result: CompileProjectCodeResult): void {

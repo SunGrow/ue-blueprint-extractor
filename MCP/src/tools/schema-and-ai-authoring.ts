@@ -1,10 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+import { jsonToolError, jsonToolSuccess, normalizeUStructPath } from '../helpers/subsystem.js';
 
 type JsonSubsystemCaller = (
   method: string,
   params: Record<string, unknown>,
+  options?: { timeoutMs?: number },
 ) => Promise<Record<string, unknown>>;
 
 type RegisterSchemaAndAiAuthoringToolsOptions = {
@@ -24,6 +25,62 @@ type RegisterSchemaAndAiAuthoringToolsOptions = {
   stateTreeEditorNodeSelectorSchema: z.ZodTypeAny;
   stateTreeTransitionSelectorSchema: z.ZodTypeAny;
 };
+
+/**
+ * Recursively walks a payload object and normalizes all `nodeStructType` values
+ * by stripping the C++ F-prefix from USTRUCT script paths.
+ */
+function normalizePayloadPaths(obj: unknown, warnings: string[]): unknown {
+  if (Array.isArray(obj)) return obj.map(item => normalizePayloadPaths(item, warnings));
+  if (obj && typeof obj === 'object') {
+    const record = obj as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(record)) {
+      if (key === 'nodeStructType' && typeof value === 'string') {
+        const normalized = normalizeUStructPath(value);
+        if (normalized !== value) {
+          warnings.push(`Auto-normalized F-prefix in nodeStructType: "${value}" → "${normalized}"`);
+        }
+        result[key] = normalized;
+      } else {
+        result[key] = normalizePayloadPaths(value, warnings);
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+
+/**
+ * Checks transition targetState.stateName references against the flat list of
+ * state names in the payload. Collects warnings for unresolvable targets.
+ */
+function validateTransitionTargets(payload: Record<string, unknown> | undefined, warnings: string[]): void {
+  if (!payload) return;
+  const states = (payload.states ?? (payload.stateTree as Record<string, unknown> | undefined)?.states) as
+    Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(states) || states.length === 0) return;
+
+  const stateNames = new Set<string>();
+  for (const s of states) {
+    if (typeof s.stateName === 'string') stateNames.add(s.stateName);
+    if (typeof s.name === 'string') stateNames.add(s.name);
+  }
+  if (stateNames.size === 0) return;
+
+  for (const s of states) {
+    const transitions = (s.transitions ?? []) as Array<Record<string, unknown>>;
+    if (!Array.isArray(transitions)) continue;
+    for (const t of transitions) {
+      const target = t.targetState as Record<string, unknown> | undefined;
+      if (!target) continue;
+      const targetName = (target.stateName ?? target.name) as string | undefined;
+      if (typeof targetName === 'string' && targetName.length > 0 && !stateNames.has(targetName)) {
+        warnings.push(`Warning: transition references targetState "${targetName}" which is not in the states list`);
+      }
+    }
+  }
+}
 
 export function registerSchemaAndAiAuthoringTools({
   server,
@@ -484,6 +541,9 @@ export function registerSchemaAndAiAuthoringTools({
         validate_only: z.boolean().default(false).describe(
           'Validate and compile without creating the asset.',
         ),
+        timeout_seconds: z.number().positive().optional().describe(
+          'Timeout in seconds for the subsystem call. Default 120. Complex payloads may need more time.',
+        ),
       },
       annotations: {
         title: 'Create StateTree',
@@ -495,17 +555,47 @@ export function registerSchemaAndAiAuthoringTools({
     },
     async (args) => {
       try {
-        const { asset_path, payload, validate_only } = args as {
+        const { asset_path, payload, validate_only, timeout_seconds } = args as {
           asset_path: string;
           payload?: Record<string, unknown>;
           validate_only: boolean;
+          timeout_seconds?: number;
         };
+
+        // Validate schema is present
+        if (!payload?.schema && !(payload?.stateTree as Record<string, unknown> | undefined)?.schema) {
+          return jsonToolError(new Error(
+            'schema is required for create_state_tree. Provide it at payload.schema or payload.stateTree.schema '
+            + '(e.g., "/Script/GameplayStateTreeModule.StateTreeComponentSchema")',
+          ));
+        }
+
+        const warnings: string[] = [];
+
+        // Lightweight payload validation (non-blocking)
+        const schema = (payload?.schema ?? (payload?.stateTree as Record<string, unknown> | undefined)?.schema) as string | undefined;
+        if (typeof schema === 'string' && !schema.startsWith('/Script/')) {
+          warnings.push(`Warning: schema path "${schema}" does not match expected /Script/... pattern`);
+        }
+        validateTransitionTargets(payload, warnings);
+
+        const normWarnings: string[] = [];
+        const normalizedPayload = normalizePayloadPaths(payload ?? {}, normWarnings);
+        warnings.push(...normWarnings);
+
+        const timeoutMs = (timeout_seconds ?? 120) * 1000;
         const parsed = await callSubsystemJson('CreateStateTree', {
           AssetPath: asset_path,
-          PayloadJson: JSON.stringify(payload ?? {}),
+          PayloadJson: JSON.stringify(normalizedPayload),
           bValidateOnly: validate_only,
-        });
-        return jsonToolSuccess(parsed);
+        }, { timeoutMs });
+        const result = warnings.length > 0
+          ? { ...parsed as Record<string, unknown>, warnings }
+          : parsed;
+        const extraContent = normWarnings.length > 0
+          ? [{ type: 'text' as const, text: normWarnings.join('\n') }]
+          : undefined;
+        return jsonToolSuccess(result, { extraContent });
       } catch (error) {
         return jsonToolError(error);
       }
@@ -545,6 +635,9 @@ export function registerSchemaAndAiAuthoringTools({
         validate_only: z.boolean().default(false).describe(
           'Validate and compile without changing the asset.',
         ),
+        timeout_seconds: z.number().positive().optional().describe(
+          'Timeout in seconds for the subsystem call. Default 90. Complex payloads may need more time.',
+        ),
       },
       annotations: {
         title: 'Modify StateTree',
@@ -556,19 +649,35 @@ export function registerSchemaAndAiAuthoringTools({
     },
     async (args) => {
       try {
-        const { asset_path, operation, payload, validate_only } = args as {
+        const { asset_path, operation, payload, validate_only, timeout_seconds } = args as {
           asset_path: string;
           operation: string;
           payload?: Record<string, unknown>;
           validate_only: boolean;
+          timeout_seconds?: number;
         };
+
+        const warnings: string[] = [];
+        validateTransitionTargets(payload, warnings);
+
+        const normWarnings: string[] = [];
+        const normalizedPayload = normalizePayloadPaths(payload ?? {}, normWarnings);
+        warnings.push(...normWarnings);
+
+        const timeoutMs = (timeout_seconds ?? 90) * 1000;
         const parsed = await callSubsystemJson('ModifyStateTree', {
           AssetPath: asset_path,
           Operation: operation,
-          PayloadJson: JSON.stringify(payload ?? {}),
+          PayloadJson: JSON.stringify(normalizedPayload),
           bValidateOnly: validate_only,
-        });
-        return jsonToolSuccess(parsed);
+        }, { timeoutMs });
+        const result = warnings.length > 0
+          ? { ...parsed as Record<string, unknown>, warnings }
+          : parsed;
+        const extraContent = normWarnings.length > 0
+          ? [{ type: 'text' as const, text: normWarnings.join('\n') }]
+          : undefined;
+        return jsonToolSuccess(result, { extraContent });
       } catch (error) {
         return jsonToolError(error);
       }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ProjectController, classifyChangedPaths, resolveCommandInvocation } from '../src/project-controller.js';
+import { ProjectController, classifyChangedPaths, classifyBuildError, resolveCommandInvocation } from '../src/project-controller.js';
 
 describe('ProjectController', () => {
   const tempDirs: string[] = [];
@@ -196,5 +196,107 @@ describe('ProjectController', () => {
     expect(reconnect.success).toBe(true);
     expect(reconnect.disconnected).toBe(false);
     expect(reconnect.reconnected).toBe(true);
+  });
+
+  it('classifies locked DLL build errors with the correct category and file list', () => {
+    const result = classifyBuildError(
+      '',
+      'LINK : fatal error LNK1104: cannot open file \'C:\\Proj\\Binaries\\Win64\\UnrealEditor-MyGame.dll\'\n' +
+      'Access is denied',
+      1,
+    );
+
+    expect(result.errorCategory).toBe('locked_file');
+    expect(result.lockedFiles).toContain('C:\\Proj\\Binaries\\Win64\\UnrealEditor-MyGame.dll');
+    expect(result.errorSummary).toContain('locked by another process');
+  });
+
+  it('classifies compilation errors distinctly from locked file errors', () => {
+    const result = classifyBuildError(
+      'Source/MyActor.cpp(42): error C2065: \'undeclared\': undeclared identifier\n',
+      '',
+      1,
+    );
+
+    expect(result.errorCategory).toBe('compilation');
+    expect(result.lockedFiles).toEqual([]);
+    expect(result.errorSummary).toContain('compilation errors');
+  });
+
+  it('falls back to environment variables when explicit inputs are missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-env-'));
+    tempDirs.push(root);
+
+    const engineRoot = join(root, 'UE_5.7');
+    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
+    const projectPath = join(root, 'MyGame.uproject');
+    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
+    await writeFile(buildScript, '#!/usr/bin/env bash\n');
+    await writeFile(projectPath, '{}');
+
+    const controller = new ProjectController({
+      env: {
+        UE_ENGINE_ROOT: engineRoot,
+        UE_PROJECT_PATH: projectPath,
+        UE_PROJECT_TARGET: 'MyGameEditor',
+      },
+      platform: 'linux',
+      runCommand: async () => ({
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      }),
+    });
+
+    // Call without explicit engine_root — should fall back to env
+    const result = await controller.compileProjectCode({});
+
+    expect(result.success).toBe(true);
+    expect(result.engineRoot).toBe(engineRoot);
+    expect(result.projectPath).toBe(projectPath);
+    expect(result.target).toBe('MyGameEditor');
+  });
+
+  it('reports disconnect timeout when editor never goes offline', async () => {
+    // Editor stays connected forever — probe always returns true
+    const controller = new ProjectController({
+      sleep: async () => {},
+    });
+
+    const reconnect = await controller.waitForEditorRestart(async () => true, {
+      disconnectTimeoutMs: 10,
+      reconnectTimeoutMs: 10,
+    });
+
+    expect(reconnect.success).toBe(false);
+    expect(reconnect.disconnected).toBe(false);
+    expect(reconnect.reconnected).toBe(false);
+    expect(reconnect.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('never disconnected'),
+      ]),
+    );
+  });
+
+  it('reports reconnect timeout when editor disconnects but never comes back', async () => {
+    // Editor disconnects on the second probe, then never reconnects
+    const states = [true, false, false, false, false];
+    const controller = new ProjectController({
+      sleep: async () => {},
+    });
+
+    const reconnect = await controller.waitForEditorRestart(async () => states.shift() ?? false, {
+      disconnectTimeoutMs: 50,
+      reconnectTimeoutMs: 10,
+    });
+
+    expect(reconnect.success).toBe(false);
+    expect(reconnect.disconnected).toBe(true);
+    expect(reconnect.reconnected).toBe(false);
+    expect(reconnect.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('did not reconnect'),
+      ]),
+    );
   });
 });

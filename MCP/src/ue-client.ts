@@ -179,7 +179,8 @@ export class UEClient {
     return `Failed to call ${method} on BlueprintExtractorSubsystem (${details.join(', ')})`;
   }
 
-  private async rawCall(objectPath: string, functionName: string, parameters: Record<string, unknown>): Promise<RawCallResult> {
+  private async rawCall(objectPath: string, functionName: string, parameters: Record<string, unknown>, timeoutMs?: number): Promise<RawCallResult> {
+    const effectiveTimeout = timeoutMs ?? this.timeoutMs;
     const body: RemoteCallRequest = {
       objectPath,
       functionName,
@@ -188,7 +189,7 @@ export class UEClient {
     };
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
 
     try {
       const res = await this.fetchImpl(`${this.baseUrl}/remote/object/call`, {
@@ -200,15 +201,16 @@ export class UEClient {
       clearTimeout(timeout);
 
       if (!res.ok) {
-        let errorDetail = res.statusText || `HTTP ${res.status}`;
+        let responseBody = '';
         try {
-          const responseText = await res.text();
-          if (responseText.trim().length > 0) {
-            errorDetail = responseText;
-          }
+          responseBody = await res.text();
         } catch {
-          // Keep the HTTP status text when the body cannot be read.
+          // Body cannot be read — leave empty.
         }
+        const truncatedBody = responseBody.length > 500 ? responseBody.slice(0, 500) + '...' : responseBody;
+        const errorDetail = truncatedBody.trim().length > 0
+          ? `UE editor returned HTTP ${res.status}: ${truncatedBody}`
+          : `UE editor returned HTTP ${res.status}: ${res.statusText || 'no response body'}`;
 
         return {
           response: null,
@@ -225,31 +227,32 @@ export class UEClient {
       if (error instanceof Error && error.name === 'AbortError') {
         return {
           response: null,
-          error: `Request timed out after ${this.timeoutMs}ms`,
+          error: `Request timed out after ${effectiveTimeout}ms`,
           timedOut: true,
         };
       }
 
+      const networkMsg = error instanceof Error ? error.message : String(error);
       return {
         response: null,
-        error: error instanceof Error ? error.message : String(error),
+        error: `Network error connecting to UE editor: ${networkMsg}`,
       };
     }
   }
 
-  async callSubsystem(method: string, params: Record<string, unknown>): Promise<string> {
+  async callSubsystem(method: string, params: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<string> {
     const connected = await this.checkConnection();
     if (!connected) {
       throw new Error(`UE Editor not running or Remote Control not available on ${this.host}:${this.port}`);
     }
 
     let objectPath = await this.discoverSubsystem();
-    let res = await this.rawCall(objectPath, method, params);
+    let res = await this.rawCall(objectPath, method, params, options?.timeoutMs);
 
     if (res.response === null && this.subsystemPathSource === 'discovered') {
       this.clearDiscoveredSubsystemPath();
       objectPath = await this.discoverSubsystem();
-      res = await this.rawCall(objectPath, method, params);
+      res = await this.rawCall(objectPath, method, params, options?.timeoutMs);
     }
 
     if (res.response === null) {

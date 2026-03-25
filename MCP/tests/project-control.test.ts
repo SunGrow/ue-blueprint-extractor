@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { registerProjectControlTools } from '../src/tools/project-control.js';
@@ -325,7 +326,8 @@ describe('registerProjectControlTools', () => {
       reconnect_timeout_seconds: 3,
     });
 
-    expect(projectController.classifyChangedPaths).toHaveBeenCalledWith(['Source/Test/MyActor.h'], undefined);
+    const expectedNormalized = path.resolve('C:/Proj', 'Source/Test/MyActor.h');
+    expect(projectController.classifyChangedPaths).toHaveBeenCalledWith([expectedNormalized], undefined);
     expect(projectController.compileProjectCode).toHaveBeenCalledWith({
       engineRoot: 'C:/UE',
       projectPath: 'C:/Proj/Proj.uproject',
@@ -520,5 +522,381 @@ describe('registerProjectControlTools', () => {
     expect(normalized.structuredContent).toBeDefined();
     expect(normalized.structuredContent!.code).toBe('engine_root_missing');
     expect(normalized.structuredContent!.recoverable).toBe(false);
+  });
+
+  it('sync_project_code normalizes relative paths to absolute using project root', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true })),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['Source/MyActor.h', 'Source/Private/Helper.cpp'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+
+    // Paths should be normalized to absolute
+    const changedPaths = parsed.changedPaths as string[];
+    expect(changedPaths).toHaveLength(2);
+    expect(path.isAbsolute(changedPaths[0])).toBe(true);
+    expect(path.isAbsolute(changedPaths[1])).toBe(true);
+    expect(changedPaths[0]).toBe(path.resolve('C:/Proj', 'Source/MyActor.h'));
+    expect(changedPaths[1]).toBe(path.resolve('C:/Proj', 'Source/Private/Helper.cpp'));
+
+    // Should include pathWarnings about normalization
+    const warnings = parsed.pathWarnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.length).toBe(2);
+    expect(warnings[0]).toContain('Source/MyActor.h');
+    expect(warnings[1]).toContain('Source/Private/Helper.cpp');
+  });
+
+  it('sync_project_code passes already-absolute paths through unchanged', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true })),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const absolutePath = 'C:/Proj/Source/MyActor.h';
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: [absolutePath],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const changedPaths = parsed.changedPaths as string[];
+    expect(changedPaths).toEqual([absolutePath]);
+
+    // No pathWarnings when all paths are already absolute
+    expect(parsed.pathWarnings).toBeUndefined();
+  });
+
+  it('sync_project_code reports structured stepErrors when build step throws', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+      compileProjectCode: vi.fn(async () => {
+        throw new Error('toolchain not found');
+      }),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true })),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.h'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.stepErrors).toBeDefined();
+
+    const stepErrors = parsed.stepErrors as Record<string, string>;
+    expect(stepErrors.build).toBe('toolchain not found');
+  });
+
+  it('sync_project_code reports structured stepErrors when restart step throws', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_or_uht_sensitive_change'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async (method) => {
+        if (method === 'SaveAssets') return { success: true };
+        if (method === 'RestartEditor') throw new Error('editor crashed during restart');
+        throw new Error(`Unexpected method ${method}`);
+      }),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.h'],
+      save_asset_paths: ['/Game/UI/WBP_Window'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.stepErrors).toBeDefined();
+
+    const stepErrors = parsed.stepErrors as Record<string, string>;
+    expect(stepErrors.restart).toBe('editor crashed during restart');
+    // Build should have succeeded — no build error
+    expect(stepErrors.build).toBeUndefined();
+  });
+
+  it('restart_editor succeeds with a connected editor', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'RestartEditor',
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: true,
+      wait_for_reconnect: true,
+      disconnect_timeout_seconds: 2,
+      reconnect_timeout_seconds: 3,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(true);
+    expect(parsed.saveDirtyAssetsAccepted).toBe(true);
+    expect(callSubsystemJson).toHaveBeenCalledWith('RestartEditor', {
+      bWarn: false,
+      bSaveDirtyAssets: true,
+      bRelaunch: true,
+    });
+  });
+
+  it('restart_editor reports reconnection timeout diagnostics', async () => {
+    const registry = createToolRegistry();
+    const projectController = createProjectController({
+      waitForEditorRestart: vi.fn(async () => ({
+        success: false,
+        operation: 'restart_editor',
+        disconnected: true,
+        reconnected: false,
+        disconnectTimeoutMs: 2000,
+        reconnectTimeoutMs: 3000,
+        diagnostics: ['Editor did not reconnect before the timeout elapsed'],
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true, operation: 'RestartEditor' })),
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: false,
+      wait_for_reconnect: true,
+      disconnect_timeout_seconds: 2,
+      reconnect_timeout_seconds: 3,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    const reconnect = parsed.reconnect as Record<string, unknown>;
+    expect(reconnect.disconnected).toBe(true);
+    expect(reconnect.reconnected).toBe(false);
+    expect(reconnect.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('did not reconnect'),
+      ]),
+    );
+  });
+
+  it('restart_editor retries on transient failure and succeeds on second attempt', async () => {
+    const registry = createToolRegistry();
+    let callCount = 0;
+    const callSubsystemJson = vi.fn(async (method) => {
+      if (method === 'RestartEditor') {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('Remote Control connection lost');
+        }
+        return { success: true, operation: 'RestartEditor' };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: false,
+      wait_for_reconnect: true,
+      disconnect_timeout_seconds: 2,
+      reconnect_timeout_seconds: 3,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(true);
+    // Should have called RestartEditor twice (first attempt + retry)
+    expect(callSubsystemJson).toHaveBeenCalledTimes(2);
+  });
+
+  it('restart_editor returns early when editor is not connected', async () => {
+    const registry = createToolRegistry();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => false) },
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: false,
+      wait_for_reconnect: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'not connected',
+    );
+  });
+
+  it('restart_editor rejects restart during Play-In-Editor session', async () => {
+    const registry = createToolRegistry();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: true })),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: false,
+      wait_for_reconnect: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'Play-In-Editor',
+    );
   });
 });

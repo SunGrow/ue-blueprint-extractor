@@ -1,3 +1,4 @@
+import * as path from 'path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { sleep } from '../helpers/formatting.js';
@@ -337,11 +338,52 @@ export function registerProjectControlTools({
     },
     async ({ save_dirty_assets, wait_for_reconnect, disconnect_timeout_seconds, reconnect_timeout_seconds }) => {
       try {
-        const restartRequest = await callSubsystemJson('RestartEditor', {
-          bWarn: false,
-          bSaveDirtyAssets: save_dirty_assets,
-          bRelaunch: true,
-        });
+        // Pre-flight: verify editor is connected before attempting restart
+        const probe = supportsConnectionProbe(client);
+        if (probe) {
+          try {
+            const connected = await probe();
+            if (!connected) {
+              return jsonToolError(new Error('Editor is not connected. Cannot restart.'));
+            }
+          } catch {
+            return jsonToolError(new Error('Editor is not connected. Cannot restart.'));
+          }
+        }
+
+        // Pre-flight: reject restart if editor is in PIE mode
+        try {
+          const ctx = await getProjectAutomationContext(true);
+          if ((ctx as Record<string, unknown>).isPlayingInEditor === true) {
+            return jsonToolError(new Error('Cannot restart during Play-In-Editor session. Stop PIE first.'));
+          }
+        } catch {
+          // Context query failed — proceed with restart attempt anyway
+        }
+
+        // Attempt restart with one retry on transient failure
+        let restartRequest: Record<string, unknown>;
+        try {
+          restartRequest = await callSubsystemJson('RestartEditor', {
+            bWarn: false,
+            bSaveDirtyAssets: save_dirty_assets,
+            bRelaunch: true,
+          });
+        } catch (firstError) {
+          await sleep(2000);
+          try {
+            restartRequest = await callSubsystemJson('RestartEditor', {
+              bWarn: false,
+              bSaveDirtyAssets: save_dirty_assets,
+              bRelaunch: true,
+            });
+          } catch (retryError) {
+            return jsonToolError(new Error(
+              `restart_editor failed after retry: ${retryError instanceof Error ? retryError.message : String(retryError)}` +
+              ` (first attempt: ${firstError instanceof Error ? firstError.message : String(firstError)})`,
+            ));
+          }
+        }
 
         clearProjectAutomationContext();
 
@@ -353,7 +395,7 @@ export function registerProjectControlTools({
           });
         }
 
-        const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+        const reconnect = await projectController.waitForEditorRestart(probe, {
           disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
           reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
         });
@@ -449,15 +491,39 @@ export function registerProjectControlTools({
       restart_first,
     }) => {
       try {
-        const plan = projectController.classifyChangedPaths(changed_paths, force_rebuild);
         const resolvedProjectInputs = await resolveProjectInputs({ engine_root, project_path, target });
+
+        // Normalize changed_paths to absolute paths
+        const projectRoot = resolvedProjectInputs.projectPath
+          ? path.dirname(resolvedProjectInputs.projectPath)
+          : '';
+        const pathWarnings: string[] = [];
+        const normalizedPaths = changed_paths.map((p: string) => {
+          if (path.isAbsolute(p)) return p;
+          if (projectRoot) return path.resolve(projectRoot, p);
+          // No project root available — keep as-is but warn
+          pathWarnings.push(`Cannot resolve relative path without project root: "${p}"`);
+          return p;
+        });
+        changed_paths.forEach((original: string, i: number) => {
+          if (normalizedPaths[i] !== original) {
+            pathWarnings.push(`Normalized relative path: "${original}" → "${normalizedPaths[i]}"`);
+          }
+        });
+
+        const stepErrors: Record<string, string> = {};
+
+        const plan = projectController.classifyChangedPaths(normalizedPaths, force_rebuild);
         const structuredResult: Record<string, unknown> = {
           success: false,
           operation: 'sync_project_code',
-          changedPaths: changed_paths,
+          changedPaths: normalizedPaths,
           plan,
           inputResolution: buildInputResolution(resolvedProjectInputs),
         };
+        if (pathWarnings.length > 0) {
+          structuredResult.pathWarnings = pathWarnings;
+        }
 
         if (plan.strategy === 'live_coding') {
           if (!projectController.liveCodingSupported) {
@@ -467,24 +533,33 @@ export function registerProjectControlTools({
               reasons: ['live_coding_unsupported_on_host'],
             };
           } else {
-            const liveCoding = enrichLiveCodingResult(
-              await callSubsystemJson('TriggerLiveCoding', {
-                bEnableForSession: true,
-                bWaitForCompletion: true,
-              }),
-              changed_paths,
-              getLastExternalBuildContext(),
-            );
+            let liveCoding: Record<string, unknown>;
+            try {
+              liveCoding = enrichLiveCodingResult(
+                await callSubsystemJson('TriggerLiveCoding', {
+                  bEnableForSession: true,
+                  bWaitForCompletion: true,
+                }),
+                normalizedPaths,
+                getLastExternalBuildContext(),
+              );
+            } catch (lcError) {
+              stepErrors.liveCoding = lcError instanceof Error ? lcError.message : String(lcError);
+              liveCoding = { success: false, error: stepErrors.liveCoding };
+            }
 
             if (!canFallbackFromLiveCoding(liveCoding)) {
-              return jsonToolSuccess({
+              const lcResult: Record<string, unknown> = {
                 success: liveCoding.success === true,
                 operation: 'sync_project_code',
                 strategy: 'live_coding',
-                changedPaths: changed_paths,
+                changedPaths: normalizedPaths,
                 plan,
                 liveCoding,
-              });
+              };
+              if (pathWarnings.length > 0) lcResult.pathWarnings = pathWarnings;
+              if (Object.keys(stepErrors).length > 0) lcResult.stepErrors = stepErrors;
+              return jsonToolSuccess(lcResult);
             }
 
             structuredResult.liveCoding = liveCoding;
@@ -498,109 +573,187 @@ export function registerProjectControlTools({
 
         if (restart_first) {
           if (Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
-            const preSave = await callSubsystemJson('SaveAssets', {
-              AssetPathsJson: JSON.stringify(save_asset_paths),
-            });
-            structuredResult.preSave = preSave;
+            try {
+              const preSave = await callSubsystemJson('SaveAssets', {
+                AssetPathsJson: JSON.stringify(save_asset_paths),
+              });
+              structuredResult.preSave = preSave;
+            } catch (preSaveError) {
+              stepErrors.preSave = preSaveError instanceof Error ? preSaveError.message : String(preSaveError);
+              // Pre-save is non-critical — continue to restart
+            }
           }
 
-          const preRestart = await callSubsystemJson('RestartEditor', {
-            bWarn: false,
-            bSaveDirtyAssets: save_dirty_assets,
-            bRelaunch: false,
-          });
-          clearProjectAutomationContext();
-          structuredResult.preRestart = preRestart;
-          if (preRestart.success === false) {
+          try {
+            const preRestart = await callSubsystemJson('RestartEditor', {
+              bWarn: false,
+              bSaveDirtyAssets: save_dirty_assets,
+              bRelaunch: false,
+            });
+            clearProjectAutomationContext();
+            structuredResult.preRestart = preRestart;
+            if (preRestart.success === false) {
+              stepErrors.preRestart = 'RestartEditor returned success=false';
+              structuredResult.strategy = 'restart_first';
+              if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
+              return jsonToolSuccess(structuredResult);
+            }
+          } catch (preRestartError) {
+            stepErrors.preRestart = preRestartError instanceof Error ? preRestartError.message : String(preRestartError);
             structuredResult.strategy = 'restart_first';
+            structuredResult.success = false;
+            if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
 
-          const preDisconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
-            disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
-            reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
-            waitForReconnect: false,
-          });
-          structuredResult.preDisconnect = preDisconnect;
-          if (!preDisconnect.success) {
+          try {
+            const preDisconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+              disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+              reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+              waitForReconnect: false,
+            });
+            structuredResult.preDisconnect = preDisconnect;
+            if (!preDisconnect.success) {
+              stepErrors.preDisconnect = 'Editor did not disconnect within timeout';
+              structuredResult.strategy = 'restart_first';
+              if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
+              return jsonToolSuccess(structuredResult);
+            }
+          } catch (preDisconnectError) {
+            stepErrors.preDisconnect = preDisconnectError instanceof Error ? preDisconnectError.message : String(preDisconnectError);
             structuredResult.strategy = 'restart_first';
+            structuredResult.success = false;
+            if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
         }
 
-        const build = await projectController.compileProjectCode({
-          engineRoot: resolvedProjectInputs.engineRoot,
-          projectPath: resolvedProjectInputs.projectPath,
-          target: resolvedProjectInputs.target,
-          platform: platform as BuildPlatform | undefined,
-          configuration: configuration as BuildConfiguration | undefined,
-          buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
-          includeOutput: include_output,
-          clearUhtCache: clear_uht_cache,
-        });
-        rememberExternalBuild(build);
+        let build: CompileProjectCodeResult;
+        try {
+          build = await projectController.compileProjectCode({
+            engineRoot: resolvedProjectInputs.engineRoot,
+            projectPath: resolvedProjectInputs.projectPath,
+            target: resolvedProjectInputs.target,
+            platform: platform as BuildPlatform | undefined,
+            configuration: configuration as BuildConfiguration | undefined,
+            buildTimeoutMs: typeof build_timeout_seconds === 'number' ? build_timeout_seconds * 1000 : undefined,
+            includeOutput: include_output,
+            clearUhtCache: clear_uht_cache,
+          });
+          rememberExternalBuild(build);
+        } catch (buildError) {
+          stepErrors.build = buildError instanceof Error ? buildError.message : String(buildError);
+          structuredResult.strategy = restart_first ? 'restart_first' : 'build_and_restart';
+          structuredResult.success = false;
+          if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
+          return jsonToolSuccess(structuredResult);
+        }
 
         structuredResult.strategy = restart_first ? 'restart_first' : 'build_and_restart';
         structuredResult.build = build;
 
         if (!build.success) {
+          if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
           return jsonToolSuccess(structuredResult);
         }
 
         if (!restart_first && Array.isArray(save_asset_paths) && save_asset_paths.length > 0) {
-          const saveResult = await callSubsystemJson('SaveAssets', {
-            AssetPathsJson: JSON.stringify(save_asset_paths),
-          });
-          structuredResult.save = saveResult;
-          if (saveResult.success === false) {
-            return jsonToolSuccess(structuredResult);
+          try {
+            const saveResult = await callSubsystemJson('SaveAssets', {
+              AssetPathsJson: JSON.stringify(save_asset_paths),
+            });
+            structuredResult.save = saveResult;
+            if (saveResult.success === false) {
+              stepErrors.save = 'SaveAssets returned success=false';
+              if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
+              return jsonToolSuccess(structuredResult);
+            }
+          } catch (saveError) {
+            stepErrors.save = saveError instanceof Error ? saveError.message : String(saveError);
+            // Save is non-critical before restart — continue
           }
         }
 
-        let reconnect: Awaited<ReturnType<ProjectControllerLike['waitForEditorRestart']>>;
+        let reconnect: Awaited<ReturnType<ProjectControllerLike['waitForEditorRestart']>> | undefined;
         if (restart_first) {
-          const launch = await projectController.launchEditor({
-            engineRoot: resolvedProjectInputs.engineRoot,
-            projectPath: resolvedProjectInputs.projectPath,
-          });
-          clearProjectAutomationContext();
-          structuredResult.editorLaunch = launch;
-          if (!launch.success) {
+          try {
+            const launch = await projectController.launchEditor({
+              engineRoot: resolvedProjectInputs.engineRoot,
+              projectPath: resolvedProjectInputs.projectPath,
+            });
+            clearProjectAutomationContext();
+            structuredResult.editorLaunch = launch;
+            if (!launch.success) {
+              stepErrors.editorLaunch = 'launchEditor returned success=false';
+              if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
+              return jsonToolSuccess(structuredResult);
+            }
+          } catch (launchError) {
+            stepErrors.editorLaunch = launchError instanceof Error ? launchError.message : String(launchError);
+            structuredResult.success = false;
+            if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
-          reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
-            disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
-            reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
-            waitForDisconnect: false,
-          });
+
+          try {
+            reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+              disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+              reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+              waitForDisconnect: false,
+            });
+          } catch (reconnectError) {
+            stepErrors.reconnect = reconnectError instanceof Error ? reconnectError.message : String(reconnectError);
+          }
         } else {
-          const restartRequest = await callSubsystemJson('RestartEditor', {
-            bWarn: false,
-            bSaveDirtyAssets: save_dirty_assets,
-            bRelaunch: true,
-          });
-          clearProjectAutomationContext();
-          structuredResult.restartRequest = restartRequest;
-          structuredResult.restartRequestSaveDirtyAssetsAccepted = save_dirty_assets;
-          if (restartRequest.success === false) {
+          try {
+            const restartRequest = await callSubsystemJson('RestartEditor', {
+              bWarn: false,
+              bSaveDirtyAssets: save_dirty_assets,
+              bRelaunch: true,
+            });
+            clearProjectAutomationContext();
+            structuredResult.restartRequest = restartRequest;
+            structuredResult.restartRequestSaveDirtyAssetsAccepted = save_dirty_assets;
+            if (restartRequest.success === false) {
+              stepErrors.restart = 'RestartEditor returned success=false';
+              if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
+              return jsonToolSuccess(structuredResult);
+            }
+          } catch (restartError) {
+            stepErrors.restart = restartError instanceof Error ? restartError.message : String(restartError);
+            structuredResult.success = false;
+            if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
             return jsonToolSuccess(structuredResult);
           }
-          reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
-            disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
-            reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
-          });
+
+          try {
+            reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+              disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
+              reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+            });
+          } catch (reconnectError) {
+            stepErrors.reconnect = reconnectError instanceof Error ? reconnectError.message : String(reconnectError);
+          }
         }
 
-        structuredResult.reconnect = reconnect;
-        structuredResult.success = reconnect.success === true;
+        if (reconnect) {
+          structuredResult.reconnect = reconnect;
+          structuredResult.success = reconnect.success === true;
+        } else {
+          structuredResult.success = false;
+        }
         if (structuredResult.success && structuredResult.build) {
           structuredResult.build = trimBuildOutput(structuredResult.build as Record<string, unknown>);
+        }
+        if (Object.keys(stepErrors).length > 0) {
+          structuredResult.stepErrors = stepErrors;
         }
         return jsonToolSuccess(structuredResult);
       } catch (error) {
         const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+        const errorMessage = error instanceof Error ? error.message : String(error);
         return jsonToolError(explainProjectResolutionFailure(
-          error instanceof Error ? error.message : String(error),
+          errorMessage,
           resolved,
         ));
       }

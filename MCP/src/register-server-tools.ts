@@ -115,6 +115,7 @@ import { UEClient } from './ue-client.js';
 type JsonSubsystemCaller = (
   method: string,
   params: Record<string, unknown>,
+  options?: { timeoutMs?: number },
 ) => Promise<Record<string, unknown>>;
 
 type UEClientLike = Pick<UEClient, 'callSubsystem'> & Partial<Pick<UEClient, 'checkConnection'>>;

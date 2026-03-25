@@ -76,5 +76,54 @@ export function classifyRecoverableToolFailure(toolName: string, message: string
     };
   }
 
+  if (message.includes('timed out') || message.includes('timeout') || message.includes('ETIMEDOUT') || message.includes('ESOCKETTIMEDOUT')) {
+    return {
+      code: 'timeout',
+      recoverable: true,
+      retry_after_ms: 5000,
+      next_steps: [
+        'Retry with simpler payload or increase timeout',
+        'Check if UE editor is responding (call wait_for_editor)',
+        'For StateTree tools, try splitting complex payloads into multiple calls',
+      ],
+    };
+  }
+
+  if (message.includes('JSON') || message.includes('Unexpected token') || message.includes('SyntaxError')) {
+    return {
+      code: 'invalid_response',
+      recoverable: true,
+      next_steps: [
+        'Check UE editor output log for errors',
+        'The editor may have returned an HTML error page instead of JSON',
+        'Retry the operation — this may be a transient serialization issue',
+      ],
+    };
+  }
+
+  if (message.includes('locked by another process') || message.includes('locked file') || message.includes('cannot access the file')) {
+    return {
+      code: 'locked_file',
+      recoverable: true,
+      next_steps: [
+        'Close UE editor to release DLL locks',
+        'Call restart_editor, then retry the build',
+        'If editor was just restarted, the cached build may apply automatically',
+      ],
+    };
+  }
+
+  if (message.includes('Empty response') || message.includes('empty response') || message === '') {
+    return {
+      code: 'empty_response',
+      recoverable: true,
+      next_steps: [
+        'Verify the asset path exists',
+        'Check editor connection with wait_for_editor',
+        'The UE subsystem may have crashed — check editor logs',
+      ],
+    };
+  }
+
   return null;
 }

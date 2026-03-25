@@ -1,3 +1,6 @@
+import { access } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { resolve } from 'node:path';
 import type { CompileProjectCodeResult } from '../project-controller.js';
 import type { ProjectAutomationContext, ResolvedProjectInputs } from '../tool-context.js';
 
@@ -60,6 +63,36 @@ export async function getProjectAutomationContext(
   return nextContext;
 }
 
+let cachedHeuristicEngineRoot: string | undefined;
+
+const HEURISTIC_ENGINE_CANDIDATES = [
+  'C:/Program Files/Epic Games/UE_5.6',
+  'C:/Program Files/Epic Games/UE_5.5',
+  'C:/Program Files/Epic Games/UE_5.4',
+  'C:/Program Files/Epic Games/UE_5.3',
+];
+
+const ENGINE_MARKER = 'Engine/Build/BatchFiles/Build.bat';
+
+async function probeEngineRootHeuristic(): Promise<string | undefined> {
+  if (cachedHeuristicEngineRoot !== undefined) {
+    return cachedHeuristicEngineRoot || undefined;
+  }
+
+  for (const candidate of HEURISTIC_ENGINE_CANDIDATES) {
+    try {
+      await access(resolve(candidate, ENGINE_MARKER), fsConstants.F_OK);
+      cachedHeuristicEngineRoot = candidate;
+      return candidate;
+    } catch {
+      // not found, try next
+    }
+  }
+
+  cachedHeuristicEngineRoot = '';
+  return undefined;
+}
+
 export async function resolveProjectInputs(
   request: ProjectInputsRequest,
   deps: ResolveProjectInputsDeps,
@@ -88,7 +121,26 @@ export async function resolveProjectInputs(
   const projectPathFromEnv = firstDefinedString(env.UE_PROJECT_PATH);
   const targetFromEnv = firstDefinedString(env.UE_PROJECT_TARGET, env.UE_EDITOR_TARGET);
 
-  const engineRoot = firstDefinedString(request.engine_root, engineRootFromContext, engineRootFromEnv);
+  let engineRoot = firstDefinedString(request.engine_root, engineRootFromContext, engineRootFromEnv);
+  let engineRootSource: 'explicit' | 'editor_context' | 'environment' | 'filesystem_heuristic' | 'missing';
+
+  if (request.engine_root) {
+    engineRootSource = 'explicit';
+  } else if (engineRootFromContext) {
+    engineRootSource = 'editor_context';
+  } else if (engineRootFromEnv) {
+    engineRootSource = 'environment';
+  } else {
+    // Filesystem heuristic: probe common UE installation paths
+    const heuristicRoot = await probeEngineRootHeuristic();
+    if (heuristicRoot) {
+      engineRoot = heuristicRoot;
+      engineRootSource = 'filesystem_heuristic';
+    } else {
+      engineRootSource = 'missing';
+    }
+  }
+
   const projectPath = firstDefinedString(request.project_path, projectPathFromContext, projectPathFromEnv);
   const target = firstDefinedString(request.target, targetFromContext, targetFromEnv);
 
@@ -99,7 +151,7 @@ export async function resolveProjectInputs(
     context,
     contextError,
     sources: {
-      engineRoot: request.engine_root ? 'explicit' : engineRootFromContext ? 'editor_context' : engineRootFromEnv ? 'environment' : 'missing',
+      engineRoot: engineRootSource,
       projectPath: request.project_path ? 'explicit' : projectPathFromContext ? 'editor_context' : projectPathFromEnv ? 'environment' : 'missing',
       target: request.target ? 'explicit' : targetFromContext ? 'editor_context' : targetFromEnv ? 'environment' : 'missing',
     },

@@ -15,7 +15,7 @@ export type ProjectAutomationContext = {
   liveCodingError?: string;
 };
 
-export type ProjectInputSource = 'explicit' | 'editor_context' | 'environment' | 'missing';
+export type ProjectInputSource = 'explicit' | 'editor_context' | 'environment' | 'filesystem_heuristic' | 'missing';
 
 export type ResolvedProjectInputs = {
   engineRoot?: string;
