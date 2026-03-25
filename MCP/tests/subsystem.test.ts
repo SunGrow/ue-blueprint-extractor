@@ -358,4 +358,49 @@ describe('jsonToolSuccess', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toEqual([{ type: 'text', text: 'Error: Oops' }]);
   });
+
+  it('extracts errorMessage when message is absent on failure', () => {
+    const result = jsonToolSuccess({ success: false, errorMessage: 'Schema not found' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('Schema not found') });
+  });
+
+  it('extracts error string when message/errorMessage are absent on failure', () => {
+    const result = jsonToolSuccess({ success: false, error: 'Compilation error' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('Compilation error') });
+  });
+
+  it('extracts diagnostics array messages on failure with no explicit message', () => {
+    const result = jsonToolSuccess({
+      success: false,
+      diagnostics: [
+        { severity: 'error', message: 'Node struct not found' },
+        { severity: 'warning', message: 'F-prefix normalized' },
+      ],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('Node struct not found') });
+  });
+
+  it('extracts errors array on failure with no explicit message', () => {
+    const result = jsonToolSuccess({
+      success: false,
+      errors: ['Invalid asset path', 'Missing schema'],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('Invalid asset path') });
+  });
+
+  it('includes response keys in fallback when no diagnostic info available', () => {
+    const result = jsonToolSuccess({
+      success: false,
+      operation: 'replace_tree',
+      compileResult: 'Failed',
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain('Operation failed');
+    expect(text).toContain('success');
+  });
 });

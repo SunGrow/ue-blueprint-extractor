@@ -72,6 +72,33 @@ export async function callSubsystemJson(
   return parsed;
 }
 
+/**
+ * Extracts the best available error message from a UE failure response,
+ * checking message, errorMessage, error, diagnostics[], and errors[] fields
+ * before falling back to listing the available response keys.
+ */
+function extractFailureMessage(parsed: Record<string, unknown>): string {
+  if (typeof parsed.message === 'string' && parsed.message.length > 0) return parsed.message;
+  if (typeof parsed.errorMessage === 'string' && parsed.errorMessage.length > 0) return parsed.errorMessage;
+  if (typeof parsed.error === 'string' && parsed.error.length > 0) return parsed.error;
+
+  if (Array.isArray(parsed.diagnostics) && parsed.diagnostics.length > 0) {
+    const messages = parsed.diagnostics
+      .filter((d: unknown): d is Record<string, unknown> =>
+        typeof d === 'object' && d !== null && typeof (d as Record<string, unknown>).message === 'string')
+      .map((d: Record<string, unknown>) => d.message as string);
+    if (messages.length > 0) return messages.join('; ');
+  }
+
+  if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+    const first = parsed.errors[0];
+    return typeof first === 'string' ? first : JSON.stringify(first);
+  }
+
+  const keys = Object.keys(parsed).join(', ');
+  return `Operation returned success:false with no diagnostic details. Response keys: [${keys}]`;
+}
+
 export function jsonToolSuccess(
   parsed: unknown,
   options: {
@@ -83,8 +110,9 @@ export function jsonToolSuccess(
   // Guard: if the UE response indicates failure, route through error path.
   // This prevents tool handlers from accidentally passing error payloads as successes.
   if (isRecord(parsed) && parsed.success === false) {
+    const errorText = extractFailureMessage(parsed);
     return {
-      content: [{ type: 'text' as const, text: `Error: ${typeof parsed.message === 'string' ? parsed.message : 'Operation failed'}` }],
+      content: [{ type: 'text' as const, text: `Error: ${errorText}` }],
       structuredContent,
       isError: true,
     };
