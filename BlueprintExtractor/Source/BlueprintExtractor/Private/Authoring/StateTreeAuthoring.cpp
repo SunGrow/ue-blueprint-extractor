@@ -78,6 +78,12 @@ struct FTreeMutationScratch
 	TArray<FDeferredStateLink> DeferredLinks;
 };
 
+// Forward declaration — used before definition
+static bool ApplyBindingsFromJson(UStateTreeEditorData* EditorData,
+                                  const TArray<TSharedPtr<FJsonValue>>& BindingValues,
+                                  TArray<FString>& OutErrors,
+                                  const FString& Path);
+
 static TSharedPtr<FJsonObject> NormalizePayload(const TSharedPtr<FJsonObject>& PayloadJson)
 {
 	if (!PayloadJson.IsValid())
