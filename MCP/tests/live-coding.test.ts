@@ -191,4 +191,13 @@ describe('enrichLiveCodingResult', () => {
     expect(result.headerChangesDetected).toEqual(['Source\\Actors\\MyActor.h']);
     expect(result.warnings).toHaveLength(1);
   });
+
+  it('adds new-file warning when noOp is true with NoChanges', () => {
+    const result = enrichLiveCodingResult(
+      { success: true, compileResult: 'NoChanges', noOp: true },
+      ['/Game/Source/NewFile.cpp'],
+    );
+    expect(result.warnings).toBeDefined();
+    expect((result.warnings as string[]).some((w: string) => w.includes('newly added'))).toBe(true);
+  });
 });

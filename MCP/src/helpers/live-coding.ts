@@ -51,6 +51,12 @@ export function enrichLiveCodingResult(
       + 'Use compile_project_code + restart_editor for class layout changes.',
     );
   }
+  if (result.noOp && typeof result.compileResult === 'string' && result.compileResult.toLowerCase() === 'nochanges') {
+    warnings.push(
+      'Live Coding cannot compile newly added source files — it only detects changes to already-compiled .obj files. '
+      + 'Use compile_project_code for new files, then restart_editor to load the new module.',
+    );
+  }
 
   const fallbackRecommended = canFallbackFromLiveCoding(result);
   const reason = deriveLiveCodingFallbackReason(result);
