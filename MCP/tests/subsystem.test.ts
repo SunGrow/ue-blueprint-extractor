@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { callSubsystemJson, jsonToolSuccess, normalizeUStructPath, normalizeUStructPaths } from '../src/helpers/subsystem.js';
+import { callSubsystemJson, jsonToolError, jsonToolSuccess, normalizeUStructPath, normalizeUStructPaths } from '../src/helpers/subsystem.js';
 
 function fakeClient(response: string) {
   return {
@@ -157,6 +157,98 @@ describe('callSubsystemJson', () => {
       expect(err.ueResponse.details).toEqual({ componentName: 'Foo' });
     }
   });
+
+  it('preserves ueResponse on errors thrown from { success: false, message } responses', async () => {
+    const fakeClient = {
+      callSubsystem: async () => JSON.stringify({
+        success: false,
+        message: 'Compilation failed',
+        phase: 'linking',
+      }),
+    };
+
+    try {
+      await callSubsystemJson(fakeClient, 'CompileProject', {});
+      expect.fail('Should have thrown');
+    } catch (err: any) {
+      expect(err.message).toBe('Compilation failed');
+      expect(err.ueResponse).toBeDefined();
+      expect(err.ueResponse.success).toBe(false);
+      expect(err.ueResponse.phase).toBe('linking');
+    }
+  });
+
+  it('preserves ueResponse on errors thrown from diagnostics responses', async () => {
+    const fakeClient = {
+      callSubsystem: async () => JSON.stringify({
+        success: false,
+        diagnostics: [
+          { severity: 'error', message: 'Schema class not found' },
+        ],
+        assetPath: '/Game/Test',
+      }),
+    };
+
+    try {
+      await callSubsystemJson(fakeClient, 'CreateStateTree', {});
+      expect.fail('Should have thrown');
+    } catch (err: any) {
+      expect(err.message).toBe('Schema class not found');
+      expect(err.ueResponse).toBeDefined();
+      expect(err.ueResponse.success).toBe(false);
+      expect(err.ueResponse.assetPath).toBe('/Game/Test');
+      expect(err.ueResponse.diagnostics).toHaveLength(1);
+    }
+  });
+
+  it('preserves ueResponse on errors thrown from { errors: [...] } responses', async () => {
+    const fakeClient = {
+      callSubsystem: async () => JSON.stringify({
+        errors: ['field X is required', 'field Y is invalid'],
+        requestId: 'abc-123',
+      }),
+    };
+
+    try {
+      await callSubsystemJson(fakeClient, 'CreateBlueprint', {});
+      expect.fail('Should have thrown');
+    } catch (err: any) {
+      expect(err.message).toBe('field X is required');
+      expect(err.ueResponse).toBeDefined();
+      expect(err.ueResponse.errors).toEqual(['field X is required', 'field Y is invalid']);
+      expect(err.ueResponse.requestId).toBe('abc-123');
+    }
+  });
+});
+
+describe('jsonToolError', () => {
+  it('formats Error objects with isError flag', () => {
+    const result = jsonToolError(new Error('boom'));
+    expect(result.isError).toBe(true);
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe('text');
+    expect(result.content[0].text).toBe('Error: boom');
+  });
+
+  it('formats string errors', () => {
+    const result = jsonToolError('something went wrong');
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('Error: something went wrong');
+  });
+
+  it('formats non-string non-Error values via String()', () => {
+    const result = jsonToolError(42);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('Error: 42');
+  });
+
+  it('formats null/undefined values', () => {
+    const nullResult = jsonToolError(null);
+    expect(nullResult.content[0].text).toBe('Error: null');
+
+    const undefinedResult = jsonToolError(undefined);
+    expect(undefinedResult.content[0].text).toBe('Error: undefined');
+  });
 });
 
 describe('normalizeUStructPath', () => {
@@ -241,5 +333,29 @@ describe('jsonToolSuccess', () => {
     const result = jsonToolSuccess({ success: true, data: 'ok' });
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent).toEqual({ success: true, data: 'ok' });
+  });
+
+  it('wraps record in structuredContent with empty content array', () => {
+    const result = jsonToolSuccess({ foo: 'bar', count: 5 });
+    expect(result.structuredContent).toEqual({ foo: 'bar', count: 5 });
+    expect(result.content).toEqual([]);
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('wraps non-record values in { data: value }', () => {
+    const stringResult = jsonToolSuccess('hello');
+    expect(stringResult.structuredContent).toEqual({ data: 'hello' });
+
+    const numberResult = jsonToolSuccess(42);
+    expect(numberResult.structuredContent).toEqual({ data: 42 });
+
+    const arrayResult = jsonToolSuccess([1, 2, 3]);
+    expect(arrayResult.structuredContent).toEqual({ data: [1, 2, 3] });
+  });
+
+  it('includes error text content when success is false', () => {
+    const result = jsonToolSuccess({ success: false, message: 'Oops' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: 'text', text: 'Error: Oops' }]);
   });
 });
