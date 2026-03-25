@@ -318,6 +318,9 @@ export function registerProjectControlTools({
         save_dirty_assets: z.boolean().default(true).describe(
           'When true, ask the editor-side restart path to save dirty assets before relaunching.',
         ),
+        force_kill: z.boolean().default(false).describe(
+          'Use process termination (taskkill /F) instead of graceful shutdown. Use when graceful restart fails due to Rider IDE locks or dirty package prompts.',
+        ),
         wait_for_reconnect: z.boolean().default(true).describe(
           'When true, wait for the editor to disconnect and reconnect before returning.',
         ),
@@ -336,11 +339,11 @@ export function registerProjectControlTools({
         openWorldHint: false,
       },
     },
-    async ({ save_dirty_assets, wait_for_reconnect, disconnect_timeout_seconds, reconnect_timeout_seconds }) => {
+    async ({ save_dirty_assets, force_kill, wait_for_reconnect, disconnect_timeout_seconds, reconnect_timeout_seconds }) => {
       try {
         // Pre-flight: verify editor is connected before attempting restart
         const probe = supportsConnectionProbe(client);
-        if (probe) {
+        if (!force_kill && probe) {
           try {
             const connected = await probe();
             if (!connected) {
@@ -351,41 +354,56 @@ export function registerProjectControlTools({
           }
         }
 
-        // Pre-flight: reject restart if editor is in PIE mode
-        try {
-          const ctx = await getProjectAutomationContext(true);
-          if ((ctx as Record<string, unknown>).isPlayingInEditor === true) {
-            return jsonToolError(new Error('Cannot restart during Play-In-Editor session. Stop PIE first.'));
+        // Pre-flight: reject restart if editor is in PIE mode (skip for force_kill)
+        if (!force_kill) {
+          try {
+            const ctx = await getProjectAutomationContext(true);
+            if ((ctx as Record<string, unknown>).isPlayingInEditor === true) {
+              return jsonToolError(new Error('Cannot restart during Play-In-Editor session. Stop PIE first.'));
+            }
+          } catch {
+            // Context query failed — proceed with restart attempt anyway
           }
-        } catch {
-          // Context query failed — proceed with restart attempt anyway
         }
 
-        // Attempt restart with one retry on transient failure
         let restartRequest: Record<string, unknown>;
-        try {
-          restartRequest = await callSubsystemJson('RestartEditor', {
-            bWarn: false,
-            bSaveDirtyAssets: save_dirty_assets,
-            bRelaunch: true,
-          });
-        } catch (firstError) {
-          await sleep(2000);
+
+        if (force_kill) {
+          // Force-kill path: terminate the editor process directly
+          const killResult = await projectController.killEditorProcess();
+          clearProjectAutomationContext();
+          restartRequest = {
+            success: killResult.killed,
+            operation: 'restart_editor',
+            strategy: 'force_kill',
+            ...(killResult.error ? { error: killResult.error } : {}),
+          };
+        } else {
+          // Graceful path: attempt restart with one retry on transient failure
           try {
             restartRequest = await callSubsystemJson('RestartEditor', {
               bWarn: false,
               bSaveDirtyAssets: save_dirty_assets,
               bRelaunch: true,
             });
-          } catch (retryError) {
-            return jsonToolError(new Error(
-              `restart_editor failed after retry: ${retryError instanceof Error ? retryError.message : String(retryError)}` +
-              ` (first attempt: ${firstError instanceof Error ? firstError.message : String(firstError)})`,
-            ));
+          } catch (firstError) {
+            await sleep(2000);
+            try {
+              restartRequest = await callSubsystemJson('RestartEditor', {
+                bWarn: false,
+                bSaveDirtyAssets: save_dirty_assets,
+                bRelaunch: true,
+              });
+            } catch (retryError) {
+              return jsonToolError(new Error(
+                `restart_editor failed after retry: ${retryError instanceof Error ? retryError.message : String(retryError)}` +
+                ` (first attempt: ${firstError instanceof Error ? firstError.message : String(firstError)})`,
+              ));
+            }
           }
-        }
 
-        clearProjectAutomationContext();
+          clearProjectAutomationContext();
+        }
 
         if (!wait_for_reconnect || restartRequest.success === false) {
           return jsonToolSuccess({

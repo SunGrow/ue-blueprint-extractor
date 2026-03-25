@@ -68,6 +68,7 @@ function createProjectController(overrides: Record<string, unknown> = {}) {
       detached: true,
       diagnostics: [],
     })),
+    killEditorProcess: vi.fn(async () => ({ killed: true })),
     waitForEditorRestart: vi.fn(async () => ({
       success: true,
       operation: 'restart_editor',
@@ -898,6 +899,43 @@ describe('registerProjectControlTools', () => {
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
       'Play-In-Editor',
     );
+  });
+
+  it('restart_editor force_kill terminates editor process directly', async () => {
+    const registry = createToolRegistry();
+    const killEditorProcess = vi.fn(async () => ({ killed: true }));
+    const projectController = createProjectController({ killEditorProcess });
+    const callSubsystemJson = vi.fn(async () => ({ success: true }));
+    const clearProjectAutomationContext = vi.fn();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController,
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: false,
+      force_kill: true,
+      wait_for_reconnect: false,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    expect(killEditorProcess).toHaveBeenCalled();
+    expect(callSubsystemJson).not.toHaveBeenCalledWith('RestartEditor', expect.anything());
+    expect(clearProjectAutomationContext).toHaveBeenCalled();
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.strategy).toBe('force_kill');
   });
 
   it('includes accumulated stepErrors and failedStep in outer catch error payload', async () => {

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { access, readdir, unlink } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -127,6 +127,7 @@ export interface ProjectControllerLike {
   readonly liveCodingSupported: boolean;
   classifyChangedPaths(changedPaths: string[], forceRebuild?: boolean): SyncStrategyPlan;
   compileProjectCode(request: CompileProjectCodeRequest): Promise<CompileProjectCodeResult>;
+  killEditorProcess(): Promise<{ killed: boolean; error?: string }>;
   launchEditor(request: LaunchEditorRequest): Promise<LaunchEditorResult>;
   waitForEditorRestart(
     probeConnection: ProbeConnection,
@@ -622,6 +623,19 @@ export class ProjectController implements ProjectControllerLike {
     }
 
     return result;
+  }
+
+  async killEditorProcess(): Promise<{ killed: boolean; error?: string }> {
+    try {
+      if (this.platform === 'win32') {
+        execSync('taskkill /F /IM "UnrealEditor.exe"', { timeout: 10000 });
+      } else {
+        execSync('pkill -9 -f UnrealEditor', { timeout: 10000 });
+      }
+      return { killed: true };
+    } catch (err) {
+      return { killed: false, error: String(err) };
+    }
   }
 
   async launchEditor(request: LaunchEditorRequest): Promise<LaunchEditorResult> {
