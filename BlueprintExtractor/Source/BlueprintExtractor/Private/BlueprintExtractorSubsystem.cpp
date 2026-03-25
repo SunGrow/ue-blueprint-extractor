@@ -2447,9 +2447,14 @@ FString UBlueprintExtractorSubsystem::CreateStateTree(
 		AssetPath,
 		ParsedPayload,
 		bValidateOnly);
+	// Safety fallback — BuildResult should always return a valid pointer,
+	// but guard against edge cases where the context is somehow empty.
 	if (!Result.IsValid())
 	{
-		return MakeErrorJson(TEXT("Failed to create StateTree"));
+		TSharedPtr<FJsonObject> Fallback = MakeShared<FJsonObject>();
+		Fallback->SetBoolField(TEXT("success"), false);
+		Fallback->SetStringField(TEXT("error"), TEXT("StateTree creation failed with no diagnostic context"));
+		return SerializeJsonObject(Fallback);
 	}
 
 	return SerializeJsonObject(Result);
@@ -2483,9 +2488,14 @@ FString UBlueprintExtractorSubsystem::ModifyStateTree(
 		Operation,
 		ParsedPayload,
 		bValidateOnly);
+	// Safety fallback — BuildResult should always return a valid pointer,
+	// but guard against edge cases where the context is somehow empty.
 	if (!Result.IsValid())
 	{
-		return MakeErrorJson(TEXT("Failed to modify StateTree"));
+		TSharedPtr<FJsonObject> Fallback = MakeShared<FJsonObject>();
+		Fallback->SetBoolField(TEXT("success"), false);
+		Fallback->SetStringField(TEXT("error"), TEXT("StateTree modification failed with no diagnostic context"));
+		return SerializeJsonObject(Fallback);
 	}
 
 	return SerializeJsonObject(Result);
