@@ -5,6 +5,12 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.2] - 2026-03-26
+
+### Fixed
+
+- Treated Windows drive-letter paths such as `C:/Proj/Source/MyActor.h` as already-absolute in `sync_project_code`, preventing Linux/CI runners from re-resolving them under the repository workspace.
+
 ## [6.0.1] - 2026-03-26
 
 ### Fixed
