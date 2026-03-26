@@ -5,6 +5,14 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.3] - 2026-03-26
+
+### Fixed
+
+- Updated the packaged MCP README to document the current structured-result contract without reintroducing legacy migration guidance.
+- Aligned the tarball smoke test with the new README shape and restored the explicit `structuredContent` contract wording it validates.
+- Hardened the stdio and live integration tests to parse normalized MCP results from `structuredContent` before falling back to text JSON.
+
 ## [6.0.2] - 2026-03-26
 
 ### Fixed

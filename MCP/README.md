@@ -110,6 +110,7 @@ The tool contract is optimized for model reliability:
 
 - **`snake_case`** inputs on all public tools
 - **`outputSchema`** on every tool for structured JSON responses
+- **`structuredContent`** carries the canonical success and error payload for MCP clients that consume structured results directly
 - **Structured error envelopes** with diagnostic codes and recovery hints
 - **Explicit-save semantics** &mdash; nothing persists until `save_assets` is called
 - **Next-step hints** guiding the assistant toward the logical follow-up action
@@ -156,16 +157,6 @@ blueprint://test-runs/{run_id}/{artifact}  Automation test artifacts
 | `plan_widget_motion_verification` | Keyframe-bundle verification planning |
 | `wire_hud_widget_classes` | Class-default wiring for HUD assets |
 | `debug_widget_compile_errors` | Diagnosing and recovering from compile failures |
-
-<br>
-
-## Migration from v3 / v4
-
-| Before | After |
-|:-------|:------|
-| Individual `extract_blueprint`, `extract_widget`, etc. | `extract_asset` with `asset_type` parameter |
-| `set_material_settings`, `add_material_expression`, etc. | `material_graph_operation` with `operation` |
-| Guessing parameter shapes | `get_tool_help` for schema, examples, and hints |
 
 <br>
 

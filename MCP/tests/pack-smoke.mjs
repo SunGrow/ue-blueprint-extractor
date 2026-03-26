@@ -79,7 +79,7 @@ async function verifyPackagedReadme(packageRoot) {
     '`material_graph_operation`',
     '`get_tool_help`',
     '`structuredContent`',
-    '## Migration From Legacy Entrypoints',
+    '`activate_workflow_scope`',
   ];
   for (const snippet of requiredSnippets) {
     if (!readme.includes(snippet)) {
@@ -91,6 +91,8 @@ async function verifyPackagedReadme(packageRoot) {
     'The current v2 MCP contract exposes 97 tools',
     'current v2 MCP contract',
     'composable material authoring (`set_material_settings`, `add_material_expression`, `connect_material_expressions`, `bind_material_property`)',
+    '## Migration From Legacy Entrypoints',
+    '## Migration from v3 / v4',
   ];
   for (const snippet of staleSnippets) {
     if (readme.includes(snippet)) {

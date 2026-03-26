@@ -64,7 +64,7 @@ export function createBlueprintExtractorServer(
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '6.0.2',
+    version: '6.0.3',
   }, {
     instructions: serverInstructions,
   });
