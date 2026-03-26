@@ -1,178 +1,154 @@
 # Blueprint Extractor MCP
 
-> **MCP server that gives AI assistants full read/write access to Unreal Engine projects through the Remote Control API.**
+> MCP server for Unreal Engine projects that need real asset extraction, authoring, verification, and project automation through a running editor.
 
 [![npm version](https://img.shields.io/npm/v/blueprint-extractor-mcp)](https://www.npmjs.com/package/blueprint-extractor-mcp)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.12-blue)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/github/license/SunGrow/ue-blueprint-extractor)](https://github.com/SunGrow/ue-blueprint-extractor/blob/master/LICENSE)
 
----
+Blueprint Extractor MCP connects assistants such as Claude Code and Codex to a live Unreal Editor over the Remote Control API. It exposes a structured contract for:
 
-## What It Does
+- asset extraction
+- widget, material, Blueprint, AI, data, and input authoring
+- asset import with async job tracking
+- visual capture and motion verification
+- compile, live coding, editor restart, and automation execution
 
-Blueprint Extractor MCP connects AI coding assistants (Claude Code, Codex, etc.) to a running Unreal Editor, enabling them to:
+## At A Glance
 
-- **Extract** Blueprints, widgets, materials, animations, data assets, and more
-- **Author** widgets, materials, Blueprints, data tables, input actions, and AI assets
-- **Build & test** compile code, trigger Live Coding, run automation tests, restart the editor
-- **Import** textures, meshes, and generic assets with async job tracking
-- **Verify** capture widget screenshots, compare against references, inspect motion checkpoints
-
-All communication happens over stdio (MCP protocol) on the AI side and HTTP (Remote Control API) on the Unreal side.
-
----
+| Surface | Count |
+|---|---:|
+| Tools | 90 |
+| Resources | 16 |
+| Resource templates | 4 |
+| Prompts | 8 |
 
 ## Quick Start
 
-### 1. Prerequisites
+### Requirements
 
-| Requirement | Details |
-|-------------|---------|
-| **Node.js** | v18 or later |
-| **Unreal Editor** | Running with the **Remote Control API** plugin enabled |
-| **BlueprintExtractor plugin** | Loaded in the editor ([get it here](https://github.com/SunGrow/ue-blueprint-extractor)) |
+| Requirement | Notes |
+|---|---|
+| Node.js | 18+ |
+| Unreal Editor | Running with Remote Control enabled |
+| BlueprintExtractor plugin | Installed in the target UE project |
 
-### 2. Run
+### Run directly
 
 ```bash
 npx blueprint-extractor-mcp
 ```
 
-The server connects to the editor on port `30010` by default.
+The server talks to the editor on `127.0.0.1:30010` by default.
 
-### 3. Install in Your AI Client
-
-**Claude Code:**
+### Register with an MCP client
 
 ```bash
-claude mcp add -s user -t stdio blueprint-extractor \
-  -e UE_REMOTE_CONTROL_PORT=30010 \
-  -- npx -y blueprint-extractor-mcp@latest
+# Claude Code
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@latest
+
+# Codex
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
 ```
 
-**Codex:**
-
-```bash
-codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
-  blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
-```
-
----
+On Windows, wrap `npx` with `cmd /c`.
 
 ## Tool Surface
 
-107 tools organized into workflow-scoped families. Only ~19 core tools are visible by default &mdash; use `activate_workflow_scope` to load specialized families on demand.
+The server keeps a compact default tool surface and expands into specialized workflow families with `activate_workflow_scope`.
 
-| Scope | Tools | What You Can Do |
-|-------|------:|-----------------|
-| **Core** (always on) | ~19 | Extract, search, list, save assets; get tool help |
-| `widget_authoring` | 16 | Create/patch/replace/move/wrap widgets, compile, CommonUI styles |
-| `material_authoring` | 5 | Create/modify materials, graph operations, material functions |
-| `blueprint_authoring` | 4 | Create/modify Blueprint members and graphs |
-| `schema_ai_authoring` | 11 | Structs, enums, blackboards, behavior trees, state trees |
-| `animation_authoring` | 7 | Anim sequences, montages, blend spaces, widget animations |
-| `data_tables` | 7 | Data assets, input actions/mappings, tables, curves |
-| `import` | 3 | Import assets with texture/mesh options, job tracking |
-| `automation_testing` | 4 | Run, poll, and inspect automation test results |
-| `verification` | 7 | Widget captures, motion checkpoints, reference comparisons |
+| Scope | Focus |
+|---|---|
+| Core | Search, extract, save, help, verification entry points |
+| `widget_authoring` | Widget tree work, compile flows, CommonUI |
+| `material_authoring` | Material graphs, settings, instances |
+| `blueprint_authoring` | Blueprint creation and patching |
+| `schema_ai_authoring` | StateTree, BehaviorTree, Blackboard, enums, structs |
+| `animation_authoring` | Anim sequences, montages, blend spaces, widget motion |
+| `data_tables` | Data assets, tables, curves, input assets |
+| `import` | Import jobs and job inspection |
+| `automation_testing` | Automation runs and artifacts |
+| `verification` | Captures, comparisons, motion verification |
 
-### Key Tools at a Glance
+Representative tools:
 
-```
-extract_asset           Extract any asset by type (Blueprints, widgets, materials, ...)
-find_and_extract        Search + extract in one call
-search_assets           Locate assets by name, path, or class
-material_graph_op       Single-step material graph edits (nodes, wires, settings)
-compile_project_code    Trigger a full project build from the host
-run_automation_tests    Launch UE automation tests and collect results
-capture_widget_preview  Screenshot a widget for visual verification
-get_tool_help           Schema summary, examples, and hints for any tool
-```
-
----
-
-## Architecture
-
-```
-                          stdio                    HTTP :30010
-  AI Assistant  <-------->  MCP Server  <--------->  Unreal Editor
-  (Claude, etc.)           (Node.js)                (Remote Control API)
-                                |
-                          Dual-Mode Executor
-                           /            \
-                     Editor Mode    Commandlet Mode
-                     (live editor)  (headless, no UI)
+```text
+extract_asset
+find_and_extract
+search_assets
+material_graph_operation
+capture_widget_preview
+compare_motion_capture_bundle
+compile_project_code
+sync_project_code
+run_automation_tests
+get_tool_help
 ```
 
-**Dual-mode execution** (v6.0): each tool is annotated as `editor_only`, `read_only`, or `both`. The adaptive executor routes calls to the appropriate backend &mdash; live editor for interactive work, commandlet for headless operations.
+## Contract Shape
 
----
+The public contract is designed for model reliability:
+
+- `snake_case` public inputs
+- `outputSchema` on public tools
+- structured success and error envelopes
+- explicit-save semantics
+- reusable resources and prompts for guidance-heavy workflows
+
+Useful docs:
+
+- [Repository README](../README.md)
+- [MCP v2 Reference](../docs/mcp-v2-reference.md)
+- [Prompt Catalog](../docs/prompt-catalog.md)
+- [Widget Motion Authoring](../docs/widget-motion-authoring.md)
+- [Motion Verification Workflow](../docs/motion-verification-workflow.md)
 
 ## Environment Variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `UE_REMOTE_CONTROL_PORT` | `30010` | Editor's Remote Control HTTP port |
-| `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH` | *(auto-probe)* | Force a specific subsystem object path |
-| `UE_ENGINE_ROOT` | &mdash; | Path to the UE engine root (for builds & automation) |
-| `UE_PROJECT_PATH` | &mdash; | Path to the `.uproject` file |
-| `UE_PROJECT_TARGET` / `UE_EDITOR_TARGET` | &mdash; | Build target name |
-| `UE_BUILD_PLATFORM` | &mdash; | Build platform (e.g., `Win64`) |
-| `UE_BUILD_CONFIGURATION` | &mdash; | Build configuration (e.g., `Development`) |
+|---|---|---|
+| `UE_REMOTE_CONTROL_HOST` | `127.0.0.1` | Remote Control host |
+| `UE_REMOTE_CONTROL_PORT` | `30010` | Remote Control port |
+| `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH` | auto-probe | Explicit subsystem object path |
+| `UE_ENGINE_ROOT` | unset | Engine root for build and automation tools |
+| `UE_PROJECT_PATH` | unset | `.uproject` path |
+| `UE_PROJECT_TARGET` / `UE_EDITOR_TARGET` | unset | Build target |
 
----
+## Resources And Prompts
 
-## Resources & Prompts
+The package also exposes non-tool guidance surfaces.
 
-The server also exposes **MCP resources** and **prompts** for guided workflows:
+Resource templates:
 
-**Resources** &mdash; example payloads, widget patterns, capture artifacts, test-run results:
-
-```
+```text
 blueprint://examples/{family}
 blueprint://widget-patterns/{pattern}
 blueprint://captures/{capture_id}
 blueprint://test-runs/{run_id}/{artifact}
 ```
 
-**Prompts** &mdash; step-by-step guidance for common authoring tasks: UI design from specs, widget motion authoring, material button styles, HUD wiring, compile-error debugging, and more.
-
----
+Prompt families cover design normalization, menu authoring, widget motion authoring, and motion verification planning.
 
 ## Local Development
 
 ```bash
 cd MCP
 npm install
-npm run build          # TypeScript compilation
-npm test               # Unit tests + stdio integration test
+npm run build
+npm test
 ```
 
-### Additional Test Suites
+Additional suites:
 
-| Command | What It Tests |
-|---------|---------------|
-| `npm run test:pack-smoke` | Packaged tarball contract and README inclusion |
-| `npm run test:publish-gate` | Publish readiness for the current version |
-| `BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live` | Full live E2E against a running editor |
-
-The live suite exercises texture/mesh import over HTTP fixtures, material authoring workflows, Enhanced Input round-trips, and asset saving.
-
----
-
-## Migration from v3/v4
-
-| Before | Now |
-|--------|-----|
-| Individual `extract_<type>` tools | `extract_asset` with `asset_type` parameter |
-| `set_material_settings`, `add_material_expression`, etc. | `material_graph_operation` with `operation` |
-| Need parameter docs? | `get_tool_help` for any tool |
-
----
+| Command | Purpose |
+|---|---|
+| `npm run test:pack-smoke` | Validate the packaged tarball |
+| `npm run test:publish-gate` | Publish readiness checks |
+| `BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live` | Live end-to-end editor validation |
 
 ## Links
 
-- **Repository:** [github.com/SunGrow/ue-blueprint-extractor](https://github.com/SunGrow/ue-blueprint-extractor)
-- **Issues:** [github.com/SunGrow/ue-blueprint-extractor/issues](https://github.com/SunGrow/ue-blueprint-extractor/issues)
-- **npm:** [npmjs.com/package/blueprint-extractor-mcp](https://www.npmjs.com/package/blueprint-extractor-mcp)
+- [Repository](https://github.com/SunGrow/ue-blueprint-extractor)
+- [Issues](https://github.com/SunGrow/ue-blueprint-extractor/issues)
+- [npm package](https://www.npmjs.com/package/blueprint-extractor-mcp)

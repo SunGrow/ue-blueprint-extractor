@@ -12,9 +12,19 @@ BlueprintExtractor/Intermediate/
 MCP/dist/
 MCP/node_modules/
 MCP/*.tgz
+MCP/TEST_COVERAGE_AUDIT.md
 
 tests/fixtures/BlueprintExtractorFixture/Binaries/
 tests/fixtures/BlueprintExtractorFixture/DerivedDataCache/
 tests/fixtures/BlueprintExtractorFixture/Intermediate/
 tests/fixtures/BlueprintExtractorFixture/Plugins/
 tests/fixtures/BlueprintExtractorFixture/Saved/
+
+.claude/
+.issues/
+docs/EXECUTION_PROMPT.md
+docs/IMPLEMENTATION_PLAN.md
+docs/TDD.md
+docs/VISION_AND_REQUIREMENTS.md
+docs/superpowers/plans/2026-03-26-mcp-remaining-fixes.md
+docs/superpowers/research/
