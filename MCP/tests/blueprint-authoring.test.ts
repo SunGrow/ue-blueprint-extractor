@@ -9,6 +9,7 @@ const blueprintMemberMutationOperationSchema = z.enum([
   'replace_variables',
   'patch_variable',
   'add_component',
+  'patch_component',
   'patch_class_defaults',
 ]);
 const blueprintGraphMutationOperationSchema = z.enum([
@@ -418,5 +419,131 @@ describe('registerBlueprintAuthoringTools', () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     const text = getTextContent(result as { content?: Array<{ text?: string; type: string }> });
     expect(text).toContain('not found');
+  });
+
+  it('patch_component with validate_only passes validate_only to subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      validationSummary: { valid: true, message: 'Validated.' },
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'patch_component',
+      payload: { componentName: 'MyComp', properties: { bVisible: true } },
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyBlueprintMembers', {
+      AssetPath: '/Game/Test/BP_Test',
+      Operation: 'patch_component',
+      PayloadJson: JSON.stringify({ componentName: 'MyComp', properties: { bVisible: true } }),
+      bValidateOnly: true,
+    });
+  });
+
+  it('patch_component on inherited component returns success when patching supported', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'ModifyBlueprintMembers',
+      message: "Applied property overrides to inherited component 'StateTree' from 'BP_Human_Base'.",
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_GameplayTrainer',
+      operation: 'patch_component',
+      payload: {
+        componentName: 'StateTree',
+        properties: {
+          'StateTreeRef.StateTree': '/Game/AI/ST_Trainer.ST_Trainer',
+        },
+      },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBeFalsy();
+    const text = getTextContent(result as { content?: Array<{ text?: string; type: string }> });
+    expect(text).toContain('success');
+  });
+
+  it('patch_class_defaults with nested object value emits pre-validation warning', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'ModifyBlueprintMembers',
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'patch_class_defaults',
+      payload: {
+        classDefaults: {
+          StateTree: { StateTreeRef: { StateTree: '/Game/AI/ST_Test.ST_Test' } },
+        },
+      },
+      validate_only: false,
+    });
+
+    const text = getTextContent(result as { content?: Array<{ text?: string; type: string }> });
+    expect(text).toContain('nested object');
+    expect(text).toContain('StateTree');
+  });
+
+  it('patch_class_defaults passes validate_only to subsystem for safe validation path', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      validationSummary: { valid: true, message: 'Validated.' },
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'patch_class_defaults',
+      payload: {
+        classDefaults: { SomeProperty: 'value' },
+      },
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyBlueprintMembers', {
+      AssetPath: '/Game/Test/BP_Test',
+      Operation: 'patch_class_defaults',
+      PayloadJson: JSON.stringify({ classDefaults: { SomeProperty: 'value' } }),
+      bValidateOnly: true,
+    });
   });
 });

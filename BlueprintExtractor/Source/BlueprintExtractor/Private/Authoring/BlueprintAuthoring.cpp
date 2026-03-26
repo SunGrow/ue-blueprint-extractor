@@ -13,6 +13,7 @@
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/MemberReference.h"
 #include "Engine/SCS_Node.h"
+#include "Engine/InheritableComponentHandler.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_ExecutionSequence.h"
@@ -992,45 +993,95 @@ static bool PatchComponent(UBlueprint* Blueprint,
 	USCS_Node* Node = Blueprint->SimpleConstructionScript->FindSCSNode(FName(*ComponentName));
 	if (!Node)
 	{
-		// Search parent class chain to give a descriptive error
-		// when the component exists in a parent Blueprint
-		bool bFoundInParent = false;
+		// Search parent class chain for the component
+		USCS_Node* ParentNode = nullptr;
 		FString ParentClassName;
 		UClass* ParentClass = Blueprint->ParentClass;
-		while (ParentClass)
+		while (ParentClass && !ParentNode)
 		{
 			if (UBlueprintGeneratedClass* BPGC = Cast<UBlueprintGeneratedClass>(ParentClass))
 			{
 				if (BPGC->SimpleConstructionScript)
 				{
-					if (BPGC->SimpleConstructionScript->FindSCSNode(FName(*ComponentName)))
+					ParentNode = BPGC->SimpleConstructionScript->FindSCSNode(FName(*ComponentName));
+					if (ParentNode)
 					{
-						bFoundInParent = true;
 						ParentClassName = BPGC->ClassGeneratedBy
 							? BPGC->ClassGeneratedBy->GetName()
 							: BPGC->GetName();
-						break;
 					}
 				}
 			}
 			ParentClass = ParentClass->GetSuperClass();
 		}
 
-		if (bFoundInParent)
-		{
-			OutErrors.Add(FString::Printf(
-				TEXT("Component '%s' is inherited from parent class '%s'. "
-				     "Use patch_class_defaults to override inherited component properties, "
-				     "or modify the parent Blueprint directly."),
-				*ComponentName, *ParentClassName));
-		}
-		else
+		if (!ParentNode)
 		{
 			OutErrors.Add(FString::Printf(
 				TEXT("Blueprint component '%s' was not found in '%s' or any parent class."),
 				*ComponentName, *Blueprint->GetName()));
+			return false;
 		}
-		return false;
+
+		// Use UInheritableComponentHandler to override inherited component properties
+		UInheritableComponentHandler* ICH = Blueprint->GetInheritableComponentHandler(/*bCreateIfNecessary=*/true);
+		if (!ICH)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Failed to create InheritableComponentHandler for '%s'. "
+				     "Component '%s' is inherited from '%s' but cannot be overridden."),
+				*Blueprint->GetName(), *ComponentName, *ParentClassName));
+			return false;
+		}
+
+		FComponentKey CompKey(ParentNode);
+
+		// Get existing override template or create a new one
+		UActorComponent* OverrideTemplate = ICH->GetOverridenComponentTemplate(CompKey);
+		if (!OverrideTemplate)
+		{
+			OverrideTemplate = ICH->CreateOverridenComponentTemplate(CompKey);
+			if (!OverrideTemplate)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("Failed to create override template for inherited component '%s' from '%s'."),
+					*ComponentName, *ParentClassName));
+				return false;
+			}
+		}
+
+		// Apply properties to the override template
+		const TSharedPtr<FJsonObject>* PropertiesObject = nullptr;
+		if ((EffectivePayload->TryGetObjectField(TEXT("properties"), PropertiesObject)
+			|| EffectivePayload->TryGetObjectField(TEXT("propertyOverrides"), PropertiesObject))
+			&& PropertiesObject && (*PropertiesObject)->Values.Num() > 0)
+		{
+			if (!FPropertySerializer::ApplyPropertiesFromJson(
+					OverrideTemplate, *PropertiesObject, OutErrors, false, true))
+			{
+				return false;
+			}
+		}
+
+		// Warn about operations not supported on inherited components
+		TArray<FString> UnsupportedKeys;
+		if (EffectivePayload->HasField(TEXT("newName")))
+			UnsupportedKeys.Add(TEXT("newName"));
+		if (EffectivePayload->HasField(TEXT("parentComponentName")))
+			UnsupportedKeys.Add(TEXT("parentComponentName"));
+		if (EffectivePayload->HasField(TEXT("attachToName")))
+			UnsupportedKeys.Add(TEXT("attachToName"));
+
+		if (UnsupportedKeys.Num() > 0)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Warning: '%s' is inherited from '%s'. Only property overrides are supported. "
+				     "The following operations were ignored: %s"),
+				*ComponentName, *ParentClassName,
+				*FString::Join(UnsupportedKeys, TEXT(", "))));
+		}
+
+		return true;
 	}
 
 	FString NewName;
@@ -1868,12 +1919,15 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 	UBlueprint* WorkingBlueprint = Blueprint;
 	if (bValidateOnly)
 	{
-		// DuplicateObject is unsafe for patch_class_defaults: it triggers
-		// PostDuplicateBlueprint → CompileSynchronouslyImpl → CreateDefaultObject
-		// which can FATAL crash on BPs with inherited components.
-		// ApplyClassDefaults with bValidationOnly=true uses FTemporaryPropertyStorage
-		// so running against the live Blueprint CDO is safe (no actual mutation).
-		const bool bSkipDuplicate = (Operation == TEXT("patch_class_defaults"));
+		// DuplicateObject is unsafe for BPs with inherited components: it triggers
+		// PostDuplicateBlueprint → CompileSynchronouslyImpl → CreateDefaultObject → FATAL.
+		// patch_class_defaults validates against live CDO via FTemporaryPropertyStorage.
+		// patch_component on BPs with Blueprint parents must skip to avoid the crash;
+		// BPs with only C++ parents can safely use DuplicateObject for rollback.
+		const bool bHasBlueprintParent = Blueprint->ParentClass
+			&& Cast<UBlueprintGeneratedClass>(Blueprint->ParentClass) != nullptr;
+		const bool bSkipDuplicate = (Operation == TEXT("patch_class_defaults"))
+			|| (Operation == TEXT("patch_component") && bHasBlueprintParent);
 		if (!bSkipDuplicate)
 		{
 			WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage());
