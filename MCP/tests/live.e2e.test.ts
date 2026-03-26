@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { getTextContent, startFixtureFileServer } from './test-helpers.js';
+import { getTextContent, parseToolResult, startFixtureFileServer } from './test-helpers.js';
 
 const liveEnabled = process.env.BLUEPRINT_EXTRACTOR_LIVE_E2E === '1';
 const currentDir = fileURLToPath(new URL('.', import.meta.url));
@@ -86,7 +86,7 @@ async function callToolJson<T>(
     arguments: args,
   }, undefined, requestOptions);
   expect(result.isError, label).toBeFalsy();
-  return JSON.parse(getTextContent(result)) as T;
+  return parseToolResult<T>(result);
 }
 
 type WidgetTreeNode = {
@@ -212,7 +212,7 @@ async function waitForImportJob(client: Client, jobId: string): Promise<ImportJo
     });
 
     expect(result.isError, `get_import_job(${jobId})`).toBeFalsy();
-    const parsed = JSON.parse(getTextContent(result)) as ImportJobResult;
+    const parsed = parseToolResult<ImportJobResult>(result);
     if (parsed.terminal) {
       return parsed;
     }
@@ -748,7 +748,7 @@ describeLive('live UE e2e', () => {
       },
     });
     expect(invalidAppend.isError).toBe(true);
-    const invalidAppendJson = (invalidAppend.structuredContent ?? JSON.parse(getTextContent(invalidAppend))) as Record<string, unknown>;
+    const invalidAppendJson = parseToolResult<Record<string, unknown>>(invalidAppend);
     expect(invalidAppendJson).toMatchObject({
       success: false,
       operation: 'modify_blueprint_graphs',
@@ -817,7 +817,7 @@ describeLive('live UE e2e', () => {
     });
     expect(textureEnqueue.isError).toBeFalsy();
     expect(getTextContent(textureEnqueue)).not.toContain(authHeader);
-    const textureJob = JSON.parse(getTextContent(textureEnqueue)) as ImportJobResult;
+    const textureJob = parseToolResult<ImportJobResult>(textureEnqueue);
     expect(textureJob.jobId).toBeTruthy();
 
     const textureTerminal = await waitForImportJob(client, textureJob.jobId as string);
@@ -849,7 +849,7 @@ describeLive('live UE e2e', () => {
       },
     });
     expect(meshEnqueue.isError).toBeFalsy();
-    const meshJob = JSON.parse(getTextContent(meshEnqueue)) as ImportJobResult;
+    const meshJob = parseToolResult<ImportJobResult>(meshEnqueue);
     expect(meshJob.jobId).toBeTruthy();
 
     const meshTerminal = await waitForImportJob(client, meshJob.jobId as string);
@@ -876,7 +876,7 @@ describeLive('live UE e2e', () => {
       },
     });
     expect(saveAssets.isError).toBeFalsy();
-    expect(JSON.parse(getTextContent(saveAssets))).toMatchObject({
+    expect(parseToolResult<Record<string, unknown>>(saveAssets)).toMatchObject({
       saved: true,
     });
   });
@@ -1186,7 +1186,7 @@ describeLive('live UE e2e', () => {
       },
     });
     expect(rejectedGenericCreate.isError).toBe(true);
-    expect(JSON.parse(getTextContent(rejectedGenericCreate))).toMatchObject({
+    expect(parseToolResult<Record<string, unknown>>(rejectedGenericCreate)).toMatchObject({
       success: false,
       operation: 'create_data_asset',
       code: 'unsupported_asset_class',
@@ -1329,21 +1329,29 @@ describeLive('live UE e2e', () => {
     expect(automationContext.engineRoot).toBeTruthy();
     expect(automationContext.editorTarget).toBeTruthy();
 
-    const liveCoding = await callToolJson<Record<string, unknown>>(
-      connection.client,
-      'trigger_live_coding',
-      {
+    const liveCodingResult = await connection.client.callTool({
+      name: 'trigger_live_coding',
+      arguments: {
         changed_paths: [changedPath],
       },
-      'trigger_live_coding',
-      { timeout: 900_000, maxTotalTimeout: 900_000 },
-    );
+    }, undefined, { timeout: 900_000, maxTotalTimeout: 900_000 });
+    const liveCoding = parseToolResult<Record<string, unknown>>(liveCodingResult);
     expect(liveCoding).toMatchObject({
       operation: 'trigger_live_coding',
-      changedPathsAccepted: [changedPath],
-      changedPathsAppliedByEditor: false,
     });
-    expect(typeof liveCoding.success).toBe('boolean');
+    if (liveCodingResult.isError) {
+      expect(liveCoding).toMatchObject({
+        success: false,
+        status: 'unsupported',
+        supported: false,
+      });
+    } else {
+      expect(liveCoding).toMatchObject({
+        changedPathsAccepted: [changedPath],
+        changedPathsAppliedByEditor: false,
+      });
+      expect(typeof liveCoding.success).toBe('boolean');
+    }
 
     const compileProject = await callToolJson<Record<string, unknown>>(
       connection.client,

@@ -76,6 +76,17 @@ export function getTextContent(result: {
     : '';
 }
 
+export function parseToolResult<T = Record<string, unknown>>(result: {
+  content?: Array<{ text?: string; type: string }>;
+  structuredContent?: unknown;
+}): T {
+  if (result.structuredContent !== undefined && result.structuredContent !== null) {
+    return result.structuredContent as T;
+  }
+
+  return JSON.parse(getTextContent(result)) as T;
+}
+
 export async function startMockRemoteControlServer(
   options: MockRemoteControlOptions = {},
 ): Promise<MockRemoteControlServer> {
