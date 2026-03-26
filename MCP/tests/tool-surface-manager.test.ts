@@ -49,9 +49,7 @@ const ALL_TEST_TOOLS = [
   // material authoring
   'create_material', 'material_graph_operation', 'modify_material',
   'compile_material_asset',
-  'create_material_function', 'modify_material_function',
   'create_material_instance', 'modify_material_instance',
-  'extract_material_function',
   // blueprint authoring
   'create_blueprint', 'modify_blueprint_members', 'modify_blueprint_graphs',
   // schema & AI
@@ -74,7 +72,6 @@ const ALL_TEST_TOOLS = [
   'create_curve_table', 'modify_curve_table',
   // import
   'import_assets', 'get_import_job', 'list_import_jobs',
-  'import_textures', 'import_meshes', 'reimport_assets',
   // automation
   'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
 ];
@@ -151,7 +148,6 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('create_material')).toBe(true);
       expect(active.has('material_graph_operation')).toBe(true);
       expect(active.has('create_material_instance')).toBe(true);
-      expect(active.has('extract_material_function')).toBe(true);
       expect(active.has('compile_material_asset')).toBe(true);
 
       expect(active.has('create_widget_blueprint')).toBe(false);
@@ -185,8 +181,7 @@ describe('ToolSurfaceManager', () => {
 
       expect(active.has('import_assets')).toBe(true);
       expect(active.has('get_import_job')).toBe(true);
-      expect(active.has('import_textures')).toBe(true);
-      expect(active.has('reimport_assets')).toBe(true);
+      expect(active.has('list_import_jobs')).toBe(true);
     });
 
     it('automation_testing loads automation tools', () => {

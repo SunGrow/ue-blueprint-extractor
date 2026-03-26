@@ -1,8 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { registerAlias } from '../helpers/alias-registration.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
-import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -18,8 +16,6 @@ type RegisterMaterialAuthoringToolsOptions = {
   materialConnectionSelectorFieldsSchema: z.AnyZodObject;
   materialGraphOperationKindSchema: z.ZodTypeAny;
   materialGraphOperationSchema: z.ZodTypeAny;
-  materialFunctionAssetKindSchema: z.ZodTypeAny;
-  toolHelpRegistry: Map<string, ToolHelpEntry>;
 };
 
 function serializeSchemaPayload<T extends z.ZodTypeAny>(
@@ -61,8 +57,6 @@ export function registerMaterialAuthoringTools({
   materialConnectionSelectorFieldsSchema,
   materialGraphOperationKindSchema,
   materialGraphOperationSchema,
-  materialFunctionAssetKindSchema,
-  toolHelpRegistry,
 }: RegisterMaterialAuthoringToolsOptions): void {
   server.registerTool(
     'create_material',
@@ -346,24 +340,6 @@ export function registerMaterialAuthoringTools({
         return jsonToolError(error);
       }
     },
-  );
-
-  registerAlias(
-    server as McpServer,
-    'create_material_function',
-    'create_material',
-    (args) => ({ ...args, asset_kind: 'function' }),
-    'Use create_material with asset_kind: "function" instead.',
-    toolHelpRegistry,
-  );
-
-  registerAlias(
-    server as McpServer,
-    'modify_material_function',
-    'modify_material',
-    (args) => ({ ...args, asset_kind: 'function' }),
-    'Use modify_material with asset_kind: "function" instead.',
-    toolHelpRegistry,
   );
 
   server.registerTool(

@@ -156,7 +156,7 @@ describe('registerMaterialAuthoringTools', () => {
     );
   });
 
-  it('serializes modify_material_function payloads and compile_material_asset requests', async () => {
+  it('serializes modify_material with function asset_kind and compile_material_asset requests', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async (method) => ({
       success: true,
@@ -176,8 +176,9 @@ describe('registerMaterialAuthoringTools', () => {
       toolHelpRegistry: registry.toolHelpRegistry,
     });
 
-    await registry.getTool('modify_material_function').handler({
+    await registry.getTool('modify_material').handler({
       asset_path: '/Game/Materials/MF_Test',
+      asset_kind: 'function',
       settings: { description: 'Blend' },
       operations: [{ operation: 'noop' }],
       validate_only: true,
@@ -318,44 +319,6 @@ describe('registerMaterialAuthoringTools', () => {
     });
   });
 
-  it('create_material_function alias delegates to create_material with asset_kind function', async () => {
-    const registry = createToolRegistry();
-    const callSubsystemJson = vi.fn(async () => ({
-      success: true,
-      assetPath: '/Game/Materials/MF_Func',
-    }));
-
-    registerMaterialAuthoringTools({
-      server: registry.server,
-      callSubsystemJson,
-      jsonObjectSchema,
-      materialGraphPayloadSchema,
-      materialNodePositionSchema,
-      materialConnectionSelectorFieldsSchema,
-      materialGraphOperationKindSchema,
-      materialGraphOperationSchema,
-      materialFunctionAssetKindSchema,
-      toolHelpRegistry: registry.toolHelpRegistry,
-    });
-
-    const result = await registry.getTool('create_material_function').handler({
-      asset_path: '/Game/Materials/MF_Func',
-      settings: { description: 'Helper' },
-      validate_only: false,
-    });
-
-    expect(callSubsystemJson).toHaveBeenCalledWith('CreateMaterialFunction', {
-      AssetPath: '/Game/Materials/MF_Func',
-      AssetKind: 'function',
-      SettingsJson: JSON.stringify({ description: 'Helper' }),
-      bValidateOnly: false,
-    });
-    expect(parseDirectToolResult(result)).toMatchObject({
-      success: true,
-      assetPath: '/Game/Materials/MF_Func',
-    });
-  });
-
   it('returns an error when create_material with function asset_kind fails', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => {
@@ -459,38 +422,4 @@ describe('registerMaterialAuthoringTools', () => {
     });
   });
 
-  it('modify_material_function alias delegates to modify_material with asset_kind function', async () => {
-    const registry = createToolRegistry();
-    const callSubsystemJson = vi.fn(async () => ({
-      success: true,
-      operation: 'ModifyMaterialFunction',
-    }));
-
-    registerMaterialAuthoringTools({
-      server: registry.server,
-      callSubsystemJson,
-      jsonObjectSchema,
-      materialGraphPayloadSchema,
-      materialNodePositionSchema,
-      materialConnectionSelectorFieldsSchema,
-      materialGraphOperationKindSchema,
-      materialGraphOperationSchema,
-      materialFunctionAssetKindSchema,
-      toolHelpRegistry: registry.toolHelpRegistry,
-    });
-
-    await registry.getTool('modify_material_function').handler({
-      asset_path: '/Game/Materials/MF_Alias',
-      operations: [{ operation: 'noop' }],
-      validate_only: true,
-    });
-
-    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyMaterialFunction', {
-      AssetPath: '/Game/Materials/MF_Alias',
-      PayloadJson: JSON.stringify({
-        operations: [{ operation: 'noop' }],
-      }),
-      bValidateOnly: true,
-    });
-  });
 });

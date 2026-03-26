@@ -19,7 +19,7 @@ const NESTING_EXEMPTED_TOOLS = new Set([
   'create_curve', 'modify_curve', 'create_curve_table', 'modify_curve_table',
   'modify_user_defined_struct', 'create_user_defined_enum', 'modify_user_defined_enum',
   'create_blackboard', 'modify_blackboard', 'create_state_tree', 'modify_state_tree',
-  'import_assets', 'import_textures', 'import_meshes', 'reimport_assets',
+  'import_assets',
   'create_behavior_tree', 'modify_behavior_tree',
   'apply_window_ui_changes',
 ]);
@@ -111,8 +111,21 @@ describe('schema complexity budget', () => {
     expect(violations).toEqual([]);
   });
 
-  it('registered at least 70 tools total', () => {
-    expect(tools.size).toBeGreaterThanOrEqual(70);
+  it('registered at least 65 tools total (post alias removal)', () => {
+    expect(tools.size).toBeGreaterThanOrEqual(65);
+  });
+
+  it('no removed aliases are registered', () => {
+    const removedAliases = [
+      'extract_material_function',
+      'create_material_function',
+      'modify_material_function',
+      'import_textures',
+      'import_meshes',
+      'reimport_assets',
+    ];
+    const found = removedAliases.filter((alias) => tools.has(alias));
+    expect(found).toEqual([]);
   });
 });
 

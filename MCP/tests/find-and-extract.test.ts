@@ -15,13 +15,12 @@ function setupRegistry(callSubsystemJson: ReturnType<typeof vi.fn>) {
 
 describe('find_and_extract', () => {
   it('searches and auto-extracts single result', async () => {
-    const callSubsystemJson = vi.fn()
-      .mockResolvedValueOnce({
-        results: [{ assetPath: '/Game/BP_Player', className: 'Blueprint' }],
-      })
-      .mockResolvedValueOnce({
-        blueprint: { className: 'BP_Player_C' },
-      });
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [{ assetPath: '/Game/BP_Player', className: 'Blueprint' }] };
+      if (method === 'ListAssets') return { assets: [{ assetPath: '/Game/BP_Player' }] };
+      if (method === 'ExtractBlueprint') return { blueprint: { className: 'BP_Player_C' } };
+      return {};
+    });
 
     const registry = setupRegistry(callSubsystemJson);
 
@@ -57,12 +56,20 @@ describe('find_and_extract', () => {
   });
 
   it('returns search results when multiple matches', async () => {
-    const callSubsystemJson = vi.fn().mockResolvedValueOnce({
-      results: [
-        { assetPath: '/Game/BP_A', className: 'Blueprint' },
-        { assetPath: '/Game/BP_B', className: 'Blueprint' },
-        { assetPath: '/Game/BP_C', className: 'Blueprint' },
-      ],
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return {
+        results: [
+          { assetPath: '/Game/BP_A', className: 'Blueprint' },
+          { assetPath: '/Game/BP_B', className: 'Blueprint' },
+          { assetPath: '/Game/BP_C', className: 'Blueprint' },
+        ],
+      };
+      if (method === 'ListAssets') return { assets: [
+        { assetPath: '/Game/BP_A' },
+        { assetPath: '/Game/BP_B' },
+        { assetPath: '/Game/BP_C' },
+      ] };
+      return {};
     });
 
     const registry = setupRegistry(callSubsystemJson);
@@ -88,13 +95,14 @@ describe('find_and_extract', () => {
     expect(parsed.steps[1].step).toBe('extract');
     expect(parsed.steps[1].status).toBe('skipped');
 
-    // extract should NOT be called
-    expect(callSubsystemJson).toHaveBeenCalledTimes(1);
+    // extract should NOT be called (only SearchAssets + ListAssets for phantom filter)
+    expect(callSubsystemJson).toHaveBeenCalledTimes(2);
   });
 
   it('returns error when no matches', async () => {
-    const callSubsystemJson = vi.fn().mockResolvedValueOnce({
-      results: [],
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [] };
+      return {};
     });
 
     const registry = setupRegistry(callSubsystemJson);
@@ -116,11 +124,12 @@ describe('find_and_extract', () => {
   });
 
   it('handles extraction failure with partial result', async () => {
-    const callSubsystemJson = vi.fn()
-      .mockResolvedValueOnce({
-        results: [{ assetPath: '/Game/BP_Broken', className: 'Blueprint' }],
-      })
-      .mockRejectedValueOnce(new Error('Blueprint extraction failed'));
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [{ assetPath: '/Game/BP_Broken', className: 'Blueprint' }] };
+      if (method === 'ListAssets') return { assets: [{ assetPath: '/Game/BP_Broken' }] };
+      if (method === 'ExtractBlueprint') throw new Error('Blueprint extraction failed');
+      return {};
+    });
 
     const registry = setupRegistry(callSubsystemJson);
 
@@ -146,13 +155,12 @@ describe('find_and_extract', () => {
   });
 
   it('passes compact/scope options to extraction', async () => {
-    const callSubsystemJson = vi.fn()
-      .mockResolvedValueOnce({
-        results: [{ assetPath: '/Game/BP_Test', className: 'Blueprint' }],
-      })
-      .mockResolvedValueOnce({
-        blueprint: { graphs: [] },
-      });
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [{ assetPath: '/Game/BP_Test', className: 'Blueprint' }] };
+      if (method === 'ListAssets') return { assets: [{ assetPath: '/Game/BP_Test' }] };
+      if (method === 'ExtractBlueprint') return { blueprint: { graphs: [] } };
+      return {};
+    });
 
     const registry = setupRegistry(callSubsystemJson);
 
@@ -210,8 +218,10 @@ describe('find_and_extract', () => {
   });
 
   it('honors auto_extract_if_single=false', async () => {
-    const callSubsystemJson = vi.fn().mockResolvedValueOnce({
-      results: [{ assetPath: '/Game/BP_Single', className: 'Blueprint' }],
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [{ assetPath: '/Game/BP_Single', className: 'Blueprint' }] };
+      if (method === 'ListAssets') return { assets: [{ assetPath: '/Game/BP_Single' }] };
+      return {};
     });
 
     const registry = setupRegistry(callSubsystemJson);
@@ -230,18 +240,17 @@ describe('find_and_extract', () => {
     expect(parsed.execution.needs_selection).toBe(true);
     expect(parsed.steps[1].status).toBe('skipped');
 
-    // extract should NOT be called
-    expect(callSubsystemJson).toHaveBeenCalledTimes(1);
+    // extract should NOT be called (only SearchAssets + ListAssets for phantom filter)
+    expect(callSubsystemJson).toHaveBeenCalledTimes(2);
   });
 
   it('returns correct CompositeStepResult structure', async () => {
-    const callSubsystemJson = vi.fn()
-      .mockResolvedValueOnce({
-        results: [{ assetPath: '/Game/BP_Struct', className: 'Blueprint' }],
-      })
-      .mockResolvedValueOnce({
-        blueprint: { name: 'BP_Struct' },
-      });
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [{ assetPath: '/Game/BP_Struct', className: 'Blueprint' }] };
+      if (method === 'ListAssets') return { assets: [{ assetPath: '/Game/BP_Struct' }] };
+      if (method === 'ExtractBlueprint') return { blueprint: { name: 'BP_Struct' } };
+      return {};
+    });
 
     const registry = setupRegistry(callSubsystemJson);
 
@@ -276,13 +285,12 @@ describe('find_and_extract', () => {
   });
 
   it('routes material extract_type to ExtractMaterial', async () => {
-    const callSubsystemJson = vi.fn()
-      .mockResolvedValueOnce({
-        results: [{ assetPath: '/Game/Materials/M_Base', className: 'Material' }],
-      })
-      .mockResolvedValueOnce({
-        materialName: 'M_Base',
-      });
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [{ assetPath: '/Game/Materials/M_Base', className: 'Material' }] };
+      if (method === 'ListAssets') return { assets: [{ assetPath: '/Game/Materials/M_Base' }] };
+      if (method === 'ExtractMaterial') return { materialName: 'M_Base' };
+      return {};
+    });
 
     const registry = setupRegistry(callSubsystemJson);
 
@@ -303,13 +311,12 @@ describe('find_and_extract', () => {
   });
 
   it('routes widget_blueprint extract_type to ExtractWidgetBlueprint', async () => {
-    const callSubsystemJson = vi.fn()
-      .mockResolvedValueOnce({
-        results: [{ assetPath: '/Game/UI/WBP_Main', className: 'WidgetBlueprint' }],
-      })
-      .mockResolvedValueOnce({
-        widgetTree: { root: 'CanvasPanel' },
-      });
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'SearchAssets') return { results: [{ assetPath: '/Game/UI/WBP_Main', className: 'WidgetBlueprint' }] };
+      if (method === 'ListAssets') return { assets: [{ assetPath: '/Game/UI/WBP_Main' }] };
+      if (method === 'ExtractWidgetBlueprint') return { widgetTree: { root: 'CanvasPanel' } };
+      return {};
+    });
 
     const registry = setupRegistry(callSubsystemJson);
 

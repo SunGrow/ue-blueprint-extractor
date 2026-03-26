@@ -257,7 +257,7 @@ describe('createBlueprintExtractorServer', () => {
     const getToolHelp = tools.tools.find((tool) => tool.name === 'get_tool_help');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(95);
+    expect(tools.tools).toHaveLength(89);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -285,16 +285,10 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'extract_widget_animation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_widget_animation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_animation')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'reimport_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'list_import_jobs')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'import_textures')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'import_meshes')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'extract_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_material')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'material_graph_operation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_material')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'create_material_function')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'modify_material_function')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compile_material_asset')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compile_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'get_project_automation_context')).toBe(true);
@@ -873,17 +867,18 @@ describe('createBlueprintExtractorServer', () => {
       items: [{
         file_path: 'C:/Temp/Test.png',
         destination_path: '/Game/Imported',
-        options: {
+        texture_options: {
           compression_settings: 'TC_Default',
         },
       }],
     };
 
     const result = await harness.client.callTool({
-      name: 'import_textures',
+      name: 'import_assets',
       arguments: {
         payload,
         validate_only: true,
+        reimport: false,
       },
     });
 
@@ -896,7 +891,13 @@ describe('createBlueprintExtractorServer', () => {
       {
         method: 'ImportTextures',
         params: {
-          PayloadJson: JSON.stringify(payload),
+          PayloadJson: JSON.stringify({
+            items: [{
+              file_path: 'C:/Temp/Test.png',
+              destination_path: '/Game/Imported',
+              options: { compression_settings: 'TC_Default' },
+            }],
+          }),
           bValidateOnly: true,
         },
       },
@@ -3306,7 +3307,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(parsed.stateTree.states[0].children).toBeUndefined();
   });
 
-  it('compacts extract_material and extract_material_function responses when requested', async () => {
+  it('compacts extract_material and extract_material (function kind) responses when requested', async () => {
     const fakeClient = new FakeUEClient((method, params) => {
       if (method === 'ExtractMaterial') {
         return JSON.stringify({
@@ -3389,9 +3390,10 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
     const materialFunctionResult = await harness.client.callTool({
-      name: 'extract_material_function',
+      name: 'extract_material',
       arguments: {
         asset_path: '/Game/Materials/MF_Test',
+        asset_kind: 'function',
         compact: true,
       },
     });

@@ -85,12 +85,8 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
       // material authoring
       'create_material', 'material_graph_operation', 'modify_material',
       'compile_material_asset',
-      // material aliases
-      'create_material_function', 'modify_material_function',
       // material instance
       'create_material_instance', 'modify_material_instance',
-      // extraction alias
-      'extract_material_function',
     ],
   },
   blueprint_authoring: {
@@ -151,8 +147,6 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     prompts: [],
     tools: [
       'import_assets', 'get_import_job', 'list_import_jobs',
-      // aliases
-      'import_textures', 'import_meshes', 'reimport_assets',
     ],
   },
   automation_testing: {

@@ -1,5 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { validateInheritedComponents } from '../helpers/blueprint-validation.js';
+import { checkDenyList } from '../helpers/operation-deny-list.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
 
 type JsonSubsystemCaller = (
@@ -139,6 +141,24 @@ export function registerBlueprintAuthoringTools({
           validate_only: boolean;
         };
 
+        // Deny-list check
+        const denied = checkDenyList('modify_blueprint_members', args as Record<string, unknown>);
+        if (denied) {
+          return { content: [{ type: 'text' as const, text: denied.message }], structuredContent: denied, isError: true as const };
+        }
+
+        // Pre-validate inherited components for component-targeting operations
+        const componentOps = ['patch_component', 'delete_component', 'replace_components'];
+        if (componentOps.includes(operation)) {
+          const componentName = (payload?.componentName ?? payload?.component_name) as string | undefined;
+          if (componentName) {
+            const validation = await validateInheritedComponents(asset_path, [componentName], callSubsystemJson);
+            if (!validation.valid) {
+              return { content: [{ type: 'text' as const, text: validation.error.message }], structuredContent: validation.error, isError: true as const };
+            }
+          }
+        }
+
         const extraContent: Array<{ type: 'text'; text: string }> = [];
 
         if (operation === 'patch_class_defaults' && payload?.classDefaults) {
@@ -214,6 +234,13 @@ export function registerBlueprintAuthoringTools({
           payload?: Record<string, unknown>;
           validate_only: boolean;
         };
+
+        // Deny-list check
+        const denied = checkDenyList('modify_blueprint_graphs', args as Record<string, unknown>);
+        if (denied) {
+          return { content: [{ type: 'text' as const, text: denied.message }], structuredContent: denied, isError: true as const };
+        }
+
         const parsed = await callSubsystemJson('ModifyBlueprintGraphs', {
           AssetPath: asset_path,
           Operation: operation,

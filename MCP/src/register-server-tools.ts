@@ -42,12 +42,10 @@ import {
   FontImportItemSchema,
   ImportJobListSchema,
   ImportJobSchema,
-  ImportPayloadSchema,
   InputMappingSchema,
   JsonObjectSchema,
   MaterialConnectionSelectorFieldsSchema,
   MaterialFontParameterSchema,
-  MaterialFunctionAssetKindSchema,
   MaterialGraphOperationKindSchema,
   MaterialGraphOperationSchema,
   MaterialGraphPayloadSchema,
@@ -58,14 +56,12 @@ import {
   MaterialTextureParameterSchema,
   MaterialVectorParameterSchema,
   MeshImportOptionsSchema,
-  MeshImportPayloadSchema,
   StateTreeEditorNodeSelectorSchema,
   StateTreeMutationOperationSchema,
   StateTreeStateSelectorSchema,
   StateTreeTransitionSelectorSchema,
   StateTreeBindingsObjectSchema,
   TextureImportOptionsSchema,
-  TextureImportPayloadSchema,
   UserDefinedEnumEntrySchema,
   UserDefinedEnumMutationOperationSchema,
   UserDefinedStructFieldSchema,
@@ -186,7 +182,6 @@ export function registerServerTools({
     scopeEnum,
     extractAssetTypeSchema: ExtractAssetTypeSchema,
     cascadeResultSchema: CascadeResultSchema,
-    toolHelpRegistry,
   });
 
   registerWidgetStructureTools({
@@ -270,8 +265,6 @@ export function registerServerTools({
     materialConnectionSelectorFieldsSchema: MaterialConnectionSelectorFieldsSchema,
     materialGraphOperationKindSchema: MaterialGraphOperationKindSchema,
     materialGraphOperationSchema: MaterialGraphOperationSchema,
-    materialFunctionAssetKindSchema: MaterialFunctionAssetKindSchema,
-    toolHelpRegistry,
   });
 
   registerAutomationRunTools({
@@ -356,14 +349,10 @@ export function registerServerTools({
   registerImportJobTools({
     server,
     callSubsystemJson,
-    importPayloadSchema: ImportPayloadSchema,
     importJobSchema: ImportJobSchema,
     importJobListSchema: ImportJobListSchema,
-    textureImportPayloadSchema: TextureImportPayloadSchema,
-    meshImportPayloadSchema: MeshImportPayloadSchema,
     textureImportOptionsSchema: TextureImportOptionsSchema,
     meshImportOptionsSchema: MeshImportOptionsSchema,
-    toolHelpRegistry,
   });
 
   registerCompositeTools({

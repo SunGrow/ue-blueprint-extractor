@@ -7,12 +7,11 @@ import {
   compactMaterial,
   compactStateTree,
 } from '../compactor.js';
-import { registerAlias } from '../helpers/alias-registration.js';
+import { filterPhantomAssets } from '../helpers/phantom-filter.js';
 import {
   jsonToolError,
   jsonToolSuccess,
 } from '../helpers/subsystem.js';
-import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -25,7 +24,6 @@ type RegisterExtractionToolsOptions = {
   scopeEnum: z.ZodType<string>;
   extractAssetTypeSchema: z.ZodTypeAny;
   cascadeResultSchema: z.ZodTypeAny;
-  toolHelpRegistry: Map<string, ToolHelpEntry>;
 };
 
 const extractAssetMethods = {
@@ -60,7 +58,6 @@ export function registerExtractionTools({
   scopeEnum,
   extractAssetTypeSchema,
   cascadeResultSchema,
-  toolHelpRegistry,
 }: RegisterExtractionToolsOptions): void {
   server.registerTool(
     'extract_blueprint',
@@ -213,15 +210,6 @@ export function registerExtractionTools({
     },
   );
 
-  registerAlias(
-    server as McpServer,
-    'extract_material_function',
-    'extract_material',
-    (args) => ({ ...args, asset_kind: 'function' }),
-    'Use extract_material with asset_kind: "function" instead.',
-    toolHelpRegistry,
-  );
-
   server.registerTool(
     'extract_cascade',
     {
@@ -319,7 +307,9 @@ export function registerExtractionTools({
           ClassFilter: class_filter,
           MaxResults: max_results,
         });
-        return jsonToolSuccess(Array.isArray(parsed.results) ? parsed.results : []);
+        const rawResults = Array.isArray(parsed.results) ? parsed.results as Record<string, unknown>[] : [];
+        const { filtered, removedCount } = await filterPhantomAssets(rawResults, callSubsystemJson);
+        return jsonToolSuccess(removedCount > 0 ? { results: filtered, _filtered_count: removedCount } : filtered);
       } catch (error) {
         return jsonToolError(error);
       }

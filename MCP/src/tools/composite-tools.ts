@@ -8,6 +8,7 @@ import {
   type CompositeStepResult,
   type CompositeToolResult,
 } from '../helpers/composite-patterns.js';
+import { filterPhantomAssets } from '../helpers/phantom-filter.js';
 import { jsonToolSuccess } from '../helpers/subsystem.js';
 import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
@@ -257,9 +258,12 @@ export function registerCompositeTools({
         );
       }
 
-      const results: SearchResult[] = Array.isArray(searchResult.value.results)
+      const rawResults: SearchResult[] = Array.isArray(searchResult.value.results)
         ? searchResult.value.results as SearchResult[]
         : [];
+
+      // Filter phantom assets
+      const { filtered: results, removedCount } = await filterPhantomAssets(rawResults, callSubsystemJson);
 
       // No results
       if (results.length === 0) {
@@ -279,8 +283,10 @@ export function registerCompositeTools({
       const searchStep: CompositeStepResult = {
         step: 'search',
         status: 'success',
-        message: `Found ${results.length} result(s)`,
-        data: { results },
+        message: removedCount > 0
+          ? `Found ${results.length} result(s) (${removedCount} phantom asset(s) filtered)`
+          : `Found ${results.length} result(s)`,
+        data: { results, ...(removedCount > 0 ? { _filtered_count: removedCount } : {}) },
       };
 
       // Multiple results or auto_extract disabled → return search results for selection

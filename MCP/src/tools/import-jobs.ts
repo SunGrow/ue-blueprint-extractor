@@ -1,8 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
-import { registerAlias } from '../helpers/alias-registration.js';
-import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -12,27 +10,19 @@ type JsonSubsystemCaller = (
 type RegisterImportJobToolsOptions = {
   server: McpServer;
   callSubsystemJson: JsonSubsystemCaller;
-  importPayloadSchema: z.ZodTypeAny;
   importJobSchema: z.ZodTypeAny;
   importJobListSchema: z.ZodTypeAny;
-  textureImportPayloadSchema: z.ZodTypeAny;
-  meshImportPayloadSchema: z.ZodTypeAny;
   textureImportOptionsSchema: z.ZodTypeAny;
   meshImportOptionsSchema: z.ZodTypeAny;
-  toolHelpRegistry: Map<string, ToolHelpEntry>;
 };
 
 export function registerImportJobTools({
   server,
   callSubsystemJson,
-  importPayloadSchema,
   importJobSchema,
   importJobListSchema,
-  textureImportPayloadSchema,
-  meshImportPayloadSchema,
   textureImportOptionsSchema,
   meshImportOptionsSchema,
-  toolHelpRegistry,
 }: RegisterImportJobToolsOptions): void {
   const importItemWithOptionsSchema = z.object({}).passthrough().extend({
     texture_options: textureImportOptionsSchema.optional().describe('Texture-specific import options'),
@@ -187,82 +177,4 @@ export function registerImportJobTools({
     },
   );
 
-  // Register aliases for deprecated tool names
-  registerAlias(
-    server,
-    'import_textures',
-    'import_assets',
-    (args: Record<string, unknown>) => {
-      const payload = args.payload as { items: Array<Record<string, unknown>> } | undefined;
-      if (payload?.items) {
-        return {
-          ...args,
-          payload: {
-            ...payload,
-            items: payload.items.map((item) => {
-              const { options, ...rest } = item;
-              return options ? { ...rest, texture_options: options } : rest;
-            }),
-          },
-        };
-      }
-      return args;
-    },
-    'Use import_assets with texture_options instead.',
-    toolHelpRegistry,
-    {
-      payload: textureImportPayloadSchema.describe(
-        'Subsystem passthrough payload object for texture imports. Requires an items array and preserves snake_case texture option keys.',
-      ),
-      validate_only: z.boolean().default(false).describe('Validate without importing.'),
-    },
-  );
-
-  registerAlias(
-    server,
-    'import_meshes',
-    'import_assets',
-    (args: Record<string, unknown>) => {
-      const payload = args.payload as { items: Array<Record<string, unknown>> } | undefined;
-      if (payload?.items) {
-        return {
-          ...args,
-          payload: {
-            ...payload,
-            items: payload.items.map((item) => {
-              const { options, ...rest } = item;
-              return options ? { ...rest, mesh_options: options } : rest;
-            }),
-          },
-        };
-      }
-      return args;
-    },
-    'Use import_assets with mesh_options instead.',
-    toolHelpRegistry,
-    {
-      payload: meshImportPayloadSchema.describe(
-        'Subsystem passthrough payload object for mesh imports. Requires an items array and preserves snake_case mesh option keys.',
-      ),
-      validate_only: z.boolean().default(false).describe('Validate without importing.'),
-    },
-  );
-
-  registerAlias(
-    server,
-    'reimport_assets',
-    'import_assets',
-    (args: Record<string, unknown>) => ({
-      ...args,
-      reimport: true,
-    }),
-    'Use import_assets with reimport=true instead.',
-    toolHelpRegistry,
-    {
-      payload: importPayloadSchema.describe(
-        'Subsystem passthrough payload object for reimport jobs. Requires an items array and preserves snake_case import fields.',
-      ),
-      validate_only: z.boolean().default(false).describe('Validate without reimporting.'),
-    },
-  );
 }

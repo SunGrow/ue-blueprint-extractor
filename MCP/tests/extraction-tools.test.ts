@@ -466,62 +466,6 @@ describe('registerExtractionTools', () => {
     });
   });
 
-  it('extract_material_function alias delegates to extract_material with asset_kind function', async () => {
-    const registry = createToolRegistry();
-    const callSubsystemJson = vi.fn(async () => ({
-      functionName: 'MF_Blend',
-      expressions: [],
-    }));
-
-    registerExtractionTools({
-      server: registry.server,
-      callSubsystemJson,
-      scopeEnum,
-      extractAssetTypeSchema,
-      cascadeResultSchema,
-      toolHelpRegistry: registry.toolHelpRegistry,
-    });
-
-    const result = await registry.getTool('extract_material_function').handler({
-      asset_path: '/Game/Materials/MF_Blend',
-      verbose: false,
-      compact: false,
-    });
-
-    expect(callSubsystemJson).toHaveBeenCalledWith('ExtractMaterialFunction', {
-      AssetPath: '/Game/Materials/MF_Blend',
-      bVerbose: false,
-    });
-    expect(parseDirectToolResult(result)).toMatchObject({
-      functionName: 'MF_Blend',
-    });
-  });
-
-  it('returns an error when extract_material_function fails', async () => {
-    const registry = createToolRegistry();
-    const callSubsystemJson = vi.fn(async () => {
-      throw new Error('function not found');
-    });
-
-    registerExtractionTools({
-      server: registry.server,
-      callSubsystemJson,
-      scopeEnum,
-      extractAssetTypeSchema,
-      cascadeResultSchema,
-      toolHelpRegistry: registry.toolHelpRegistry,
-    });
-
-    const result = await registry.getTool('extract_material_function').handler({
-      asset_path: '/Game/Materials/MF_Missing',
-      verbose: false,
-      compact: false,
-    });
-
-    expect((result as { isError?: boolean }).isError).toBe(true);
-    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('function not found');
-  });
-
   it('forwards extract_cascade with asset_paths and returns a structured manifest', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
