@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+import { ImportItemCommonSchema } from '../schemas/tool-inputs.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -24,14 +25,14 @@ export function registerImportJobTools({
   textureImportOptionsSchema,
   meshImportOptionsSchema,
 }: RegisterImportJobToolsOptions): void {
-  const importItemWithOptionsSchema = z.object({}).passthrough().extend({
+  const importItemWithOptionsSchema = ImportItemCommonSchema.extend({
     texture_options: textureImportOptionsSchema.optional().describe('Texture-specific import options'),
     mesh_options: meshImportOptionsSchema.optional().describe('Mesh-specific import options'),
   });
 
   const consolidatedPayloadSchema = z.object({
     items: z.array(importItemWithOptionsSchema),
-  }).passthrough().refine(
+  }).refine(
     (val) => {
       return !val.items.some(
         (item: Record<string, unknown>) => item.texture_options && item.mesh_options,

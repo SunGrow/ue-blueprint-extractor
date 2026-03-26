@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AutomationControllerLike } from '../automation-controller.js';
 import { exampleCatalog } from '../catalogs/example-catalog.js';
-import { isRecord } from '../helpers/formatting.js';
+import { isPlainObject } from '../helpers/formatting.js';
 import { normalizeVerificationArtifact } from '../helpers/verification.js';
 
 type JsonSubsystemCaller = (
@@ -251,7 +251,7 @@ export function registerExampleAndCaptureResources({
         ? listed.captures.map((capture) => normalizeVerificationArtifact(capture))
         : [];
       const capture = captures.find((candidate) => (
-        isRecord(candidate)
+        isPlainObject(candidate)
         && typeof candidate.captureId === 'string'
         && candidate.captureId === captureId
         && typeof candidate.artifactPath === 'string'

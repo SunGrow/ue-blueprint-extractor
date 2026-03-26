@@ -151,7 +151,10 @@ export function registerWidgetVerificationTools({
         height: z.number().int().min(64).max(2048).default(512).describe(
           'Requested checkpoint capture height in pixels for editor_preview mode.',
         ),
-        automation_filter: z.string().optional().describe(
+        automation_filter: z.string().regex(
+          /^[A-Za-z0-9_.+* -]+$/u,
+          'automation_filter must contain only alphanumeric, dots, underscores, plus, asterisk, hyphen, and spaces',
+        ).optional().describe(
           'Required for automation_scenario mode. Automation filter passed to run_automation_tests.',
         ),
         engine_root: z.string().optional().describe(

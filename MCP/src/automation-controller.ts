@@ -231,6 +231,11 @@ export class AutomationController implements AutomationControllerLike {
       throw new Error('run_automation_tests requires automation_filter');
     }
 
+    const safeFilterPattern = /^[A-Za-z0-9_.+* -]+$/u;
+    if (!safeFilterPattern.test(request.automationFilter)) {
+      throw new Error('automationFilter contains invalid characters: only alphanumeric, dots, underscores, plus, asterisk, hyphen, and spaces are allowed');
+    }
+
     const started = this.now();
     const filterSlug = sanitizeSegment(request.automationFilter);
     const runId = `${filterSlug}_${started.getTime()}_${randomUUID().slice(0, 8)}`;

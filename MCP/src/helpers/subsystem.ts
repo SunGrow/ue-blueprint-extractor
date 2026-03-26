@@ -1,5 +1,5 @@
 import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
-import { isRecord } from './formatting.js';
+import { isPlainObject } from './formatting.js';
 
 export interface SubsystemCallOptions {
   timeoutMs?: number;
@@ -108,11 +108,11 @@ export function jsonToolSuccess(
     extraContent?: ContentBlock[];
   } = {},
 ): CallToolResult & { structuredContent: Record<string, unknown> } {
-  const structuredContent = isRecord(parsed) ? parsed : { data: parsed };
+  const structuredContent = isPlainObject(parsed) ? parsed : { data: parsed };
 
   // Guard: if the UE response indicates failure, route through error path.
   // This prevents tool handlers from accidentally passing error payloads as successes.
-  if (isRecord(parsed) && parsed.success === false) {
+  if (isPlainObject(parsed) && parsed.success === false) {
     const errorText = extractFailureMessage(parsed);
     return {
       content: [{ type: 'text' as const, text: `Error: ${errorText}` }],

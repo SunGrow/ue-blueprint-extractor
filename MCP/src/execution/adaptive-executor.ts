@@ -8,11 +8,26 @@ import { ExecutionModeDetector } from './execution-mode-detector.js';
 
 export type ToolModeAnnotation = 'both' | 'editor_only' | 'read_only';
 
+export type EditorFallbackCaller = (
+  method: string,
+  params: Record<string, unknown>,
+  options?: { timeoutMs?: number },
+) => Promise<Record<string, unknown>>;
+
 export class AdaptiveExecutor {
   private editorAdapter: ExecutionAdapter;
   private commandletAdapter: ExecutionAdapter | null;
   private detector: ExecutionModeDetector;
   private toolModes = new Map<string, ToolModeAnnotation>();
+  /**
+   * Active tool name set by the tool registration wrapper before a handler runs.
+   * ASSUMPTION: The MCP SDK processes tool calls sequentially per transport
+   * connection (single Node.js event loop, SDK awaits each handler). If the SDK
+   * ever supports concurrent tool execution, this shared state must be replaced
+   * with per-request context (e.g., AsyncLocalStorage or passing toolName as a
+   * parameter to executeRouted).
+   */
+  private _activeToolName: string | null = null;
 
   constructor(
     editorAdapter: ExecutionAdapter,
@@ -34,6 +49,80 @@ export class AdaptiveExecutor {
 
   getCurrentMode(): Promise<ExecutionMode> {
     return this.detector.detect().then((r) => r.mode);
+  }
+
+  /** Set the active tool name before a handler runs. Cleared after handler completes. */
+  setActiveToolName(name: string | null): void {
+    this._activeToolName = name;
+  }
+
+  getActiveToolName(): string | null {
+    return this._activeToolName;
+  }
+
+  /**
+   * Route a callSubsystemJson-shaped call through the executor.
+   * For editor mode, delegates to the provided editorFallback (the original
+   * callSubsystemJson with its error-checking layer intact).
+   * For commandlet mode, routes through the commandlet adapter.
+   * This allows transparent interception without changing tool call sites.
+   */
+  async executeRouted(
+    editorFallback: EditorFallbackCaller,
+    method: string,
+    params: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<Record<string, unknown>> {
+    const toolName = this._activeToolName;
+    const detection = await this.detector.detect();
+
+    // If no active tool context or editor mode, use the original path
+    // (preserves callSubsystemJson error-checking layer)
+    if (!toolName || detection.mode === 'editor') {
+      return editorFallback(method, params, options);
+    }
+
+    const toolMode = this.getToolMode(toolName);
+    const requiredCapability: ToolCapability = toolMode === 'read_only'
+      ? 'read'
+      : toolMode === 'both'
+        ? 'write_simple'
+        : 'write_complex';
+
+    // Try commandlet for compatible tools
+    if (detection.mode === 'commandlet' && this.commandletAdapter) {
+      if (toolMode === 'editor_only') {
+        throw new ExecutorError(
+          'CAPABILITY_MISMATCH',
+          `Tool '${toolName}' requires the Unreal Editor but only commandlet mode is available. ${detection.reason}`,
+          toolName,
+          detection.mode,
+          requiredCapability,
+        );
+      }
+
+      const capabilities = this.commandletAdapter.getCapabilities();
+      if (!capabilities.has(requiredCapability) && requiredCapability !== 'write_simple') {
+        throw new ExecutorError(
+          'CAPABILITY_MISMATCH',
+          `Tool '${toolName}' requires '${requiredCapability}' capability which commandlet mode does not support.`,
+          toolName,
+          detection.mode,
+          requiredCapability,
+        );
+      }
+
+      return this.commandletAdapter.execute('BlueprintExtractor', method, params);
+    }
+
+    // No adapter available
+    throw new ExecutorError(
+      'MODE_UNAVAILABLE',
+      `No execution mode available for tool '${toolName}'. ${detection.reason}`,
+      toolName,
+      detection.mode,
+      requiredCapability,
+    );
   }
 
   async execute(

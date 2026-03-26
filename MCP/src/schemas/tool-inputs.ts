@@ -242,12 +242,6 @@ export const MaterialGraphOperationKindSchema = z.enum([
   'connect_expressions',
   'connect_material_property',
 ]);
-export const MaterialGraphPayloadSchema = z.object({
-  settings: JsonObjectSchema.optional(),
-  compile_after: z.boolean().optional(),
-  layout_after: z.boolean().optional(),
-  operations: z.array(MaterialGraphOperationSchema).default([]),
-});
 export const MaterialNodePositionSchema = z.object({
   x: z.number(),
   y: z.number(),

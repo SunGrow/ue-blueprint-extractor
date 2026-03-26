@@ -11,20 +11,11 @@ type RegisterMaterialAuthoringToolsOptions = {
   server: Pick<McpServer, 'registerTool'>;
   callSubsystemJson: JsonSubsystemCaller;
   jsonObjectSchema: z.ZodTypeAny;
-  materialGraphPayloadSchema: z.ZodTypeAny;
   materialNodePositionSchema: z.ZodTypeAny;
   materialConnectionSelectorFieldsSchema: z.AnyZodObject;
   materialGraphOperationKindSchema: z.ZodTypeAny;
   materialGraphOperationSchema: z.ZodTypeAny;
 };
-
-function serializeSchemaPayload<T extends z.ZodTypeAny>(
-  schema: T,
-  payload: z.output<T>,
-): string {
-  void schema;
-  return JSON.stringify(payload);
-}
 
 function structuredToolError(
   message: string,
@@ -52,7 +43,6 @@ export function registerMaterialAuthoringTools({
   server,
   callSubsystemJson,
   jsonObjectSchema,
-  materialGraphPayloadSchema,
   materialNodePositionSchema,
   materialConnectionSelectorFieldsSchema,
   materialGraphOperationKindSchema,
@@ -281,7 +271,7 @@ export function registerMaterialAuthoringTools({
 
         const parsed = await callSubsystemJson('ModifyMaterial', {
           AssetPath: asset_path,
-          PayloadJson: serializeSchemaPayload(materialGraphPayloadSchema, payload),
+          PayloadJson: JSON.stringify(payload),
           bValidateOnly: validate_only,
         });
         return jsonToolSuccess(parsed);
@@ -332,7 +322,7 @@ export function registerMaterialAuthoringTools({
         const method = asset_kind === 'material' ? 'ModifyMaterial' : 'ModifyMaterialFunction';
         const parsed = await callSubsystemJson(method, {
           AssetPath: asset_path,
-          PayloadJson: serializeSchemaPayload(materialGraphPayloadSchema, payload),
+          PayloadJson: JSON.stringify(payload),
           bValidateOnly: validate_only,
         });
         return jsonToolSuccess(parsed);

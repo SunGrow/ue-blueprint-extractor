@@ -105,6 +105,25 @@ describe('ProjectController', () => {
     });
   });
 
+  it('escapes cmd.exe metacharacters in Windows command arguments', () => {
+    const invocation = resolveCommandInvocation(
+      'C:/UE/Engine/Build/BatchFiles/Build.bat',
+      ['Target', '-Arg=foo&bar', '-Path=a|b', 'val<x>y', 'hat^ed', 'pct%VAR%', 'bang!ed', 'group(a)b'],
+      'win32',
+      { ComSpec: 'cmd.exe' },
+    );
+
+    expect(invocation.executable).toBe('cmd.exe');
+    const commandLine = invocation.args[3];
+    expect(commandLine).toContain('"-Arg=foo^&bar"');
+    expect(commandLine).toContain('"-Path=a^|b"');
+    expect(commandLine).toContain('"val^<x^>y"');
+    expect(commandLine).toContain('"hat^^ed"');
+    expect(commandLine).toContain('"pct^%VAR^%"');
+    expect(commandLine).toContain('"bang^!ed"');
+    expect(commandLine).toContain('"group^(a^)b"');
+  });
+
   it('launches the editor from the host as a detached process', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-launch-'));
     tempDirs.push(root);

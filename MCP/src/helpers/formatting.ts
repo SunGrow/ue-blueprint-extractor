@@ -4,9 +4,6 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 export function coerceStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -73,20 +70,20 @@ export function tryParseJsonText(text: string | undefined): unknown {
 }
 
 export function extractTextContent(result: unknown): string | undefined {
-  if (!isRecord(result) || !Array.isArray(result.content)) {
+  if (!isPlainObject(result) || !Array.isArray(result.content)) {
     return undefined;
   }
 
-  const entry = result.content.find((candidate) => isRecord(candidate) && candidate.type === 'text');
-  return isRecord(entry) && typeof entry.text === 'string' ? entry.text : undefined;
+  const entry = result.content.find((candidate) => isPlainObject(candidate) && candidate.type === 'text');
+  return isPlainObject(entry) && typeof entry.text === 'string' ? entry.text : undefined;
 }
 
 export function extractToolPayload(result: unknown): unknown {
-  if (isRecord(result) && 'structuredContent' in result) {
+  if (isPlainObject(result) && 'structuredContent' in result) {
     return result.structuredContent;
   }
 
-  if (isRecord(result) && Array.isArray(result.content)) {
+  if (isPlainObject(result) && Array.isArray(result.content)) {
     const text = extractTextContent(result);
     const parsed = tryParseJsonText(text);
     if (parsed !== undefined) {
@@ -102,7 +99,7 @@ export function extractToolPayload(result: unknown): unknown {
 }
 
 function isContentBlock(value: unknown): value is ContentBlock {
-  if (!isRecord(value) || typeof value.type !== 'string') {
+  if (!isPlainObject(value) || typeof value.type !== 'string') {
     return false;
   }
 
@@ -115,7 +112,7 @@ function isContentBlock(value: unknown): value is ContentBlock {
     case 'resource_link':
       return typeof value.uri === 'string' && typeof value.name === 'string';
     case 'resource':
-      return isRecord(value.resource)
+      return isPlainObject(value.resource)
         && typeof value.resource.uri === 'string'
         && typeof value.resource.mimeType === 'string'
         && (
@@ -128,7 +125,7 @@ function isContentBlock(value: unknown): value is ContentBlock {
 }
 
 export function extractExtraContent(result: unknown): ContentBlock[] {
-  if (!isRecord(result) || !Array.isArray(result.content)) {
+  if (!isPlainObject(result) || !Array.isArray(result.content)) {
     return [];
   }
 

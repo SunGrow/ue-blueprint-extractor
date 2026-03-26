@@ -127,7 +127,7 @@ export interface ProjectControllerLike {
   readonly liveCodingSupported: boolean;
   classifyChangedPaths(changedPaths: string[], forceRebuild?: boolean): SyncStrategyPlan;
   compileProjectCode(request: CompileProjectCodeRequest): Promise<CompileProjectCodeResult>;
-  killEditorProcess(): Promise<{ killed: boolean; error?: string }>;
+  killEditorProcess(): Promise<{ killed: boolean; error?: string; diagnostics?: string[] }>;
   launchEditor(request: LaunchEditorRequest): Promise<LaunchEditorResult>;
   waitForEditorRestart(
     probeConnection: ProbeConnection,
@@ -153,11 +153,14 @@ function quoteWindowsCommandArg(value: string): string {
     return '""';
   }
 
-  if (!/[\s"]/u.test(value)) {
+  if (!/[\s"&|<>^%!()]/u.test(value)) {
     return value;
   }
 
-  return `"${value.replace(/"/gu, '""')}"`;
+  const escaped = value
+    .replace(/"/gu, '""')
+    .replace(/[&|<>^%!()]/gu, '^$&');
+  return `"${escaped}"`;
 }
 
 export function resolveCommandInvocation(
@@ -507,6 +510,7 @@ export class ProjectController implements ProjectControllerLike {
   private readonly runCommand: CommandRunner;
   private readonly spawnProcess: typeof spawn;
   private readonly sleep: (ms: number) => Promise<void>;
+  private editorPid: number | null = null;
 
   constructor(options: ProjectControllerOptions = {}) {
     this.env = options.env ?? process.env;
@@ -625,16 +629,27 @@ export class ProjectController implements ProjectControllerLike {
     return result;
   }
 
-  async killEditorProcess(): Promise<{ killed: boolean; error?: string }> {
+  async killEditorProcess(): Promise<{ killed: boolean; error?: string; diagnostics?: string[] }> {
+    const diagnostics: string[] = [];
     try {
+      if (this.editorPid) {
+        if (this.platform === 'win32') {
+          execSync(`taskkill /F /PID ${this.editorPid}`, { timeout: 10000 });
+        } else {
+          execSync(`kill -9 ${this.editorPid}`, { timeout: 10000 });
+        }
+        this.editorPid = null;
+        return { killed: true };
+      }
+      diagnostics.push('No tracked editor PID; falling back to image-name-based kill which may affect other UE instances');
       if (this.platform === 'win32') {
         execSync('taskkill /F /IM "UnrealEditor.exe"', { timeout: 10000 });
       } else {
         execSync('pkill -9 -f UnrealEditor', { timeout: 10000 });
       }
-      return { killed: true };
+      return { killed: true, diagnostics };
     } catch (err) {
-      return { killed: false, error: String(err) };
+      return { killed: false, error: String(err), diagnostics };
     }
   }
 
@@ -662,6 +677,7 @@ export class ProjectController implements ProjectControllerLike {
       detached: true,
       stdio: 'ignore',
     });
+    this.editorPid = child.pid ?? null;
     child.unref();
 
     return {

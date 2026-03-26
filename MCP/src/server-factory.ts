@@ -64,7 +64,7 @@ export function createBlueprintExtractorServer(
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '4.0.0',
+    version: '6.0.0',
   }, {
     instructions: serverInstructions,
   });
@@ -77,20 +77,8 @@ export function createBlueprintExtractorServer(
     classifyRecoverableToolFailure,
   });
 
-  installNormalizedToolRegistration({
-    server,
-    toolHelpRegistry,
-    registeredToolMap,
-    defaultOutputSchema: toolResultSchema,
-    normalizeToolError,
-    normalizeToolSuccess,
-  });
-
-  const callSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
-    callSubsystemJsonWithClient(client, method, params, options)
-  );
-
-  // Dual-mode execution: create adapter + detector + executor
+  // Dual-mode execution: create adapter + detector + executor BEFORE tool
+  // registration so the executor is available for activeToolName tracking.
   const editorAdapter = new EditorAdapter(client as UEClient);
   const modeDetector = new ExecutionModeDetector(editorAdapter, null);
   const executor = new AdaptiveExecutor(editorAdapter, null, modeDetector);
@@ -99,6 +87,29 @@ export function createBlueprintExtractorServer(
   for (const [toolName, mode] of TOOL_MODE_ANNOTATIONS) {
     executor.setToolMode(toolName, mode);
   }
+
+  installNormalizedToolRegistration({
+    server,
+    toolHelpRegistry,
+    registeredToolMap,
+    defaultOutputSchema: toolResultSchema,
+    normalizeToolError,
+    normalizeToolSuccess,
+    executor,
+  });
+
+  // Direct editor path — preserves callSubsystemJson error-checking layer
+  const directCallSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
+    callSubsystemJsonWithClient(client, method, params, options)
+  );
+
+  // Executor-routed callSubsystemJson: when a tool handler is active, routes
+  // through the executor which checks mode annotations and can fall back to
+  // commandlet. For editor mode (or when no tool context), delegates to the
+  // direct path preserving all error checking from helpers/subsystem.ts.
+  const callSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
+    executor.executeRouted(directCallSubsystemJson, method, params, options)
+  );
 
   function rememberExternalBuild(result: CompileProjectCodeResult): void {
     lastExternalBuildContext = buildExternalBuildContext(result);

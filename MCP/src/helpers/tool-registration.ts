@@ -1,8 +1,9 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { extractExtraContent, extractToolPayload, isRecord } from './formatting.js';
+import { extractExtraContent, extractToolPayload, isPlainObject } from './formatting.js';
 import { rawHandlerRegistry } from './alias-registration.js';
 import type { ToolHelpEntry, ToolInputSchema } from './tool-help.js';
+import type { AdaptiveExecutor } from '../execution/adaptive-executor.js';
 
 type ToolNormalizer = (...args: any[]) => unknown;
 
@@ -13,6 +14,7 @@ type InstallNormalizedToolRegistrationOptions = {
   defaultOutputSchema: z.ZodTypeAny;
   normalizeToolError: ToolNormalizer;
   normalizeToolSuccess: ToolNormalizer;
+  executor?: AdaptiveExecutor | null;
 };
 
 export function installNormalizedToolRegistration({
@@ -22,6 +24,7 @@ export function installNormalizedToolRegistration({
   defaultOutputSchema,
   normalizeToolError,
   normalizeToolSuccess,
+  executor,
 }: InstallNormalizedToolRegistrationOptions): void {
   const rawRegisterTool = server.registerTool.bind(server) as typeof server.registerTool;
   (server as typeof server & { registerTool: typeof server.registerTool }).registerTool = ((name, config, cb) => {
@@ -39,15 +42,20 @@ export function installNormalizedToolRegistration({
       ...config,
       outputSchema,
     }, async (args: unknown, extra: unknown) => {
+      // Set active tool name on executor so callSubsystemJson routing knows
+      // which tool is executing (for mode annotations / commandlet fallback).
+      if (executor) executor.setActiveToolName(name);
       try {
         const result = await (cb as (args: unknown, extra: unknown) => Promise<unknown> | unknown)(args, extra);
-        if (isRecord(result) && result.isError === true) {
+        if (isPlainObject(result) && result.isError === true) {
           return normalizeToolError(name, extractToolPayload(result), result);
         }
 
         return normalizeToolSuccess(name, extractToolPayload(result), extractExtraContent(result));
       } catch (error) {
         return normalizeToolError(name, error);
+      } finally {
+        if (executor) executor.setActiveToolName(null);
       }
     }) as RegisteredTool;
     registeredToolMap.set(name, registered);

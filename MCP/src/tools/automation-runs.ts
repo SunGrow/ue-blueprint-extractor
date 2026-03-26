@@ -61,7 +61,10 @@ export function registerAutomationRunTools({
       title: 'Run Automation Tests',
       description: 'Run Automation Specs or Functional Tests in a headless editor process from the MCP host and return an async run id plus exported report artifacts.',
       inputSchema: {
-        automation_filter: z.string().describe(
+        automation_filter: z.string().regex(
+          /^[A-Za-z0-9_.+* -]+$/u,
+          'automation_filter must contain only alphanumeric, dots, underscores, plus, asterisk, hyphen, and spaces',
+        ).describe(
           'Automation test filter passed to `Automation RunTests <filter>`.',
         ),
         engine_root: z.string().optional().describe(

@@ -1,8 +1,10 @@
 .artifacts/
 .buildplugin-*/
 .uat-build-*/
+.idea/
 .vs/
 *.VC.db
+node_modules/
 
 BlueprintExtractor/Binaries/
 BlueprintExtractor/Intermediate/

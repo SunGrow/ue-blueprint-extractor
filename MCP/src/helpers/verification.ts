@@ -1,7 +1,7 @@
 import { buildCaptureResourceUri } from './capture.js';
 import {
   firstDefinedString,
-  isRecord,
+  isPlainObject,
 } from './formatting.js';
 
 type VerificationSurface =
@@ -55,7 +55,7 @@ function buildDefaultArtifactScenarioId(payload: Record<string, unknown>) {
 }
 
 function buildDefaultWorldContext(payload: Record<string, unknown>, surface: VerificationSurface) {
-  if (isRecord(payload.worldContext)) {
+  if (isPlainObject(payload.worldContext)) {
     return payload.worldContext;
   }
 
@@ -100,7 +100,7 @@ function buildDefaultWorldContext(payload: Record<string, unknown>, surface: Ver
 }
 
 function buildDefaultCameraContext(payload: Record<string, unknown>, surface: VerificationSurface) {
-  if (isRecord(payload.cameraContext)) {
+  if (isPlainObject(payload.cameraContext)) {
     return payload.cameraContext;
   }
 
@@ -149,7 +149,7 @@ function normalizeAutomationVerificationArtifacts(payload: Record<string, unknow
   const projectDir = firstDefinedString(payload.projectDir);
 
   const existing = Array.isArray(payload.verificationArtifacts)
-    ? payload.verificationArtifacts.filter(isRecord)
+    ? payload.verificationArtifacts.filter(isPlainObject)
     : [];
   if (existing.length > 0) {
     return existing.map((artifact) => {
@@ -174,7 +174,7 @@ function normalizeAutomationVerificationArtifacts(payload: Record<string, unknow
   }
 
   const artifacts = Array.isArray(payload.artifacts)
-    ? payload.artifacts.filter(isRecord)
+    ? payload.artifacts.filter(isPlainObject)
     : [];
 
   return artifacts
@@ -221,7 +221,7 @@ function normalizeAutomationVerificationArtifacts(payload: Record<string, unknow
 }
 
 export function normalizeVerificationArtifact(payload: unknown): Record<string, unknown> {
-  const basePayload: Record<string, unknown> = isRecord(payload) ? { ...payload } : { data: payload };
+  const basePayload: Record<string, unknown> = isPlainObject(payload) ? { ...payload } : { data: payload };
   const assetPaths = unknownToStringArray(basePayload.assetPaths);
   const assetPath = typeof basePayload.assetPath === 'string'
     ? basePayload.assetPath
@@ -263,8 +263,8 @@ export function normalizeVerificationArtifactReference(payload: unknown): Record
 }
 
 export function normalizeVerificationComparison(payload: unknown): Record<string, unknown> {
-  const basePayload: Record<string, unknown> = isRecord(payload) ? payload : {};
-  const nested = isRecord(basePayload.comparison) ? basePayload.comparison : {};
+  const basePayload: Record<string, unknown> = isPlainObject(payload) ? payload : {};
+  const nested = isPlainObject(basePayload.comparison) ? basePayload.comparison : {};
   const result: Record<string, unknown> = { ...nested };
 
   const assignString = (key: string) => {
@@ -315,7 +315,7 @@ export function normalizeVerificationComparison(payload: unknown): Record<string
 }
 
 export function normalizeAutomationRunResult(payload: unknown): Record<string, unknown> {
-  const basePayload: Record<string, unknown> = isRecord(payload) ? { ...payload } : { data: payload };
+  const basePayload: Record<string, unknown> = isPlainObject(payload) ? { ...payload } : { data: payload };
   return {
     ...basePayload,
     verificationArtifacts: normalizeAutomationVerificationArtifacts(basePayload),

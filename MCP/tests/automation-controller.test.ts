@@ -154,6 +154,54 @@ describe('AutomationController', () => {
     expect(completed.nullRhi).toBe(false);
   });
 
+  it('rejects automation filters containing command-injection characters', async () => {
+    const controller = new AutomationController({
+      platform: 'win32',
+      resolveEditorCommand: async () => 'UnrealEditor-Cmd.exe',
+    });
+
+    const maliciousFilters = [
+      'Test;Quit;format C:',
+      'Test&echo pwned',
+      'Test|dir',
+      'Test$(whoami)',
+      'Test`id`',
+      'Filter<file',
+      'Filter>file',
+      'Test\nQuit',        // newline injection
+      'Test%PATH%',        // env variable expansion
+      'Test"injected"',    // quote breaking
+      'Test\\\\foo',       // backslash sequences
+    ];
+
+    for (const filter of maliciousFilters) {
+      await expect(controller.runAutomationTests({
+        engineRoot: 'C:/UE',
+        projectPath: 'C:/Proj/Proj.uproject',
+        automationFilter: filter,
+      })).rejects.toThrow('automationFilter contains invalid characters');
+    }
+
+    // Valid filters should not throw at validation (may fail later at editor resolution)
+    const validFilters = [
+      'BlueprintExtractor.Verification',
+      'UI.Window+Gameplay.Motion',
+      'Project.Module_Name',
+      'All *',
+    ];
+    for (const filter of validFilters) {
+      try {
+        await controller.runAutomationTests({
+          engineRoot: 'C:/UE',
+          projectPath: 'C:/Proj/Proj.uproject',
+          automationFilter: filter,
+        });
+      } catch (err) {
+        expect(String(err)).not.toContain('automationFilter contains invalid characters');
+      }
+    }
+  });
+
   it('evicts the oldest terminal runs when the configured history limit is exceeded', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bpx-automation-history-'));
     tempDirs.push(root);

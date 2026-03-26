@@ -1,6 +1,6 @@
 import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import { aliasMap } from './alias-registration.js';
-import { isRecord } from './formatting.js';
+import { isPlainObject } from './formatting.js';
 import { NEXT_STEP_HINTS_REGISTRY } from './next-step-hints.js';
 
 type RecoverableToolFailure = {
@@ -32,7 +32,7 @@ export function createToolResultNormalizers({
     }
 
     return existingResult.content.filter((entry): entry is ContentBlock => (
-      isRecord(entry)
+      isPlainObject(entry)
       && typeof entry.type === 'string'
       && entry.type !== 'text'
     ));
@@ -113,7 +113,7 @@ export function createToolResultNormalizers({
     payloadOrError: unknown,
     existingResult?: Partial<CallToolResult> & Record<string, unknown>,
   ): CallToolResult & Record<string, unknown> {
-    const payload = isRecord(payloadOrError) ? { ...payloadOrError } : {};
+    const payload = isPlainObject(payloadOrError) ? { ...payloadOrError } : {};
     const diagnostics = Array.isArray(payload.diagnostics)
       ? payload.diagnostics
       : [];
@@ -122,7 +122,7 @@ export function createToolResultNormalizers({
     if (
       diagnostics.length === 0
       && payloadOrError instanceof Error
-      && isRecord((payloadOrError as any).ueResponse)
+      && isPlainObject((payloadOrError as any).ueResponse)
     ) {
       const ueResp = (payloadOrError as any).ueResponse as Record<string, unknown>;
       if (Array.isArray(ueResp.diagnostics)) {
@@ -131,13 +131,13 @@ export function createToolResultNormalizers({
     }
 
     const firstDiagnostic = diagnostics.find((candidate) => (
-      isRecord(candidate)
+      isPlainObject(candidate)
       && typeof candidate.message === 'string'
       && candidate.message.length > 0
     ));
     const existingContentText = existingResult
       && Array.isArray(existingResult.content)
-      && isRecord(existingResult.content[0])
+      && isPlainObject(existingResult.content[0])
       && existingResult.content[0].type === 'text'
       && typeof existingResult.content[0].text === 'string'
       ? (existingResult.content[0].text as string).replace(/^Error:\s*/, '')
@@ -147,7 +147,7 @@ export function createToolResultNormalizers({
       ? payload.message.replace(/^Error:\s*/, '')
       : typeof payload.error === 'string'
         ? payload.error
-        : (isRecord(firstDiagnostic) && typeof firstDiagnostic.message === 'string')
+        : (isPlainObject(firstDiagnostic) && typeof firstDiagnostic.message === 'string')
           ? firstDiagnostic.message
           : payloadOrError instanceof Error
             ? payloadOrError.message
@@ -159,7 +159,7 @@ export function createToolResultNormalizers({
                   ? `Tool '${toolName}' failed with no error details (received ${String(payloadOrError)})`
                   : (() => {
                       const type = (payloadOrError as Record<string, unknown>)?.constructor?.name ?? typeof payloadOrError;
-                      const keys = isRecord(payloadOrError) ? Object.keys(payloadOrError).join(', ') : '';
+                      const keys = isPlainObject(payloadOrError) ? Object.keys(payloadOrError).join(', ') : '';
                       const truncatedJson = (() => {
                         try { const s = JSON.stringify(payloadOrError); return s.length > 500 ? s.slice(0, 500) + '…' : s; }
                         catch { return '[unserializable]'; }
@@ -176,7 +176,7 @@ export function createToolResultNormalizers({
       code: typeof payload.code === 'string'
         ? payload.code
         : classification?.code ?? (
-          (isRecord(firstDiagnostic) && typeof firstDiagnostic.code === 'string' && firstDiagnostic.code.length > 0)
+          (isPlainObject(firstDiagnostic) && typeof firstDiagnostic.code === 'string' && firstDiagnostic.code.length > 0)
             ? firstDiagnostic.code
             : 'tool_execution_failed'
         ),
@@ -221,7 +221,7 @@ export function createToolResultNormalizers({
     payload: unknown,
     extraContent: ContentBlock[] = [],
   ): CallToolResult & Record<string, unknown> {
-    const basePayload: Record<string, unknown> = isRecord(payload) ? payload : { data: payload };
+    const basePayload: Record<string, unknown> = isPlainObject(payload) ? payload : { data: payload };
     const success = typeof basePayload.success === 'boolean' ? basePayload.success : true;
 
     if (!success) {
