@@ -75,8 +75,9 @@ export function classifyRecoverableToolFailure(toolName: string, message: string
       recoverable: true,
       retry_after_ms: EDITOR_POLL_INTERVAL_MS,
       next_steps: [
-        'Call wait_for_editor to confirm the editor has fully reconnected after the restart window.',
-        'If the editor is connected but this persists, verify the BlueprintExtractor plugin/subsystem loaded successfully and retry the same tool.',
+        'Call wait_for_editor to confirm the editor has fully reconnected.',
+        'If a write operation (patch_class_defaults, modify_blueprint_members, etc.) was in progress, the editor may have crashed. Check the editor log and consider `git checkout` to recover modified assets.',
+        'Use restart_editor with force_kill: true if the editor process is unresponsive.',
       ],
     };
   }

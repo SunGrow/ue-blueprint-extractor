@@ -333,7 +333,12 @@ bool FAuthoringHelpers::ApplyStructProperties(const UScriptStruct* ScriptStruct,
 	bool bSuccess = true;
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Properties->Values)
 	{
-		FProperty* Property = ScriptStruct->FindPropertyByName(FName(*Pair.Key));
+		// Walk the super-struct chain so inherited properties are found
+		FProperty* Property = nullptr;
+		for (const UScriptStruct* Current = ScriptStruct; Current && !Property; Current = Cast<UScriptStruct>(Current->GetSuperStruct()))
+		{
+			Property = Current->FindPropertyByName(FName(*Pair.Key));
+		}
 		if (!Property)
 		{
 			OutErrors.Add(FString::Printf(TEXT("Property '%s' was not found on struct '%s'."), *Pair.Key, *ScriptStruct->GetName()));

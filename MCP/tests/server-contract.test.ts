@@ -3498,7 +3498,7 @@ describe('createBlueprintExtractorServer', () => {
     ]));
   });
 
-  it('truncates oversized extract_blueprint responses', async () => {
+  it('returns structuredContent for oversized extract_blueprint responses without truncating', async () => {
     const fakeClient = new FakeUEClient(() => JSON.stringify({
       blueprint: {
         summary: 'x'.repeat(220_000),
@@ -3514,9 +3514,10 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
 
-    const text = getTextContent(result);
-    expect(text).toContain('Warning: Response is');
-    expect(text).toContain('[TRUNCATED]');
+    // Large responses now preserve structuredContent (no early return that bypasses jsonToolSuccess)
+    const parsed = parseToolResult(result);
+    expect(parsed.blueprint).toBeDefined();
+    expect((parsed.blueprint as Record<string, unknown>).summary).toBeDefined();
   });
 
   it('returns tool errors with structured text when the subsystem returns an error JSON payload', async () => {

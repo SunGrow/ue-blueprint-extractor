@@ -84,6 +84,19 @@ describe('classifyRecoverableToolFailure', () => {
     expect(result!.recoverable).toBe(true);
   });
 
+  it('subsystem_unavailable includes crash recovery hint in next_steps', () => {
+    const result = classifyRecoverableToolFailure(
+      'modify_blueprint_members',
+      'BlueprintExtractor subsystem not found',
+    );
+    expect(result).not.toBeNull();
+    expect(result!.code).toBe('subsystem_unavailable');
+    // Should mention editor crash as possible cause, not just plugin not loaded
+    expect(result!.next_steps.join(' ')).toMatch(/crash/i);
+    // Should mention restart_editor as a recovery action
+    expect(result!.next_steps.join(' ')).toContain('restart_editor');
+  });
+
   it('classifies engine root missing as non-recoverable', () => {
     const result = classifyRecoverableToolFailure(
       'compile_project_code',

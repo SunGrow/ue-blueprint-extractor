@@ -6,6 +6,8 @@
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Components/ActorComponent.h"
+#include "UObject/SoftObjectPtr.h"
+#include "UObject/UnrealType.h"
 
 TSharedPtr<FJsonObject> FComponentExtractor::Extract(const UBlueprint* Blueprint)
 {
@@ -110,6 +112,29 @@ TSharedPtr<FJsonObject> FComponentExtractor::ExtractPropertyOverrides(const UAct
 			if (JsonValue)
 			{
 				Overrides->SetField(Property->GetName(), JsonValue);
+			}
+
+			// Structs containing soft object pointers (e.g. FStateTreeReference)
+			// may not serialize the inner path through the generic converter.
+			// Extract soft object paths explicitly as dot-notation overrides.
+			if (FStructProperty* StructProp = CastField<FStructProperty>(Property))
+			{
+				const void* StructPtr = StructProp->ContainerPtrToValuePtr<void>(ComponentTemplate);
+				for (TFieldIterator<FProperty> InnerIt(StructProp->Struct); InnerIt; ++InnerIt)
+				{
+					if (FSoftObjectProperty* SoftProp = CastField<FSoftObjectProperty>(*InnerIt))
+					{
+						const FSoftObjectPtr& SoftPtr = *SoftProp->GetPropertyValuePtr_InContainer(
+							const_cast<void*>(StructPtr));
+						if (!SoftPtr.IsNull())
+						{
+							FString Path = SoftPtr.ToSoftObjectPath().ToString();
+							Overrides->SetStringField(
+								FString::Printf(TEXT("%s.%s"), *Property->GetName(), *SoftProp->GetName()),
+								Path);
+						}
+					}
+				}
 			}
 		}
 	}

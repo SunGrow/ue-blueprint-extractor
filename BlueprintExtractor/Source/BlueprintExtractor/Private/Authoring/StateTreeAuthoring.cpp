@@ -143,6 +143,17 @@ static bool ParseGuidString(const FString& GuidString, FGuid& OutGuid)
 		return false;
 	}
 
+	// FGuid::Parse handles multiple formats including bare-hex
+	// (XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX) and hyphenated
+	// ({XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}).
+	// The FGuid(string) constructor only accepts the braced-hyphenated form,
+	// so use FGuid::Parse first to support bare-hex GUIDs from extract_asset.
+	if (FGuid::Parse(GuidString, OutGuid))
+	{
+		return OutGuid.IsValid();
+	}
+
+	// Fallback: try the raw constructor for any other accepted format
 	OutGuid = FGuid(GuidString);
 	return OutGuid.IsValid();
 }

@@ -10,6 +10,7 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/MemberReference.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -991,9 +992,44 @@ static bool PatchComponent(UBlueprint* Blueprint,
 	USCS_Node* Node = Blueprint->SimpleConstructionScript->FindSCSNode(FName(*ComponentName));
 	if (!Node)
 	{
-		OutErrors.Add(FString::Printf(
-			TEXT("Blueprint component '%s' was not found."),
-			*ComponentName));
+		// Search parent class chain to give a descriptive error
+		// when the component exists in a parent Blueprint
+		bool bFoundInParent = false;
+		FString ParentClassName;
+		UClass* ParentClass = Blueprint->ParentClass;
+		while (ParentClass)
+		{
+			if (UBlueprintGeneratedClass* BPGC = Cast<UBlueprintGeneratedClass>(ParentClass))
+			{
+				if (BPGC->SimpleConstructionScript)
+				{
+					if (BPGC->SimpleConstructionScript->FindSCSNode(FName(*ComponentName)))
+					{
+						bFoundInParent = true;
+						ParentClassName = BPGC->ClassGeneratedBy
+							? BPGC->ClassGeneratedBy->GetName()
+							: BPGC->GetName();
+						break;
+					}
+				}
+			}
+			ParentClass = ParentClass->GetSuperClass();
+		}
+
+		if (bFoundInParent)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Component '%s' is inherited from parent class '%s'. "
+				     "Use patch_class_defaults to override inherited component properties, "
+				     "or modify the parent Blueprint directly."),
+				*ComponentName, *ParentClassName));
+		}
+		else
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Blueprint component '%s' was not found in '%s' or any parent class."),
+				*ComponentName, *Blueprint->GetName()));
+		}
 		return false;
 	}
 
@@ -1466,6 +1502,36 @@ static bool ApplyClassDefaults(UBlueprint* Blueprint,
 		return false;
 	}
 
+	// Pre-validate all property paths exist on the CDO before mutation.
+	// This catches typos and nested-object-where-string-expected errors
+	// before DuplicateObject or property application triggers a crash.
+	bool bPreValidationPassed = true;
+	for (const auto& Pair : DefaultsObject->Values)
+	{
+		// Use TFieldIterator to walk the full class hierarchy, consistent with
+		// how ApplyPropertiesFromJson resolves properties via FindPropertyOnClassHierarchy.
+		FProperty* Prop = nullptr;
+		for (TFieldIterator<FProperty> It(DefaultTarget->GetClass()); It; ++It)
+		{
+			if (It->GetFName() == FName(*Pair.Key))
+			{
+				Prop = *It;
+				break;
+			}
+		}
+		if (!Prop)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Property '%s' not found on class '%s'. Check spelling or use a string path for asset/component references."),
+				*Pair.Key, *DefaultTarget->GetClass()->GetName()));
+			bPreValidationPassed = false;
+		}
+	}
+	if (!bPreValidationPassed)
+	{
+		return false;
+	}
+
 	return FPropertySerializer::ApplyPropertiesFromJson(
 		DefaultTarget,
 		DefaultsObject,
@@ -1478,7 +1544,8 @@ static bool ApplyOperation(UBlueprint* Blueprint,
                            const FString& Operation,
                            const TSharedPtr<FJsonObject>& Payload,
                            TArray<FString>& OutErrors,
-                           EBlueprintMutationFlags& OutMutationFlags)
+                           EBlueprintMutationFlags& OutMutationFlags,
+                           const bool bValidationOnly = false)
 {
 	if (!Blueprint)
 	{
@@ -1535,7 +1602,7 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 			Blueprint,
 			GetClassDefaultsObject(Payload),
 			OutErrors,
-			false);
+			bValidationOnly);
 	}
 
 	if (Operation == TEXT("compile"))
@@ -1801,13 +1868,22 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 	UBlueprint* WorkingBlueprint = Blueprint;
 	if (bValidateOnly)
 	{
-		WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage());
-		if (!WorkingBlueprint)
+		// DuplicateObject is unsafe for patch_class_defaults: it triggers
+		// PostDuplicateBlueprint → CompileSynchronouslyImpl → CreateDefaultObject
+		// which can FATAL crash on BPs with inherited components.
+		// ApplyClassDefaults with bValidationOnly=true uses FTemporaryPropertyStorage
+		// so running against the live Blueprint CDO is safe (no actual mutation).
+		const bool bSkipDuplicate = (Operation == TEXT("patch_class_defaults"));
+		if (!bSkipDuplicate)
 		{
-			Context.AddError(
-				TEXT("preview_duplicate_failed"),
-				TEXT("Failed to duplicate Blueprint for validation."));
-			return Context.BuildResult(false);
+			WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage());
+			if (!WorkingBlueprint)
+			{
+				Context.AddError(
+					TEXT("preview_duplicate_failed"),
+					TEXT("Failed to duplicate Blueprint for validation."));
+				return Context.BuildResult(false);
+			}
 		}
 	}
 
@@ -1818,7 +1894,8 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 		Operation,
 		Payload,
 		ValidationErrors,
-		MutationFlags);
+		MutationFlags,
+		bValidateOnly);
 	Context.SetValidationSummary(
 		ValidationErrors.Num() == 0,
 		ValidationErrors.Num() == 0

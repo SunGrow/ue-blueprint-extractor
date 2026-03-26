@@ -243,7 +243,61 @@ describe('registerExtractionTools', () => {
       compact: false,
     });
 
-    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('[TRUNCATED]');
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('Warning');
+  });
+
+  it('large extract_blueprint preserves structuredContent with truncation warning', async () => {
+    const registry = createToolRegistry();
+    const largeBlueprint = { functions: Array(500).fill({ name: 'fn', graph: 'x'.repeat(1000) }) };
+    const callSubsystemJson = vi.fn(async () => largeBlueprint);
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    const result = await registry.getTool('extract_blueprint').handler({
+      asset_path: '/Game/Test/BP_Large',
+      scope: 'Full',
+      compact: false,
+    });
+
+    const r = result as { structuredContent?: unknown; content?: Array<{ text?: string; type: string }> };
+    expect(r.structuredContent).toBeDefined();
+    const text = getTextContent(r);
+    expect(text).toContain('Warning');
+    expect(text).toMatch(/narrower scope/i);
+  });
+
+  it('large extract_asset data_table preserves structuredContent with truncation warning', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      rows: [{ summary: 'x'.repeat(220_000) }],
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    const result = await registry.getTool('extract_asset').handler({
+      asset_type: 'data_table',
+      asset_path: '/Game/Data/DT_Large',
+      compact: false,
+    });
+
+    const r = result as { structuredContent?: unknown; content?: Array<{ text?: string; type: string }> };
+    expect(r.structuredContent).toBeDefined();
+    const text = getTextContent(r);
+    expect(text).toContain('Warning');
   });
 
   it('surfaces subsystem failures through jsonToolError', async () => {
@@ -607,5 +661,44 @@ describe('registerExtractionTools', () => {
 
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('listing failed');
+  });
+
+  it('extract_blueprint includes StateTreeRef when component has StateTree assigned', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      blueprint: {
+        components: [{
+          componentName: 'StateTree',
+          componentClass: '/Script/GameplayStateTreeModule.StateTreeComponent',
+          propertyOverrides: {
+            bStartLogicAutomatically: false,
+            'StateTreeRef.StateTree': '/Game/AI/ST_Referee.ST_Referee',
+          },
+        }],
+      },
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    const result = await registry.getTool('extract_blueprint').handler({
+      asset_path: '/Game/Test/BP_Test',
+      scope: 'Full',
+      compact: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as {
+      blueprint: { components: Array<{ componentName: string; propertyOverrides: Record<string, unknown> }> };
+    };
+    const stComp = parsed.blueprint.components.find((c) => c.componentName === 'StateTree');
+    expect(stComp).toBeDefined();
+    expect(stComp!.propertyOverrides).toHaveProperty('StateTreeRef.StateTree');
+    expect(stComp!.propertyOverrides['StateTreeRef.StateTree']).toBe('/Game/AI/ST_Referee.ST_Referee');
   });
 });

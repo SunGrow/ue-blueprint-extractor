@@ -228,6 +228,74 @@ describe('registerBlueprintAuthoringTools', () => {
     );
   });
 
+  it('patch_class_defaults with nested object value warns about expected string path', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'patch_class_defaults',
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'patch_class_defaults',
+      payload: {
+        classDefaults: {
+          StateTree: { StateTreeRef: { StateTree: '/Game/AI/ST_Test.ST_Test' } },
+        },
+      },
+      validate_only: false,
+    }) as { isError?: boolean; content?: Array<{ text?: string; type: string }> };
+
+    // Should not be an error — the call still goes through
+    expect(result.isError).not.toBe(true);
+    // Should include a warning about nested object value
+    const texts = (result.content ?? []).map((c) => c.text ?? '').join('\n');
+    expect(texts).toContain('StateTree');
+    expect(texts).toMatch(/nested object/i);
+    expect(texts).toMatch(/string path/i);
+  });
+
+  it('patch_class_defaults with simple values does not emit nested-object warning', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'patch_class_defaults',
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'patch_class_defaults',
+      payload: {
+        classDefaults: {
+          bReplicates: true,
+          MaxHealth: 100,
+          DisplayName: 'Test',
+        },
+      },
+      validate_only: false,
+    }) as { isError?: boolean; content?: Array<{ text?: string; type: string }> };
+
+    expect(result.isError).not.toBe(true);
+    const texts = (result.content ?? []).map((c) => c.text ?? '').join('\n');
+    expect(texts).not.toMatch(/nested object/i);
+  });
+
   it('routes member and graph mutations through distinct subsystem methods with their original payload shapes', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async (method) => ({
@@ -294,5 +362,61 @@ describe('registerBlueprintAuthoringTools', () => {
       success: true,
       operation: 'ModifyBlueprintGraphs',
     });
+  });
+
+  it('patch_component returns descriptive error for inherited component', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error(
+        "Component 'StateTree' is inherited from parent class 'BP_Human_Base'. " +
+        "Use patch_class_defaults to override inherited component properties.",
+      );
+    });
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'patch_class_defaults',
+      payload: { componentName: 'StateTree', properties: { bStartLogicAutomatically: true } },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = getTextContent(result as { content?: Array<{ text?: string; type: string }> });
+    expect(text).toContain('inherited');
+    expect(text).toContain('BP_Human_Base');
+  });
+
+  it('patch_component returns clear error when component not found anywhere', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error("Blueprint component 'UnknownComp' was not found in 'BP_Test' or any parent class.");
+    });
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'patch_class_defaults',
+      payload: { componentName: 'UnknownComp', properties: {} },
+      validate_only: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = getTextContent(result as { content?: Array<{ text?: string; type: string }> });
+    expect(text).toContain('not found');
   });
 });

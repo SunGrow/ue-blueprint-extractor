@@ -138,13 +138,32 @@ export function registerBlueprintAuthoringTools({
           payload?: Record<string, unknown>;
           validate_only: boolean;
         };
+
+        const extraContent: Array<{ type: 'text'; text: string }> = [];
+
+        if (operation === 'patch_class_defaults' && payload?.classDefaults) {
+          const classDefaults = payload.classDefaults as Record<string, unknown>;
+          const warnings: string[] = [];
+          for (const [key, value] of Object.entries(classDefaults)) {
+            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+              warnings.push(
+                `Property '${key}': value is a nested object. If setting a component reference ` +
+                `or asset path, use a string path (e.g., "/Game/Path/Asset.Asset") instead.`,
+              );
+            }
+          }
+          if (warnings.length > 0) {
+            extraContent.push({ type: 'text', text: `Warnings:\n${warnings.join('\n')}` });
+          }
+        }
+
         const parsed = await callSubsystemJson('ModifyBlueprintMembers', {
           AssetPath: asset_path,
           Operation: operation,
           PayloadJson: JSON.stringify(payload ?? {}),
           bValidateOnly: validate_only,
         });
-        return jsonToolSuccess(parsed);
+        return jsonToolSuccess(parsed, { extraContent });
       } catch (error) {
         return jsonToolError(error);
       }

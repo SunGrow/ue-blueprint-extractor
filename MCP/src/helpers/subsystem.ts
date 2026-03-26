@@ -24,7 +24,10 @@ export async function callSubsystemJson(
   const parsed = JSON.parse(result) as Record<string, unknown>;
 
   if (typeof parsed.error === 'string' && parsed.error.length > 0) {
-    const err = new Error(parsed.error);
+    const errorText = parsed.error === 'Unknown error'
+      ? `C++ subsystem returned generic "Unknown error" for ${method}(${Object.keys(params).join(', ')}). Check UE editor Output Log for the actual exception.`
+      : parsed.error;
+    const err = new Error(errorText);
     (err as any).ueResponse = parsed;
     throw err;
   }

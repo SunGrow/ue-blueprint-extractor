@@ -1353,6 +1353,27 @@ describe('registerSchemaAndAiAuthoringTools', () => {
     expect((sentPayload.state as Record<string, unknown>).name).toBe('Patched');
   });
 
+  it('patch_state with bare-hex stateId passes through to subsystem unchanged', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/Test/ST_Test',
+      operation: 'patch_state',
+      payload: {
+        stateId: 'EAB9611F4B07D7E2C25A948AFC790A50',
+        state: { children: [{ name: 'NewChild', type: 'State' }] },
+      },
+      validate_only: false,
+    });
+
+    const callArgs = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sentPayload = JSON.parse(callArgs.PayloadJson as string) as Record<string, unknown>;
+    // Bare-hex GUID from extract_asset must be forwarded verbatim to the C++ subsystem
+    expect(sentPayload.stateId).toBe('EAB9611F4B07D7E2C25A948AFC790A50');
+  });
+
   it('patch_state passes top-level statePath in PayloadJson', async () => {
     const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
       success: true,

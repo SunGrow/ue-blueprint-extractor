@@ -201,6 +201,17 @@ describe('callSubsystemJson', () => {
     }
   });
 
+  it('enriches bare "Unknown error" from subsystem with method context', async () => {
+    const client = fakeClient(JSON.stringify({ error: 'Unknown error' }));
+    await expect(callSubsystemJson(client, 'CreateStateTree', { AssetPath: '/Game/Test/ST_Test', SchemaClass: '/Script/Test.TestSchema' }))
+      .rejects.toThrow(/CreateStateTree/);
+    const err = await callSubsystemJson(client, 'CreateStateTree', { AssetPath: '/Game/Test/ST_Test', SchemaClass: '/Script/Test.TestSchema' })
+      .catch(e => e);
+    expect(err.message).toContain('CreateStateTree');
+    expect(err.message).toContain('Output Log');
+    expect(err.message).not.toBe('Unknown error');
+  });
+
   it('preserves ueResponse on errors thrown from { errors: [...] } responses', async () => {
     const fakeClient = {
       callSubsystem: async () => JSON.stringify({

@@ -98,15 +98,14 @@ export function registerExtractionTools({
           parsed = compactBlueprint(parsed) as Record<string, unknown>;
         }
         const text = compact ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2);
+        const extraContent: Array<{ type: 'text'; text: string }> = [];
         if (text.length > 200_000) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB — consider using a narrower scope (ClassLevel, Variables, or FunctionsShallow).\n\n${text.substring(0, 200_000)}...\n[TRUNCATED]`,
-            }],
-          };
+          extraContent.push({
+            type: 'text',
+            text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB (${text.length} chars). Consider using a narrower scope (ClassLevel, Variables, or FunctionsShallow) first, then Full with graph_filter for specific functions.`,
+          });
         }
-        return jsonToolSuccess(parsed);
+        return jsonToolSuccess(parsed, { extraContent });
       } catch (error) {
         return jsonToolError(error);
       }
@@ -158,19 +157,18 @@ export function registerExtractionTools({
           }
         }
 
+        const extraContent: Array<{ type: 'text'; text: string }> = [];
         if (asset_type === 'data_table') {
           const text = JSON.stringify(parsed, null, 2);
           if (text.length > 200_000) {
-            return {
-              content: [{
-                type: 'text' as const,
-                text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB — large DataTable.\n\n${text.substring(0, 200_000)}...\n[TRUNCATED]`,
-              }],
-            };
+            extraContent.push({
+              type: 'text',
+              text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB (${text.length} chars) — large DataTable. Consider filtering rows or extracting a subset.`,
+            });
           }
         }
 
-        return jsonToolSuccess(parsed);
+        return jsonToolSuccess(parsed, { extraContent });
       } catch (error) {
         return jsonToolError(error);
       }

@@ -83,7 +83,7 @@ describe('server bootstrap helpers', () => {
       recoverable: true,
       retry_after_ms: EDITOR_POLL_INTERVAL_MS,
     });
-    expect(subsystemUnavailable?.next_steps[1]).toContain('BlueprintExtractor plugin/subsystem');
+    expect(subsystemUnavailable?.next_steps.join(' ')).toContain('restart_editor');
     expect(unknown).toBeNull();
   });
 

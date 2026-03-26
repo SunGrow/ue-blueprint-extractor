@@ -396,4 +396,28 @@ describe('compactor helpers', () => {
     expect(compactMaterial(null)).toBeNull();
     expect(compactMaterial('text')).toBe('text');
   });
+
+  it('compactBlueprint does not strip object-typed propertyOverrides from components', () => {
+    const payload = {
+      blueprint: {
+        components: [{
+          componentName: 'StateTree',
+          componentClass: '/Script/GameplayStateTreeModule.StateTreeComponent',
+          propertyOverrides: {
+            bStartLogicAutomatically: false,
+            'StateTreeRef.StateTree': '/Game/AI/ST_Referee.ST_Referee',
+          },
+        }],
+        functions: [],
+      },
+    };
+
+    const compacted = compactBlueprint(payload) as typeof payload;
+
+    const stComp = compacted.blueprint.components.find((c) => c.componentName === 'StateTree');
+    expect(stComp).toBeDefined();
+    expect(stComp!.propertyOverrides).toBeDefined();
+    expect(stComp!.propertyOverrides['StateTreeRef.StateTree']).toBe('/Game/AI/ST_Referee.ST_Referee');
+    expect(stComp!.propertyOverrides.bStartLogicAutomatically).toBe(false);
+  });
 });
