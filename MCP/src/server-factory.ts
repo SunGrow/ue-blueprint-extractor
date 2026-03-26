@@ -1,4 +1,5 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { UEClient } from './ue-client.js';
 import {
   ProjectController,
@@ -32,21 +33,33 @@ import {
   taskAwareTools,
 } from './server-config.js';
 import { toolResultSchema } from './schemas/tool-results.js';
+import {
+  ToolSurfaceManager,
+  WORKFLOW_SCOPE_IDS,
+  CORE_TOOLS,
+  type WorkflowScopeId,
+} from './tool-surface-manager.js';
 
 export type UEClientLike = Pick<UEClient, 'callSubsystem'> & Partial<Pick<UEClient, 'checkConnection'>>;
+
+export type BlueprintExtractorServerResult = {
+  server: McpServer;
+  toolSurfaceManager: ToolSurfaceManager;
+};
 
 export function createBlueprintExtractorServer(
   client: UEClientLike = new UEClient(),
   projectController: ProjectControllerLike = new ProjectController(),
   automationController: AutomationControllerLike = new AutomationController(),
-) {
+): BlueprintExtractorServerResult {
   let cachedProjectAutomationContext: ProjectAutomationContext | null = null;
   let lastExternalBuildContext: Record<string, unknown> | null = null;
   const toolHelpRegistry = new Map<string, ToolHelpEntry>();
+  const registeredToolMap = new Map<string, RegisteredTool>();
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '3.1.0',
+    version: '4.0.0',
   }, {
     instructions: serverInstructions,
   });
@@ -62,6 +75,7 @@ export function createBlueprintExtractorServer(
   installNormalizedToolRegistration({
     server,
     toolHelpRegistry,
+    registeredToolMap,
     defaultOutputSchema: toolResultSchema,
     normalizeToolError,
     normalizeToolSuccess,
@@ -120,8 +134,66 @@ export function createBlueprintExtractorServer(
       cachedProjectAutomationContext = null;
     },
     getToolHelpEntry: (toolName) => toolHelpRegistry.get(toolName),
+    toolHelpRegistry,
     editorPollIntervalMs: EDITOR_POLL_INTERVAL_MS,
   });
 
-  return server;
+  const toolSurfaceManager = new ToolSurfaceManager(registeredToolMap);
+
+  // Register the activate_workflow_scope tool
+  server.registerTool(
+    'activate_workflow_scope',
+    {
+      title: 'Activate Workflow Scope',
+      description: [
+        'Switch the active tool surface to a workflow-specific scope.',
+        `Available scopes: ${WORKFLOW_SCOPE_IDS.join(', ')}.`,
+        'Use additive=true to merge the new scope with currently active tools.',
+        'Core tools (extraction, search, project control) are always available.',
+      ].join(' '),
+      inputSchema: {
+        scope: z.enum(WORKFLOW_SCOPE_IDS as unknown as [string, ...string[]]).describe(
+          'The workflow scope to activate.',
+        ),
+        additive: z.boolean().default(false).describe(
+          'When true, merge the scope tools with currently active tools instead of replacing.',
+        ),
+      },
+      annotations: {
+        title: 'Activate Workflow Scope',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args: Record<string, unknown>) => {
+      const scopeId = args.scope as WorkflowScopeId;
+      const additive = (args.additive as boolean) ?? false;
+      toolSurfaceManager.activateScope(scopeId, additive);
+      const activeTools = toolSurfaceManager.getActiveTools();
+      const scopeDef = toolSurfaceManager.getScopeDefinition(scopeId);
+      const structuredContent = {
+        scope: scopeId,
+        description: scopeDef.description,
+        additive,
+        active_tool_count: activeTools.size,
+        core_tool_count: CORE_TOOLS.size,
+        scope_tools: scopeDef.tools,
+      };
+      return { content: [], structuredContent };
+    },
+  );
+
+  // Wire oninitialized to detect client capabilities
+  (server as any).server.oninitialized = () => {
+    const caps = (server as any).server.getClientCapabilities();
+    if (caps?.tools?.listChanged) {
+      toolSurfaceManager.enableScopedMode();
+    } else {
+      toolSurfaceManager.enableFlatMode();
+    }
+  };
+
+  return { server, toolSurfaceManager };
 }

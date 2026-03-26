@@ -9,7 +9,7 @@ export { exampleCatalog } from './catalogs/example-catalog.js';
 export { promptCatalog } from './prompts/prompt-catalog.js';
 
 async function main() {
-  const server = createBlueprintExtractorServer();
+  const { server } = createBlueprintExtractorServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

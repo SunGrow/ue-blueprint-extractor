@@ -49,6 +49,7 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('create_material').handler({
@@ -87,6 +88,7 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     await registry.getTool('material_graph_operation').handler({
@@ -129,6 +131,7 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const missingSettings = await registry.getTool('material_graph_operation').handler({
@@ -170,6 +173,7 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     await registry.getTool('modify_material_function').handler({
@@ -216,6 +220,7 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('modify_material').handler({
@@ -259,6 +264,7 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('modify_material').handler({
@@ -273,7 +279,7 @@ describe('registerMaterialAuthoringTools', () => {
     );
   });
 
-  it('serializes create_material_function payloads with asset_kind', async () => {
+  it('routes create_material with asset_kind layer_blend to CreateMaterialFunction', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
       success: true,
@@ -290,9 +296,10 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
-    const result = await registry.getTool('create_material_function').handler({
+    const result = await registry.getTool('create_material').handler({
       asset_path: '/Game/Materials/MF_Blend',
       asset_kind: 'layer_blend',
       settings: { description: 'Blend heights' },
@@ -311,7 +318,45 @@ describe('registerMaterialAuthoringTools', () => {
     });
   });
 
-  it('returns an error when create_material_function fails', async () => {
+  it('create_material_function alias delegates to create_material with asset_kind function', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/Materials/MF_Func',
+    }));
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    const result = await registry.getTool('create_material_function').handler({
+      asset_path: '/Game/Materials/MF_Func',
+      settings: { description: 'Helper' },
+      validate_only: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CreateMaterialFunction', {
+      AssetPath: '/Game/Materials/MF_Func',
+      AssetKind: 'function',
+      SettingsJson: JSON.stringify({ description: 'Helper' }),
+      bValidateOnly: false,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      assetPath: '/Game/Materials/MF_Func',
+    });
+  });
+
+  it('returns an error when create_material with function asset_kind fails', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => {
       throw new Error('function creation failed');
@@ -327,9 +372,10 @@ describe('registerMaterialAuthoringTools', () => {
       materialGraphOperationKindSchema,
       materialGraphOperationSchema,
       materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
-    const result = await registry.getTool('create_material_function').handler({
+    const result = await registry.getTool('create_material').handler({
       asset_path: '/Game/Materials/MF_Bad',
       asset_kind: 'function',
       validate_only: false,
@@ -339,5 +385,112 @@ describe('registerMaterialAuthoringTools', () => {
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
       'function creation failed',
     );
+  });
+
+  it('routes modify_material with asset_kind layer_blend to ModifyMaterialFunction', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'ModifyMaterialFunction',
+    }));
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    await registry.getTool('modify_material').handler({
+      asset_path: '/Game/Materials/MLB_Test',
+      asset_kind: 'layer_blend',
+      settings: { description: 'Blend' },
+      operations: [{ operation: 'noop' }],
+      validate_only: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyMaterialFunction', {
+      AssetPath: '/Game/Materials/MLB_Test',
+      PayloadJson: JSON.stringify({
+        settings: { description: 'Blend' },
+        operations: [{ operation: 'noop' }],
+      }),
+      bValidateOnly: false,
+    });
+  });
+
+  it('routes create_material with asset_kind function to CreateMaterialFunction', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/Materials/MF_New',
+    }));
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    await registry.getTool('create_material').handler({
+      asset_path: '/Game/Materials/MF_New',
+      asset_kind: 'function',
+      validate_only: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CreateMaterialFunction', {
+      AssetPath: '/Game/Materials/MF_New',
+      AssetKind: 'function',
+      SettingsJson: '{}',
+      bValidateOnly: false,
+    });
+  });
+
+  it('modify_material_function alias delegates to modify_material with asset_kind function', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'ModifyMaterialFunction',
+    }));
+
+    registerMaterialAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      materialGraphPayloadSchema,
+      materialNodePositionSchema,
+      materialConnectionSelectorFieldsSchema,
+      materialGraphOperationKindSchema,
+      materialGraphOperationSchema,
+      materialFunctionAssetKindSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    await registry.getTool('modify_material_function').handler({
+      asset_path: '/Game/Materials/MF_Alias',
+      operations: [{ operation: 'noop' }],
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyMaterialFunction', {
+      AssetPath: '/Game/Materials/MF_Alias',
+      PayloadJson: JSON.stringify({
+        operations: [{ operation: 'noop' }],
+      }),
+      bValidateOnly: true,
+    });
   });
 });

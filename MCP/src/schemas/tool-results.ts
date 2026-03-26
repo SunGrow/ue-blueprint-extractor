@@ -30,6 +30,28 @@ export const windowUiVerificationSchema = z.object({
   reason: z.string(),
 });
 
+export const CompositeStepResultSchema = z.object({
+  step: z.string(),
+  status: z.enum(['success', 'failure', 'skipped']),
+  message: z.string().optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
+  diagnostics: z.array(z.object({
+    severity: z.string().optional(),
+    code: z.string().optional(),
+    message: z.string().optional(),
+    path: z.string().optional(),
+  })).optional(),
+});
+
+export const CompositeToolResultSchema = toolResultSchema.extend({
+  steps: z.array(CompositeStepResultSchema),
+  partial_state: z.object({
+    completed_steps: z.array(z.string()),
+    failed_step: z.string(),
+    editor_state: z.string(),
+  }).optional(),
+});
+
 export const applyWindowUiChangesResultSchema = toolResultSchema.extend({
   stoppedAt: z.string().optional(),
   failedAfterStep: z.string().optional(),

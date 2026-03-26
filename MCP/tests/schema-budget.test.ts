@@ -1,0 +1,138 @@
+import { describe, it, expect, beforeAll } from 'vitest';
+import { z } from 'zod';
+import { createBlueprintExtractorServer } from '../src/server-factory.js';
+import { connectInMemoryServer } from './test-helpers.js';
+
+// Tools exempted from the 15-field budget (pre-existing tech debt, per TDD §3.6)
+const FIELD_EXEMPTED_TOOLS = new Set([
+  'apply_window_ui_changes',    // 34+ fields, acknowledged tech debt
+  'modify_widget_blueprint',    // dispatch alias, retains old polymorphic schema
+  'material_graph_operation',   // pre-existing 17-field polymorphic tool
+]);
+
+// Tools exempted from 4-level nesting limit (inherent schema structure)
+const NESTING_EXEMPTED_TOOLS = new Set([
+  // Widget tools using recursive widgetNodeSchema (children contain children)
+  'replace_widget_tree', 'insert_widget_child', 'wrap_widget',
+  'build_widget_tree', 'modify_widget_blueprint',
+  // Pre-existing deep schemas (passthrough, nested payloads)
+  'create_curve', 'modify_curve', 'create_curve_table', 'modify_curve_table',
+  'modify_user_defined_struct', 'create_user_defined_enum', 'modify_user_defined_enum',
+  'create_blackboard', 'modify_blackboard', 'create_state_tree', 'modify_state_tree',
+  'import_assets', 'import_textures', 'import_meshes', 'reimport_assets',
+  'create_behavior_tree', 'modify_behavior_tree',
+  'apply_window_ui_changes',
+]);
+
+function countTopLevelFields(schema: z.ZodTypeAny): number {
+  if (schema instanceof z.ZodObject) {
+    return Object.keys(schema.shape).length;
+  }
+  // Handle ZodEffects (from .refine())
+  if (schema instanceof z.ZodEffects) {
+    return countTopLevelFields(schema._def.schema);
+  }
+  return 0;
+}
+
+function measureNestingDepth(schema: z.ZodTypeAny, depth = 0): number {
+  if (depth > 10) return depth; // safety cap
+
+  if (schema instanceof z.ZodObject) {
+    let maxChild = depth;
+    for (const value of Object.values(schema.shape) as z.ZodTypeAny[]) {
+      maxChild = Math.max(maxChild, measureNestingDepth(value, depth + 1));
+    }
+    return maxChild;
+  }
+  if (schema instanceof z.ZodArray) {
+    return measureNestingDepth(schema._def.type, depth + 1);
+  }
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodDefault || schema instanceof z.ZodNullable) {
+    return measureNestingDepth(schema._def.innerType, depth);
+  }
+  if (schema instanceof z.ZodEffects) {
+    return measureNestingDepth(schema._def.schema, depth);
+  }
+  if (schema instanceof z.ZodRecord) {
+    return measureNestingDepth(schema._def.valueType, depth + 1);
+  }
+  return depth;
+}
+
+describe('schema complexity budget', () => {
+  let tools: Map<string, { inputSchema?: z.ZodTypeAny }>;
+
+  beforeAll(async () => {
+    const { server } = createBlueprintExtractorServer(
+      { callSubsystem: async () => ({}) } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+    const { client } = await connectInMemoryServer(server);
+    const result = await client.listTools();
+
+    tools = new Map();
+    for (const tool of result.tools) {
+      tools.set(tool.name, { inputSchema: tool.inputSchema as any });
+    }
+  });
+
+  it('no new/redesigned tool exceeds 15 top-level fields', () => {
+    const violations: string[] = [];
+    for (const [name, entry] of tools) {
+      if (FIELD_EXEMPTED_TOOLS.has(name)) continue;
+      if (!entry.inputSchema) continue;
+
+      // Count properties from the JSON schema representation
+      const properties = (entry.inputSchema as any).properties;
+      if (!properties) continue;
+      const fieldCount = Object.keys(properties).length;
+
+      if (fieldCount > 15) {
+        violations.push(`${name}: ${fieldCount} fields (max 15)`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('no tool schema exceeds 4 nesting levels', () => {
+    const violations: string[] = [];
+    for (const [name, entry] of tools) {
+      if (!entry.inputSchema) continue;
+      if (NESTING_EXEMPTED_TOOLS.has(name)) continue;
+
+      // Measure nesting from JSON schema representation
+      const maxDepth = measureJsonSchemaNesting(entry.inputSchema as any);
+      if (maxDepth > 4) {
+        violations.push(`${name}: ${maxDepth} levels deep (max 4)`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('registered at least 70 tools total', () => {
+    expect(tools.size).toBeGreaterThanOrEqual(70);
+  });
+});
+
+function measureJsonSchemaNesting(schema: any, depth = 0): number {
+  if (depth > 10) return depth;
+  if (!schema || typeof schema !== 'object') return depth;
+
+  let maxChild = depth;
+
+  if (schema.properties) {
+    for (const value of Object.values(schema.properties)) {
+      maxChild = Math.max(maxChild, measureJsonSchemaNesting(value as any, depth + 1));
+    }
+  }
+  if (schema.items) {
+    maxChild = Math.max(maxChild, measureJsonSchemaNesting(schema.items, depth + 1));
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+    maxChild = Math.max(maxChild, measureJsonSchemaNesting(schema.additionalProperties, depth + 1));
+  }
+
+  return maxChild;
+}

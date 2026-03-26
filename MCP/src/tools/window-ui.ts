@@ -185,7 +185,19 @@ export function registerWindowUiTools({
     'apply_window_ui_changes',
     {
       title: 'Apply Window UI Changes',
-      description: 'Apply variable flags, class defaults, font work, compile, optional save, and optional code sync in one ordered flow.',
+      description: 'Apply variable flags, class defaults, font work, compile, optional save, and optional code sync in one ordered flow.\n\n'
+        + 'Example:\n'
+        + '  {\n'
+        + '    "asset_path": "/Game/UI/WBP_Window",\n'
+        + '    "variable_widgets": [\n'
+        + '      { "widget_path": "WindowRoot/TitleBar/TitleText", "is_variable": true }\n'
+        + '    ],\n'
+        + '    "class_defaults": {\n'
+        + '      "ActiveTitleBarMaterial": "/Game/UI/MI_TitleBarActive.MI_TitleBarActive"\n'
+        + '    },\n'
+        + '    "compile_after": true,\n'
+        + '    "save_after": false\n'
+        + '  }',
       outputSchema: applyWindowUiChangesResultSchema,
       inputSchema: {
         asset_path: z.string().describe(

@@ -1,6 +1,7 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { extractExtraContent, extractToolPayload, isRecord } from './formatting.js';
+import { rawHandlerRegistry } from './alias-registration.js';
 import type { ToolHelpEntry, ToolInputSchema } from './tool-help.js';
 
 type ToolNormalizer = (...args: any[]) => unknown;
@@ -8,6 +9,7 @@ type ToolNormalizer = (...args: any[]) => unknown;
 type InstallNormalizedToolRegistrationOptions = {
   server: McpServer;
   toolHelpRegistry: Map<string, ToolHelpEntry>;
+  registeredToolMap: Map<string, RegisteredTool>;
   defaultOutputSchema: z.ZodTypeAny;
   normalizeToolError: ToolNormalizer;
   normalizeToolSuccess: ToolNormalizer;
@@ -16,6 +18,7 @@ type InstallNormalizedToolRegistrationOptions = {
 export function installNormalizedToolRegistration({
   server,
   toolHelpRegistry,
+  registeredToolMap,
   defaultOutputSchema,
   normalizeToolError,
   normalizeToolSuccess,
@@ -23,6 +26,7 @@ export function installNormalizedToolRegistration({
   const rawRegisterTool = server.registerTool.bind(server) as typeof server.registerTool;
   (server as typeof server & { registerTool: typeof server.registerTool }).registerTool = ((name, config, cb) => {
     const outputSchema = (config.outputSchema ?? defaultOutputSchema) as z.ZodTypeAny;
+    rawHandlerRegistry.set(name, cb as (args: Record<string, unknown>, extra: unknown) => Promise<unknown> | unknown);
     toolHelpRegistry.set(name, {
       title: config.title ?? name,
       description: config.description ?? '',
@@ -31,7 +35,7 @@ export function installNormalizedToolRegistration({
       annotations: config.annotations as Record<string, unknown> | undefined,
     });
 
-    return (rawRegisterTool as any)(name, {
+    const registered = (rawRegisterTool as any)(name, {
       ...config,
       outputSchema,
     }, async (args: unknown, extra: unknown) => {
@@ -45,6 +49,8 @@ export function installNormalizedToolRegistration({
       } catch (error) {
         return normalizeToolError(name, error);
       }
-    });
+    }) as RegisteredTool;
+    registeredToolMap.set(name, registered);
+    return registered;
   }) as typeof server.registerTool;
 }

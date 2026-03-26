@@ -44,8 +44,8 @@ export function registerWidgetExtractionTools({
         include_class_defaults: z.boolean().default(false).describe(
           'When true, also include Blueprint generated-class defaults so widget-template state and class defaults can be distinguished.',
         ),
-        compact: z.boolean().default(false).describe(
-          'Strip low-value widget-tree and compile metadata from the extracted snapshot.',
+        compact: z.boolean().default(true).describe(
+          'Return compact output (set false for raw).',
         ),
       },
       annotations: readOnlyAnnotations('Extract Widget Blueprint'),
@@ -78,8 +78,8 @@ export function registerWidgetExtractionTools({
         animation_name: z.string().describe(
           'Animation name or display label to extract.',
         ),
-        compact: z.boolean().default(false).describe(
-          'Strip layout noise for LLM consumption.',
+        compact: z.boolean().default(true).describe(
+          'Return compact output (set false for raw).',
         ),
       },
       outputSchema: extractWidgetAnimationResultSchema,

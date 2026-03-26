@@ -7,10 +7,12 @@ import {
   compactMaterial,
   compactStateTree,
 } from '../compactor.js';
+import { registerAlias } from '../helpers/alias-registration.js';
 import {
   jsonToolError,
   jsonToolSuccess,
 } from '../helpers/subsystem.js';
+import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -23,6 +25,7 @@ type RegisterExtractionToolsOptions = {
   scopeEnum: z.ZodType<string>;
   extractAssetTypeSchema: z.ZodTypeAny;
   cascadeResultSchema: z.ZodTypeAny;
+  toolHelpRegistry: Map<string, ToolHelpEntry>;
 };
 
 const extractAssetMethods = {
@@ -57,6 +60,7 @@ export function registerExtractionTools({
   scopeEnum,
   extractAssetTypeSchema,
   cascadeResultSchema,
+  toolHelpRegistry,
 }: RegisterExtractionToolsOptions): void {
   server.registerTool(
     'extract_blueprint',
@@ -73,8 +77,8 @@ export function registerExtractionTools({
         graph_filter: z.array(z.string()).optional().describe(
           'Filter to specific graph names. Omit to extract all graphs.',
         ),
-        compact: z.boolean().default(false).describe(
-          'Minify JSON by stripping low-value fields (~50-70% smaller).',
+        compact: z.boolean().default(true).describe(
+          'Return compact output (set false for raw).',
         ),
         include_class_defaults: z.boolean().default(false).describe(
           'Include generated-class default values that differ from the parent class.',
@@ -121,8 +125,8 @@ export function registerExtractionTools({
         asset_path: z.string().describe(
           'UE content path to the asset.',
         ),
-        compact: z.boolean().default(false).describe(
-          'Strip GUIDs, positions, and empty containers from the result.',
+        compact: z.boolean().default(true).describe(
+          'Return compact output (set false for raw).',
         ),
       },
       annotations: readOnlyAnnotations('Extract Asset'),
@@ -177,23 +181,27 @@ export function registerExtractionTools({
     'extract_material',
     {
       title: 'Extract Material',
-      description: 'Extract a compact classic material graph snapshot.',
+      description: 'Extract a compact material graph snapshot for a material, material function, layer, or layer blend asset.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the Material asset.',
+          'UE content path to the material-family asset.',
+        ),
+        asset_kind: z.enum(['material', 'function', 'layer', 'layer_blend']).default('material').describe(
+          'Material asset subtype.',
         ),
         verbose: z.boolean().default(false).describe(
           'Include more authored property detail for expressions and comments.',
         ),
-        compact: z.boolean().default(false).describe(
-          'Strip layout noise and shorten expression references.',
+        compact: z.boolean().default(true).describe(
+          'Return compact output (set false for raw).',
         ),
       },
       annotations: readOnlyAnnotations('Extract Material'),
     },
-    async ({ asset_path, verbose, compact }) => {
+    async ({ asset_path, asset_kind = 'material', verbose, compact }) => {
       try {
-        let parsed = await callSubsystemJson('ExtractMaterial', {
+        const method = asset_kind === 'material' ? 'ExtractMaterial' : 'ExtractMaterialFunction';
+        let parsed = await callSubsystemJson(method, {
           AssetPath: asset_path,
           bVerbose: verbose,
         });
@@ -207,38 +215,13 @@ export function registerExtractionTools({
     },
   );
 
-  server.registerTool(
+  registerAlias(
+    server as McpServer,
     'extract_material_function',
-    {
-      title: 'Extract Material Function',
-      description: 'Extract a compact graph snapshot for a material function, layer, or layer blend asset.',
-      inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the MaterialFunction-family asset.',
-        ),
-        verbose: z.boolean().default(false).describe(
-          'Include more authored property detail for expressions and comments.',
-        ),
-        compact: z.boolean().default(false).describe(
-          'Strip layout noise and shorten expression references.',
-        ),
-      },
-      annotations: readOnlyAnnotations('Extract Material Function'),
-    },
-    async ({ asset_path, verbose, compact }) => {
-      try {
-        let parsed = await callSubsystemJson('ExtractMaterialFunction', {
-          AssetPath: asset_path,
-          bVerbose: verbose,
-        });
-        if (compact) {
-          parsed = compactMaterial(parsed) as Record<string, unknown>;
-        }
-        return jsonToolSuccess(parsed);
-      } catch (error) {
-        return jsonToolError(error);
-      }
-    },
+    'extract_material',
+    (args) => ({ ...args, asset_kind: 'function' }),
+    'Use extract_material with asset_kind: "function" instead.',
+    toolHelpRegistry,
   );
 
   server.registerTool(
@@ -259,8 +242,8 @@ export function registerExtractionTools({
         graph_filter: z.array(z.string()).optional().describe(
           'Filter to specific graph names. Omit to extract all graphs.',
         ),
-        compact: z.boolean().default(false).describe(
-          'Strip layout noise for LLM consumption.',
+        compact: z.boolean().default(true).describe(
+          'Return compact output (set false for raw).',
         ),
       },
       outputSchema: cascadeResultSchema,

@@ -569,7 +569,16 @@ export function registerSchemaAndAiAuthoringTools({
     'modify_behavior_tree',
     {
       title: 'Modify BehaviorTree',
-      description: 'Modify a UE5 BehaviorTree with declarative subtree and attachment operations.',
+      description: 'Modify a UE5 BehaviorTree with declarative subtree and attachment operations.\n\n'
+        + 'Example (patch_node):\n'
+        + '  {\n'
+        + '    "asset_path": "/Game/AI/BT_Enemy",\n'
+        + '    "operation": "patch_node",\n'
+        + '    "payload": {\n'
+        + '      "nodePath": "Root/Selector_0/Sequence_Combat",\n'
+        + '      "properties": { "CooldownTime": 2.5 }\n'
+        + '    }\n'
+        + '  }',
       inputSchema: {
         asset_path: z.string().describe(
           'UE content path to the BehaviorTree asset to modify.',
@@ -626,7 +635,19 @@ export function registerSchemaAndAiAuthoringTools({
     'create_state_tree',
     {
       title: 'Create StateTree',
-      description: 'Create a UE5 StateTree asset from extractor-shaped editor data.',
+      description: 'Create a UE5 StateTree asset from extractor-shaped editor data.\n\n'
+        + 'Example:\n'
+        + '  {\n'
+        + '    "asset_path": "/Game/AI/ST_NewTree",\n'
+        + '    "payload": {\n'
+        + '      "schema": "/Script/GameplayStateTreeModule.StateTreeComponentSchema",\n'
+        + '      "states": [{\n'
+        + '        "name": "Root",\n'
+        + '        "type": "State",\n'
+        + '        "tasks": [{ "nodeStructType": "/Script/MyMod.STCSelectGesture", "name": "SelectGesture" }]\n'
+        + '      }]\n'
+        + '    }\n'
+        + '  }',
       inputSchema: {
         asset_path: z.string().describe(
           'UE content path for the new StateTree asset.',
@@ -719,7 +740,16 @@ export function registerSchemaAndAiAuthoringTools({
     'modify_state_tree',
     {
       title: 'Modify StateTree',
-      description: 'Modify a UE5 StateTree with declarative operations: replace_tree, patch_state, patch_editor_node, patch_transition, set_schema, set_bindings (replace all property bindings), add_binding (append bindings), remove_binding (remove by targetPath).',
+      description: 'Modify a UE5 StateTree with declarative operations: replace_tree, patch_state, patch_editor_node, patch_transition, set_schema, set_bindings (replace all property bindings), add_binding (append bindings), remove_binding (remove by targetPath).\n\n'
+        + 'Example (add_binding):\n'
+        + '  {\n'
+        + '    "asset_path": "/Game/AI/ST_Character",\n'
+        + '    "operation": "add_binding",\n'
+        + '    "payload": {\n'
+        + '      "sourcePath": { "structId": "EAB9...", "segments": [{ "name": "SelectedGestureTag" }] },\n'
+        + '      "targetPath": { "structId": "F2A3...", "segments": [{ "name": "MontageTag" }] }\n'
+        + '    }\n'
+        + '  }',
       inputSchema: {
         asset_path: z.string().describe(
           'UE content path to the StateTree asset to modify.',

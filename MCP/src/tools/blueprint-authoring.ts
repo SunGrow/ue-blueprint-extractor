@@ -81,7 +81,19 @@ export function registerBlueprintAuthoringTools({
     'modify_blueprint_members',
     {
       title: 'Modify Blueprint Members',
-      description: 'Modify Blueprint member authoring surfaces without synthesizing arbitrary graphs.',
+      description: 'Modify Blueprint member authoring surfaces without synthesizing arbitrary graphs.\n\n'
+        + 'Example (add_variable):\n'
+        + '  {\n'
+        + '    "asset_path": "/Game/Blueprints/BP_MyActor",\n'
+        + '    "operation": "add_variable",\n'
+        + '    "payload": {\n'
+        + '      "variable": {\n'
+        + '        "name": "Health",\n'
+        + '        "type": "float",\n'
+        + '        "defaultValue": "100.0"\n'
+        + '      }\n'
+        + '    }\n'
+        + '  }',
       inputSchema: {
         asset_path: z.string().describe(
           'UE content path to the Blueprint asset to modify.',

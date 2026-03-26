@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { registerAlias } from '../helpers/alias-registration.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -17,6 +19,7 @@ type RegisterMaterialAuthoringToolsOptions = {
   materialGraphOperationKindSchema: z.ZodTypeAny;
   materialGraphOperationSchema: z.ZodTypeAny;
   materialFunctionAssetKindSchema: z.ZodTypeAny;
+  toolHelpRegistry: Map<string, ToolHelpEntry>;
 };
 
 function serializeSchemaPayload<T extends z.ZodTypeAny>(
@@ -59,18 +62,22 @@ export function registerMaterialAuthoringTools({
   materialGraphOperationKindSchema,
   materialGraphOperationSchema,
   materialFunctionAssetKindSchema,
+  toolHelpRegistry,
 }: RegisterMaterialAuthoringToolsOptions): void {
   server.registerTool(
     'create_material',
     {
       title: 'Create Material',
-      description: 'Create a classic UMaterial asset with optional initial texture and settings.',
+      description: 'Create a material, material function, material layer, or material layer blend asset.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new Material asset.',
+          'UE content path for the new material-family asset.',
+        ),
+        asset_kind: z.enum(['material', 'function', 'layer', 'layer_blend']).default('material').describe(
+          'Material asset subtype.',
         ),
         initial_texture_path: z.string().optional().describe(
-          'Optional texture path for the factory’s initial texture slot.',
+          'Optional texture path for the factory\'s initial texture slot (material only).',
         ),
         settings: jsonObjectSchema.optional().describe(
           'Optional material settings payload.',
@@ -87,11 +94,20 @@ export function registerMaterialAuthoringTools({
         openWorldHint: false,
       },
     },
-    async ({ asset_path, initial_texture_path, settings, validate_only }) => {
+    async ({ asset_path, asset_kind = 'material', initial_texture_path, settings, validate_only }) => {
       try {
-        const parsed = await callSubsystemJson('CreateMaterial', {
+        if (asset_kind === 'material') {
+          const parsed = await callSubsystemJson('CreateMaterial', {
+            AssetPath: asset_path,
+            InitialTexturePath: initial_texture_path ?? '',
+            SettingsJson: JSON.stringify(settings ?? {}),
+            bValidateOnly: validate_only,
+          });
+          return jsonToolSuccess(parsed);
+        }
+        const parsed = await callSubsystemJson('CreateMaterialFunction', {
           AssetPath: asset_path,
-          InitialTexturePath: initial_texture_path ?? '',
+          AssetKind: asset_kind,
           SettingsJson: JSON.stringify(settings ?? {}),
           bValidateOnly: validate_only,
         });
@@ -106,7 +122,16 @@ export function registerMaterialAuthoringTools({
     'material_graph_operation',
     {
       title: 'Material Graph Operation',
-      description: 'Run one routed material graph operation without exposing the full batch DSL.',
+      description: 'Run one routed material graph operation without exposing the full batch DSL.\n\n'
+        + 'Example (add_expression):\n'
+        + '  {\n'
+        + '    "asset_path": "/Game/Materials/M_ButtonBase",\n'
+        + '    "operation": "add_expression",\n'
+        + '    "expression_class": "/Script/Engine.MaterialExpressionTextureSampleParameter2D",\n'
+        + '    "expression_name": "AlbedoSample",\n'
+        + '    "expression_properties": { "ParameterName": "Albedo" },\n'
+        + '    "node_position": { "x": -480, "y": -120 }\n'
+        + '  }',
       inputSchema: {
         asset_path: z.string().describe(
           'UE content path to the Material asset.',
@@ -276,10 +301,13 @@ export function registerMaterialAuthoringTools({
     'modify_material',
     {
       title: 'Modify Material',
-      description: 'Apply compact graph and settings operations to a classic UMaterial asset.',
+      description: 'Apply compact graph and settings operations to a material, material function, layer, or layer blend asset.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the Material asset.',
+          'UE content path to the material-family asset.',
+        ),
+        asset_kind: z.enum(['material', 'function', 'layer', 'layer_blend']).default('material').describe(
+          'Material asset subtype.',
         ),
         settings: jsonObjectSchema.optional().describe(
           'Optional settings applied before operations.',
@@ -305,9 +333,10 @@ export function registerMaterialAuthoringTools({
         openWorldHint: false,
       },
     },
-    async ({ asset_path, validate_only, ...payload }) => {
+    async ({ asset_path, asset_kind = 'material', validate_only, ...payload }) => {
       try {
-        const parsed = await callSubsystemJson('ModifyMaterial', {
+        const method = asset_kind === 'material' ? 'ModifyMaterial' : 'ModifyMaterialFunction';
+        const parsed = await callSubsystemJson(method, {
           AssetPath: asset_path,
           PayloadJson: serializeSchemaPayload(materialGraphPayloadSchema, payload),
           bValidateOnly: validate_only,
@@ -319,93 +348,22 @@ export function registerMaterialAuthoringTools({
     },
   );
 
-  server.registerTool(
+  registerAlias(
+    server as McpServer,
     'create_material_function',
-    {
-      title: 'Create Material Function',
-      description: 'Create a material function, material layer, or material layer blend asset.',
-      inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path for the new MaterialFunction-family asset.',
-        ),
-        asset_kind: materialFunctionAssetKindSchema.default('function').describe(
-          'Choose function, layer, or layer_blend.',
-        ),
-        settings: jsonObjectSchema.optional().describe(
-          'Optional function settings payload.',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
-        ),
-      },
-      annotations: {
-        title: 'Create Material Function',
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
-    },
-    async ({ asset_path, asset_kind, settings, validate_only }) => {
-      try {
-        const parsed = await callSubsystemJson('CreateMaterialFunction', {
-          AssetPath: asset_path,
-          AssetKind: asset_kind,
-          SettingsJson: JSON.stringify(settings ?? {}),
-          bValidateOnly: validate_only,
-        });
-        return jsonToolSuccess(parsed);
-      } catch (error) {
-        return jsonToolError(error);
-      }
-    },
+    'create_material',
+    (args) => ({ ...args, asset_kind: 'function' }),
+    'Use create_material with asset_kind: "function" instead.',
+    toolHelpRegistry,
   );
 
-  server.registerTool(
+  registerAlias(
+    server as McpServer,
     'modify_material_function',
-    {
-      title: 'Modify Material Function',
-      description: 'Apply compact graph and settings operations to a material function, layer, or layer blend asset.',
-      inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the MaterialFunction-family asset.',
-        ),
-        settings: jsonObjectSchema.optional().describe(
-          'Optional settings applied before operations.',
-        ),
-        compile_after: z.boolean().optional().describe(
-          'Override the default compile-after-mutate behavior.',
-        ),
-        layout_after: z.boolean().optional().describe(
-          'When true, run the editor layout pass after mutations.',
-        ),
-        operations: z.array(materialGraphOperationSchema).default([]).describe(
-          'Ordered material graph operations.',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
-        ),
-      },
-      annotations: {
-        title: 'Modify Material Function',
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
-    },
-    async ({ asset_path, validate_only, ...payload }) => {
-      try {
-        const parsed = await callSubsystemJson('ModifyMaterialFunction', {
-          AssetPath: asset_path,
-          PayloadJson: serializeSchemaPayload(materialGraphPayloadSchema, payload),
-          bValidateOnly: validate_only,
-        });
-        return jsonToolSuccess(parsed);
-      } catch (error) {
-        return jsonToolError(error);
-      }
-    },
+    'modify_material',
+    (args) => ({ ...args, asset_kind: 'function' }),
+    'Use modify_material with asset_kind: "function" instead.',
+    toolHelpRegistry,
   );
 
   server.registerTool(

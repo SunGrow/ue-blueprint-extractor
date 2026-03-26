@@ -1,4 +1,5 @@
 import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
+import { aliasMap } from './alias-registration.js';
 import { isRecord } from './formatting.js';
 
 type RecoverableToolFailure = {
@@ -37,14 +38,16 @@ export function createToolResultNormalizers({
   }
 
   function defaultNextSteps(toolName: string, payload?: Record<string, unknown>): string[] {
-    if (toolName === 'wait_for_editor') {
+    const resolvedName = aliasMap.get(toolName) ?? toolName;
+
+    if (resolvedName === 'wait_for_editor') {
       return [
         'Retry wait_for_editor if the editor is still restarting.',
         'Once connected=true, rerun the blocked editor-backed tool.',
       ];
     }
 
-    if (toolName === 'compile_widget_blueprint') {
+    if (resolvedName === 'compile_widget_blueprint') {
       return [
         'Inspect compile.messages and diagnostics for the first failing widget or property.',
         'Re-extract the widget blueprint before applying the next structural patch.',
@@ -52,7 +55,7 @@ export function createToolResultNormalizers({
       ];
     }
 
-    if (taskAwareTools.has(toolName)) {
+    if (taskAwareTools.has(resolvedName)) {
       return [
         'Inspect the returned execution.status and diagnostics before retrying.',
         'Poll the task-oriented status tool again if the operation is still running.',

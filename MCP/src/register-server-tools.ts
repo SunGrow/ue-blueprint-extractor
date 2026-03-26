@@ -57,12 +57,14 @@ import {
   MaterialStaticSwitchParameterSchema,
   MaterialTextureParameterSchema,
   MaterialVectorParameterSchema,
+  MeshImportOptionsSchema,
   MeshImportPayloadSchema,
   StateTreeEditorNodeSelectorSchema,
   StateTreeMutationOperationSchema,
   StateTreeStateSelectorSchema,
   StateTreeTransitionSelectorSchema,
   StateTreeBindingsObjectSchema,
+  TextureImportOptionsSchema,
   TextureImportPayloadSchema,
   UserDefinedEnumEntrySchema,
   UserDefinedEnumMutationOperationSchema,
@@ -96,6 +98,7 @@ import type {
 import { registerAnimationAuthoringTools } from './tools/animation-authoring.js';
 import { registerAutomationRunTools } from './tools/automation-runs.js';
 import { registerBlueprintAuthoringTools } from './tools/blueprint-authoring.js';
+import { registerCompositeTools } from './tools/composite-tools.js';
 import { registerCommonUIButtonStyleTools } from './tools/commonui-button-style.js';
 import { registerDataAndInputTools } from './tools/data-and-input.js';
 import { registerExtractionTools } from './tools/extraction.js';
@@ -145,6 +148,7 @@ type RegisterServerToolsOptions = {
   getLastExternalBuildContext: () => Record<string, unknown> | null;
   clearProjectAutomationContext: () => void;
   getToolHelpEntry: (toolName: string) => ToolHelpEntry | undefined;
+  toolHelpRegistry: Map<string, ToolHelpEntry>;
   editorPollIntervalMs: number;
 };
 
@@ -169,6 +173,7 @@ export function registerServerTools({
   getLastExternalBuildContext,
   clearProjectAutomationContext,
   getToolHelpEntry,
+  toolHelpRegistry,
   editorPollIntervalMs,
 }: RegisterServerToolsOptions): void {
   const collectToolExampleFamilies = (toolName: string) => (
@@ -181,6 +186,7 @@ export function registerServerTools({
     scopeEnum,
     extractAssetTypeSchema: ExtractAssetTypeSchema,
     cascadeResultSchema: CascadeResultSchema,
+    toolHelpRegistry,
   });
 
   registerWidgetStructureTools({
@@ -265,6 +271,7 @@ export function registerServerTools({
     materialGraphOperationKindSchema: MaterialGraphOperationKindSchema,
     materialGraphOperationSchema: MaterialGraphOperationSchema,
     materialFunctionAssetKindSchema: MaterialFunctionAssetKindSchema,
+    toolHelpRegistry,
   });
 
   registerAutomationRunTools({
@@ -354,6 +361,15 @@ export function registerServerTools({
     importJobListSchema: ImportJobListSchema,
     textureImportPayloadSchema: TextureImportPayloadSchema,
     meshImportPayloadSchema: MeshImportPayloadSchema,
+    textureImportOptionsSchema: TextureImportOptionsSchema,
+    meshImportOptionsSchema: MeshImportOptionsSchema,
+    toolHelpRegistry,
+  });
+
+  registerCompositeTools({
+    server,
+    callSubsystemJson,
+    toolHelpRegistry,
   });
 
   registerUtilityTools({

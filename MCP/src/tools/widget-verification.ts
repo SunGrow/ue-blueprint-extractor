@@ -121,7 +121,17 @@ export function registerWidgetVerificationTools({
     'capture_widget_motion_checkpoints',
     {
       title: 'Capture Widget Motion Checkpoints',
-      description: 'Play a widget animation or automation scenario and capture named motion checkpoints.',
+      description: 'Play a widget animation or automation scenario and capture named motion checkpoints.\n\n'
+        + 'Example (editor_preview):\n'
+        + '  {\n'
+        + '    "mode": "editor_preview",\n'
+        + '    "asset_path": "/Game/UI/Screens/WBP_MainMenu",\n'
+        + '    "animation_name": "OpenSequence",\n'
+        + '    "checkpoints": [\n'
+        + '      { "name": "closed", "timeMs": 0 },\n'
+        + '      { "name": "open", "timeMs": 260 }\n'
+        + '    ]\n'
+        + '  }',
       inputSchema: {
         mode: motionCaptureModeSchema.describe(
           'editor_preview for menu/shell widgets, automation_scenario for HUD/runtime flows.',

@@ -94,6 +94,38 @@ describe('classifyRecoverableToolFailure', () => {
     expect(result!.recoverable).toBe(false);
   });
 
+  it('classifies composite partial failure via message keyword', () => {
+    const result = classifyRecoverableToolFailure('find_and_extract', 'composite step failed during extraction');
+    expect(result).not.toBeNull();
+    expect(result!.code).toBe('composite_partial_failure');
+    expect(result!.recoverable).toBe(true);
+    expect(result!.next_steps).toContain('Review the steps array to identify which step failed');
+  });
+
+  it('classifies composite partial failure via payload with failed steps', () => {
+    const payload = {
+      steps: [
+        { step: 'search', status: 'success' },
+        { step: 'extract', status: 'failure' },
+      ],
+    };
+    const result = classifyRecoverableToolFailure('find_and_extract', 'step extract failed', payload);
+    expect(result).not.toBeNull();
+    expect(result!.code).toBe('composite_partial_failure');
+    expect(result!.recoverable).toBe(true);
+  });
+
+  it('does not classify composite when payload has no failed steps', () => {
+    const payload = {
+      steps: [
+        { step: 'search', status: 'success' },
+        { step: 'extract', status: 'success' },
+      ],
+    };
+    const result = classifyRecoverableToolFailure('find_and_extract', 'Something completely unexpected', payload);
+    expect(result).toBeNull();
+  });
+
   it('returns null for unrecognized error messages', () => {
     const result = classifyRecoverableToolFailure('create_blueprint', 'Something completely unexpected');
     expect(result).toBeNull();

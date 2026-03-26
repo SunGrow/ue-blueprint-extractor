@@ -435,7 +435,14 @@ export function registerProjectControlTools({
     'sync_project_code',
     {
       title: 'Sync Project Code',
-      description: 'Sync C++ code changes via Live Coding or build-and-restart based on explicit changed_paths.',
+      description: 'Sync C++ code changes via Live Coding or build-and-restart based on explicit changed_paths.\n\n'
+        + 'Example:\n'
+        + '  {\n'
+        + '    "changed_paths": ["Source/MyGame/Private/MyActor.cpp"],\n'
+        + '    "project_path": "C:/Projects/MyGame/MyGame.uproject",\n'
+        + '    "engine_root": "C:/Program Files/Epic Games/UE_5.7",\n'
+        + '    "target": "MyGameEditor"\n'
+        + '  }',
       inputSchema: {
         changed_paths: z.array(z.string()).min(1).describe(
           'Explicit changed file paths. This tool does not infer them from source control.',

@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { rawHandlerRegistry } from '../src/helpers/alias-registration.js';
+import type { ToolHelpEntry } from '../src/helpers/tool-help.js';
 import { getTextContent } from './test-helpers.js';
 
 type RegisteredTool = {
@@ -7,13 +10,22 @@ type RegisteredTool = {
 
 export function createToolRegistry() {
   const tools = new Map<string, RegisteredTool>();
+  const toolHelpRegistry = new Map<string, ToolHelpEntry>();
 
   return {
     server: {
       registerTool(name: string, config: Record<string, unknown>, handler: RegisteredTool['handler']) {
         tools.set(name, { config, handler });
+        rawHandlerRegistry.set(name, handler as (args: Record<string, unknown>, extra: unknown) => Promise<unknown> | unknown);
+        toolHelpRegistry.set(name, {
+          title: (config.title as string) ?? name,
+          description: (config.description as string) ?? '',
+          inputSchema: (config.inputSchema ?? {}) as Record<string, z.ZodTypeAny>,
+          outputSchema: z.object({}).passthrough(),
+        });
       },
     },
+    toolHelpRegistry,
     getTool(name: string): RegisteredTool {
       const tool = tools.get(name);
       if (!tool) {

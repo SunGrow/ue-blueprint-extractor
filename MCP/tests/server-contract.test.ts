@@ -218,7 +218,7 @@ describe('createBlueprintExtractorServer', () => {
   });
 
   it('registers the expected resources, tools, prompts, and output schemas', async () => {
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()).server);
     cleanups.push(harness.close);
 
     const resources = await harness.client.listResources();
@@ -257,7 +257,7 @@ describe('createBlueprintExtractorServer', () => {
     const getToolHelp = tools.tools.find((tool) => tool.name === 'get_tool_help');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(83);
+    expect(tools.tools).toHaveLength(95);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -386,7 +386,7 @@ describe('createBlueprintExtractorServer', () => {
   });
 
   it('serves the static reference resources', async () => {
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()).server);
     cleanups.push(harness.close);
 
     const scopes = await harness.client.readResource({ uri: 'blueprint://scopes' });
@@ -481,7 +481,7 @@ describe('createBlueprintExtractorServer', () => {
   });
 
   it('serves the prompt catalog with concrete workflow guidance', async () => {
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()).server);
     cleanups.push(harness.close);
 
     const promptNames = Object.keys(promptCatalog);
@@ -641,7 +641,7 @@ describe('createBlueprintExtractorServer', () => {
         triggerMode: 'scenario_trigger',
       }],
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController(), fakeAutomationController));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController(), fakeAutomationController).server);
     cleanups.push(harness.close);
 
     for (const family of Object.values(exampleCatalog)) {
@@ -674,7 +674,7 @@ describe('createBlueprintExtractorServer', () => {
     const fakeClient = new FakeUEClient((method, params) => JSON.stringify({
       results: [{ method, params }],
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -718,7 +718,7 @@ describe('createBlueprintExtractorServer', () => {
       operation: method,
       params,
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const extractResult = await harness.client.callTool({
@@ -866,7 +866,7 @@ describe('createBlueprintExtractorServer', () => {
 
   it('serializes import payloads to subsystem JSON passthrough parameters', async () => {
     const fakeClient = new FakeUEClient(() => JSON.stringify(makeImportJobResult()));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const payload = {
@@ -950,7 +950,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const extractResult = await harness.client.callTool({
@@ -958,6 +958,7 @@ describe('createBlueprintExtractorServer', () => {
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
         include_class_defaults: true,
+        compact: false,
       },
     });
     const modifyResult = await harness.client.callTool({
@@ -1076,7 +1077,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -1104,7 +1105,7 @@ describe('createBlueprintExtractorServer', () => {
       success: true,
       operation: method,
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const modifyWidget = await harness.client.callTool({
@@ -1172,7 +1173,7 @@ describe('createBlueprintExtractorServer', () => {
       widgetOperation: params.Operation,
       functionGraphs: ['ForcedRallyServeMode_WidgetInitialize', 'ForcedRallyServeMode_UpdateAfterChanges'],
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const upsertGraphs = await harness.client.callTool({
@@ -1304,7 +1305,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const extractResult = await harness.client.callTool({
@@ -1373,7 +1374,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
     const createFunctionResult = await harness.client.callTool({
-      name: 'create_material_function',
+      name: 'create_material',
       arguments: {
         asset_path: '/Game/Materials/MF_Test',
         asset_kind: 'layer_blend',
@@ -1560,7 +1561,7 @@ describe('createBlueprintExtractorServer', () => {
       widgetPath: 'WindowRoot/TitleBar/TitleText',
       validateOnly: true,
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -1601,7 +1602,7 @@ describe('createBlueprintExtractorServer', () => {
       method,
       params,
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -1671,7 +1672,7 @@ describe('createBlueprintExtractorServer', () => {
         return attempts >= 3;
       },
     );
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -1697,7 +1698,7 @@ describe('createBlueprintExtractorServer', () => {
       () => JSON.stringify({ success: true }),
       () => false,
     );
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -1724,7 +1725,7 @@ describe('createBlueprintExtractorServer', () => {
     const fakeClient = new FakeUEClient(() => {
       throw new Error('UE Editor not running or Remote Control not available on 127.0.0.1:30010');
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -1749,7 +1750,7 @@ describe('createBlueprintExtractorServer', () => {
     const fakeClient = new FakeUEClient(() => {
       throw new Error('BlueprintExtractor subsystem not found. Ensure the plugin is loaded in the editor or set UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH.');
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -1797,7 +1798,7 @@ describe('createBlueprintExtractorServer', () => {
         params,
       });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const createResult = await harness.client.callTool({
@@ -1992,7 +1993,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const getResult = await harness.client.callTool({
@@ -2088,7 +2089,7 @@ describe('createBlueprintExtractorServer', () => {
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
 
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2148,7 +2149,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2325,7 +2326,7 @@ describe('createBlueprintExtractorServer', () => {
       fakeClient,
       new FakeProjectController(),
       fakeAutomationController,
-    ));
+    ).server);
     cleanups.push(harness.close);
 
     const runResult = await harness.client.callTool({
@@ -2430,7 +2431,7 @@ describe('createBlueprintExtractorServer', () => {
         restartReasons: ['external_build_completed'],
       }),
     );
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient(), fakeController));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient(), fakeController).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2479,7 +2480,7 @@ describe('createBlueprintExtractorServer', () => {
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
     const fakeController = new FakeProjectController();
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2523,7 +2524,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2576,7 +2577,7 @@ describe('createBlueprintExtractorServer', () => {
         restartReasons: ['external_build_completed'],
       }),
     );
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController).server);
     cleanups.push(harness.close);
 
     await harness.client.callTool({
@@ -2620,7 +2621,7 @@ describe('createBlueprintExtractorServer', () => {
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
     const fakeController = new FakeProjectController();
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2692,7 +2693,7 @@ describe('createBlueprintExtractorServer', () => {
         diagnostics: [],
       }),
     );
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2820,7 +2821,7 @@ describe('createBlueprintExtractorServer', () => {
         diagnostics: [],
       }),
     );
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, fakeController).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2908,7 +2909,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -2980,7 +2981,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3029,7 +3030,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3076,7 +3077,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController()).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3131,7 +3132,7 @@ describe('createBlueprintExtractorServer', () => {
         }],
       },
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3180,7 +3181,7 @@ describe('createBlueprintExtractorServer', () => {
         messages: [],
       },
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3228,7 +3229,7 @@ describe('createBlueprintExtractorServer', () => {
         },
       },
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3283,7 +3284,7 @@ describe('createBlueprintExtractorServer', () => {
         }],
       },
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3377,7 +3378,7 @@ describe('createBlueprintExtractorServer', () => {
 
       return JSON.stringify({ error: `Unexpected method ${method}` });
     });
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const materialResult = await harness.client.callTool({
@@ -3444,7 +3445,7 @@ describe('createBlueprintExtractorServer', () => {
         emptyArray: [],
       },
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3468,7 +3469,7 @@ describe('createBlueprintExtractorServer', () => {
   });
 
   it('returns structured help for registered tools', async () => {
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3503,7 +3504,7 @@ describe('createBlueprintExtractorServer', () => {
         summary: 'x'.repeat(220_000),
       },
     }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3520,7 +3521,7 @@ describe('createBlueprintExtractorServer', () => {
 
   it('returns tool errors with structured text when the subsystem returns an error JSON payload', async () => {
     const fakeClient = new FakeUEClient(() => JSON.stringify({ error: 'validation failed' }));
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3536,7 +3537,7 @@ describe('createBlueprintExtractorServer', () => {
   });
 
   it('surfaces schema validation failures through the MCP tool contract', async () => {
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
@@ -3552,7 +3553,7 @@ describe('createBlueprintExtractorServer', () => {
 
   it('validates import payload structure before calling the subsystem', async () => {
     const fakeClient = new FakeUEClient();
-    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({

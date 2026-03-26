@@ -251,7 +251,7 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
       `Author widget motion for ${widget_asset_path} using animation '${animation_name}'.`,
       formatPromptBlock('design_spec_json', design_spec_json, 'A design_spec_json with motion data is required.'),
       formatPromptList('Compare reference paths', compare_reference_paths, 'No compare reference paths were supplied. Use checkpoint frames from the design spec if they exist.'),
-      'Use create_widget_animation or modify_widget_animation instead of overloading modify_widget_blueprint.',
+      'Use create_widget_animation or modify_widget_animation instead of overloading widget tools. Use patch_widget for property changes and replace_widget_tree for full tree replacement.',
       'Supported track subset: render_opacity, render_transform_translation, render_transform_scale, render_transform_angle, color_and_opacity.',
       'Prefer widget_path selectors for bindings and tracks. Accept widget_name only as a compatibility fallback when unique.',
       'Use replace_timeline as the canonical write path. patch_metadata is only for display labels, checkpoints, playback metadata, and other non-track updates.',
@@ -296,7 +296,7 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
       `Target widget class: ${widget_class_path}.`,
       `Class default property: ${class_default_property}.`,
       'Inspect the current Blueprint members and class defaults first.',
-      'Return the smallest set of modify_blueprint_members or modify_widget_blueprint.patch_class_defaults calls needed to complete the wiring.',
+      'Return the smallest set of modify_blueprint_members or patch_widget_class_defaults calls needed to complete the wiring.',
     ].join('\n'),
   },
   debug_widget_compile_errors: {

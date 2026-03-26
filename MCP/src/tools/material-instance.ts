@@ -70,7 +70,14 @@ export function registerMaterialInstanceTools({
     'modify_material_instance',
     {
       title: 'Modify MaterialInstance',
-      description: 'Modify a MaterialInstanceConstant by reparenting or applying parameter overrides.',
+      description: 'Modify a MaterialInstanceConstant by reparenting or applying parameter overrides.\n\n'
+        + 'Example:\n'
+        + '  {\n'
+        + '    "asset_path": "/Game/Materials/MI_Surface",\n'
+        + '    "scalarParameters": [{ "name": "Roughness", "value": 0.6 }],\n'
+        + '    "vectorParameters": [{ "name": "BaseColor", "value": { "r": 0.8, "g": 0.2, "b": 0.1, "a": 1.0 } }],\n'
+        + '    "textureParameters": [{ "name": "Albedo", "value": "/Game/Textures/T_Albedo" }]\n'
+        + '  }',
       inputSchema: {
         asset_path: z.string().describe(
           'UE content path to the MaterialInstanceConstant to modify.',

@@ -52,6 +52,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_blueprint').handler({
@@ -80,6 +81,62 @@ describe('registerExtractionTools', () => {
     });
   });
 
+  it('declares compact default as true on extract_blueprint', () => {
+    const registry = createToolRegistry();
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson: vi.fn(),
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+    const schema = registry.getTool('extract_blueprint').config.inputSchema as Record<string, z.ZodTypeAny>;
+    expect(schema.compact._def.defaultValue()).toBe(true);
+  });
+
+  it('returns raw blueprint output when compact is false', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      blueprint: {
+        functions: [{
+          graphGuid: 'graph-guid',
+          nodes: [{
+            nodeGuid: 'node-guid',
+            posX: 10,
+            posY: 20,
+            pins: [],
+          }],
+        }],
+      },
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    const result = await registry.getTool('extract_blueprint').handler({
+      asset_path: '/Game/Test/BP_Test',
+      scope: 'Full',
+      compact: false,
+    });
+
+    const parsed = parseDirectToolResult(result);
+    expect(parsed).toMatchObject({
+      blueprint: {
+        functions: [{
+          graphGuid: 'graph-guid',
+          nodes: [{ nodeGuid: 'node-guid', posX: 10, posY: 20 }],
+        }],
+      },
+    });
+  });
+
   it('compacts routed extract_asset payloads with the generic stripper', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
@@ -99,6 +156,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_asset').handler({
@@ -111,6 +169,55 @@ describe('registerExtractionTools', () => {
       AssetPath: '/Game/Data/DA_Test',
     });
     expect(parseDirectToolResult(result)).toEqual({});
+  });
+
+  it('declares compact default as true on extract_asset', () => {
+    const registry = createToolRegistry();
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson: vi.fn(),
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+    const schema = registry.getTool('extract_asset').config.inputSchema as Record<string, z.ZodTypeAny>;
+    expect(schema.compact._def.defaultValue()).toBe(true);
+  });
+
+  it('returns raw extract_asset output when compact is false', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      dataAsset: {
+        entryGuid: 'entry-guid',
+        editorData: {
+          posX: 12,
+          posY: 24,
+        },
+      },
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    const result = await registry.getTool('extract_asset').handler({
+      asset_type: 'data_asset',
+      asset_path: '/Game/Data/DA_Test',
+      compact: false,
+    });
+
+    expect(parseDirectToolResult(result)).toMatchObject({
+      dataAsset: {
+        entryGuid: 'entry-guid',
+        editorData: { posX: 12, posY: 24 },
+      },
+    });
   });
 
   it('truncates oversized data table responses', async () => {
@@ -127,6 +234,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_asset').handler({
@@ -150,6 +258,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('search_assets').handler({
@@ -175,6 +284,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_material').handler({
@@ -204,6 +314,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_material').handler({
@@ -216,7 +327,92 @@ describe('registerExtractionTools', () => {
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain('material not found');
   });
 
-  it('forwards extract_material_function arguments to the subsystem', async () => {
+  it('routes extract_material with asset_kind function to ExtractMaterialFunction', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      functionName: 'MF_Test',
+      expressions: [],
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    await registry.getTool('extract_material').handler({
+      asset_path: '/Game/Materials/MF_Test',
+      asset_kind: 'function',
+      verbose: true,
+      compact: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ExtractMaterialFunction', {
+      AssetPath: '/Game/Materials/MF_Test',
+      bVerbose: true,
+    });
+  });
+
+  it('routes extract_material with asset_kind layer to ExtractMaterialFunction', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      layerName: 'ML_Test',
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    await registry.getTool('extract_material').handler({
+      asset_path: '/Game/Materials/ML_Test',
+      asset_kind: 'layer',
+      verbose: false,
+      compact: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ExtractMaterialFunction', {
+      AssetPath: '/Game/Materials/ML_Test',
+      bVerbose: false,
+    });
+  });
+
+  it('routes extract_material with asset_kind layer_blend to ExtractMaterialFunction', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      blendName: 'MLB_Test',
+    }));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    await registry.getTool('extract_material').handler({
+      asset_path: '/Game/Materials/MLB_Test',
+      asset_kind: 'layer_blend',
+      verbose: false,
+      compact: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ExtractMaterialFunction', {
+      AssetPath: '/Game/Materials/MLB_Test',
+      bVerbose: false,
+    });
+  });
+
+  it('extract_material_function alias delegates to extract_material with asset_kind function', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
       functionName: 'MF_Blend',
@@ -229,6 +425,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_material_function').handler({
@@ -258,6 +455,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_material_function').handler({
@@ -289,6 +487,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_cascade').handler({
@@ -312,6 +511,20 @@ describe('registerExtractionTools', () => {
     });
   });
 
+  it('declares compact default as true on extract_cascade', () => {
+    const registry = createToolRegistry();
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson: vi.fn(),
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+    const schema = registry.getTool('extract_cascade').config.inputSchema as Record<string, z.ZodTypeAny>;
+    expect(schema.compact._def.defaultValue()).toBe(true);
+  });
+
   it('returns an error when extract_cascade fails', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => {
@@ -324,6 +537,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('extract_cascade').handler({
@@ -351,6 +565,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('list_assets').handler({
@@ -381,6 +596,7 @@ describe('registerExtractionTools', () => {
       scopeEnum,
       extractAssetTypeSchema,
       cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
     });
 
     const result = await registry.getTool('list_assets').handler({

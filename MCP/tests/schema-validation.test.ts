@@ -318,3 +318,91 @@ describe('Schema validation — tool-inputs', () => {
     });
   });
 });
+
+import {
+  CompositeStepResultSchema,
+  CompositeToolResultSchema,
+} from '../src/schemas/tool-results.js';
+
+describe('Schema validation — composite tool results', () => {
+  describe('CompositeStepResultSchema', () => {
+    it('accepts a minimal valid step', () => {
+      const result = CompositeStepResultSchema.safeParse({ step: 'search', status: 'success' });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a step with all optional fields', () => {
+      const result = CompositeStepResultSchema.safeParse({
+        step: 'extract',
+        status: 'failure',
+        message: 'Asset not found',
+        data: { path: '/Game/BP' },
+        diagnostics: [{ severity: 'error', code: 'NOT_FOUND', message: 'Missing', path: '/Game/BP' }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects step with invalid status', () => {
+      const result = CompositeStepResultSchema.safeParse({ step: 'search', status: 'pending' });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects step without step name', () => {
+      const result = CompositeStepResultSchema.safeParse({ status: 'success' });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('CompositeToolResultSchema', () => {
+    it('accepts a valid composite success result', () => {
+      const result = CompositeToolResultSchema.safeParse({
+        success: true,
+        operation: 'find_and_extract',
+        steps: [
+          { step: 'search', status: 'success' },
+          { step: 'extract', status: 'success' },
+        ],
+        execution: { mode: 'immediate', task_support: 'forbidden' },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a composite failure with partial_state', () => {
+      const result = CompositeToolResultSchema.safeParse({
+        success: false,
+        operation: 'find_and_extract',
+        steps: [
+          { step: 'search', status: 'success' },
+          { step: 'extract', status: 'failure', message: 'Not found' },
+        ],
+        partial_state: {
+          completed_steps: ['search'],
+          failed_step: 'extract',
+          editor_state: 'No mutations performed',
+        },
+        execution: { mode: 'immediate', task_support: 'forbidden' },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects result without steps array', () => {
+      const result = CompositeToolResultSchema.safeParse({
+        success: true,
+        operation: 'find_and_extract',
+        execution: { mode: 'immediate', task_support: 'forbidden' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects partial_state missing required fields', () => {
+      const result = CompositeToolResultSchema.safeParse({
+        success: false,
+        operation: 'op',
+        steps: [{ step: 'a', status: 'failure' }],
+        partial_state: { completed_steps: ['a'] },
+        execution: { mode: 'immediate', task_support: 'forbidden' },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+});

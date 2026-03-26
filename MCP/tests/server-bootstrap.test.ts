@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { installNormalizedToolRegistration } from '../src/helpers/tool-registration.js';
 import type { ToolHelpEntry } from '../src/helpers/tool-help.js';
@@ -10,6 +10,8 @@ import {
   serverInstructions,
   taskAwareTools,
 } from '../src/server-config.js';
+import { createBlueprintExtractorServer } from '../src/server-factory.js';
+import { CORE_TOOLS } from '../src/tool-surface-manager.js';
 import { connectInMemoryServer, getTextContent } from './test-helpers.js';
 
 function parseToolResult(result: {
@@ -23,6 +25,7 @@ function parseToolResult(result: {
 }
 
 function createWrappedServer(toolHelpRegistry: Map<string, ToolHelpEntry>) {
+  const registeredToolMap = new Map<string, RegisteredTool>();
   const server = new McpServer({
     name: 'bootstrap-test-server',
     version: '1.0.0',
@@ -39,12 +42,13 @@ function createWrappedServer(toolHelpRegistry: Map<string, ToolHelpEntry>) {
   installNormalizedToolRegistration({
     server,
     toolHelpRegistry,
+    registeredToolMap,
     defaultOutputSchema,
     normalizeToolError,
     normalizeToolSuccess,
   });
 
-  return { server, defaultOutputSchema };
+  return { server, defaultOutputSchema, registeredToolMap };
 }
 
 describe('server bootstrap helpers', () => {
@@ -303,5 +307,56 @@ describe('classifyRecoverableToolFailure engine_root_missing', () => {
       code: 'engine_root_missing',
       recoverable: false,
     });
+  });
+});
+
+describe('ToolSurfaceManager integration with server factory', () => {
+  it('createBlueprintExtractorServer returns ToolSurfaceManager alongside server', () => {
+    const result = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+
+    expect(result).toHaveProperty('server');
+    expect(result).toHaveProperty('toolSurfaceManager');
+    expect(result.server).toBeInstanceOf(McpServer);
+  });
+
+  it('registers activate_workflow_scope tool', async () => {
+    const { server } = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+    const harness = await connectInMemoryServer(server);
+
+    try {
+      const tools = await harness.client.listTools();
+      const scopeTool = tools.tools.find(t => t.name === 'activate_workflow_scope');
+      expect(scopeTool).toBeDefined();
+      expect(scopeTool?.description).toContain('workflow-specific scope');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('default tool surface includes all CORE_TOOLS after scoped mode activation', async () => {
+    const { server, toolSurfaceManager } = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+
+    toolSurfaceManager.enableScopedMode();
+    const activeTools = toolSurfaceManager.getActiveTools();
+
+    for (const coreTool of CORE_TOOLS) {
+      if (activeTools.has(coreTool)) {
+        expect(toolSurfaceManager.isActive(coreTool)).toBe(true);
+      }
+    }
+
+    expect(activeTools.size).toBeLessThanOrEqual(CORE_TOOLS.size + 5);
   });
 });
