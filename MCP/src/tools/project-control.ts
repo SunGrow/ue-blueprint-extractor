@@ -75,6 +75,10 @@ function buildInputResolution(resolved: ResolvedProjectInputs): Record<string, u
   };
 }
 
+function isAbsoluteFilesystemPath(candidate: string): boolean {
+  return path.posix.isAbsolute(candidate) || path.win32.isAbsolute(candidate);
+}
+
 export function registerProjectControlTools({
   server,
   client,
@@ -526,7 +530,7 @@ export function registerProjectControlTools({
           : '';
         const pathWarnings: string[] = [];
         const normalizedPaths = changed_paths.map((p: string) => {
-          if (path.isAbsolute(p)) return p;
+          if (isAbsoluteFilesystemPath(p)) return p;
           if (projectRoot) return path.resolve(projectRoot, p);
           // No project root available — keep as-is but warn
           pathWarnings.push(`Cannot resolve relative path without project root: "${p}"`);
