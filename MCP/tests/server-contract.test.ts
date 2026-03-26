@@ -257,7 +257,7 @@ describe('createBlueprintExtractorServer', () => {
     const getToolHelp = tools.tools.find((tool) => tool.name === 'get_tool_help');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(89);
+    expect(tools.tools).toHaveLength(90);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -683,7 +683,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(parseToolResult(result)).toMatchObject({
       success: true,
       operation: 'search_assets',
-      data: [
+      results: [
         {
           method: 'SearchAssets',
           params: {
@@ -693,6 +693,11 @@ describe('createBlueprintExtractorServer', () => {
           },
         },
       ],
+      page: 1,
+      per_page: 50,
+      total_count: 1,
+      total_pages: 1,
+      has_more: false,
     });
     expect(fakeClient.calls).toEqual([
       {
@@ -3512,7 +3517,7 @@ describe('createBlueprintExtractorServer', () => {
     ]));
   });
 
-  it('returns structuredContent for oversized extract_blueprint responses without truncating', async () => {
+  it('returns structuredContent for oversized extract_blueprint responses without truncating when verbose', async () => {
     const fakeClient = new FakeUEClient(() => JSON.stringify({
       blueprint: {
         summary: 'x'.repeat(220_000),
@@ -3525,13 +3530,37 @@ describe('createBlueprintExtractorServer', () => {
       name: 'extract_blueprint',
       arguments: {
         asset_path: '/Game/Test/BP_Large',
+        verbose: true,
       },
     });
 
-    // Large responses now preserve structuredContent (no early return that bypasses jsonToolSuccess)
+    // With verbose: true, budget enforcement is skipped — full data is returned
     const parsed = parseToolResult(result);
     expect(parsed.blueprint).toBeDefined();
     expect((parsed.blueprint as Record<string, unknown>).summary).toBeDefined();
+  });
+
+  it('returns truncated response for oversized extract_blueprint when not verbose', async () => {
+    const fakeClient = new FakeUEClient(() => JSON.stringify({
+      functions: Array(500).fill({ name: 'fn', graph: 'x'.repeat(1000) }),
+      variables: [{ name: 'Health', type: 'float' }],
+    }));
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'extract_blueprint',
+      arguments: {
+        asset_path: '/Game/Test/BP_Large',
+      },
+    });
+
+    const parsed = parseToolResult(result);
+    expect(parsed._truncated).toBe(true);
+    expect(parsed._omitted_sections).toBeDefined();
+    expect(Array.isArray(parsed._recommendations)).toBe(true);
+    // Variables are lightweight and preserved even in summarized output
+    expect(parsed.variables).toBeDefined();
   });
 
   it('returns tool errors with structured text when the subsystem returns an error JSON payload', async () => {

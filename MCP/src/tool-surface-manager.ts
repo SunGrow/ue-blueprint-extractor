@@ -43,6 +43,7 @@ export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'extract_material',
   'extract_cascade',
   'list_assets',
+  'check_asset_exists',
   'save_assets',
   'get_tool_help',
   'activate_workflow_scope',

@@ -153,8 +153,8 @@ describe('schema complexity budget', () => {
     expect(count).toBe(0);
   });
 
-  it('CORE_TOOLS has at most 13 entries', () => {
-    expect(CORE_TOOLS.size).toBeLessThanOrEqual(13);
+  it('CORE_TOOLS has at most 14 entries', () => {
+    expect(CORE_TOOLS.size).toBeLessThanOrEqual(14);
   });
 
   it('no leaf scope exceeds 15 tools', () => {

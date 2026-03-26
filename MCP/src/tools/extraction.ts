@@ -8,6 +8,8 @@ import {
   compactStateTree,
 } from '../compactor.js';
 import { filterPhantomAssets } from '../helpers/phantom-filter.js';
+import { isOverBudget } from '../helpers/token-budget.js';
+import { summarizeResponse } from '../helpers/response-summarizer.js';
 import {
   jsonToolError,
   jsonToolSuccess,
@@ -80,10 +82,14 @@ export function registerExtractionTools({
         include_class_defaults: z.boolean().default(false).describe(
           'Include generated-class default values that differ from the parent class.',
         ),
+        verbose: z.boolean().default(false).describe(
+          'When true, skip budget enforcement and return full data regardless of size.',
+        ),
       },
       annotations: readOnlyAnnotations('Extract Blueprint'),
     },
-    async ({ asset_path, scope, graph_filter, compact, include_class_defaults }) => {
+    async ({ asset_path, scope, graph_filter, compact, include_class_defaults, verbose: rawVerbose }) => {
+      const verbose = rawVerbose ?? false;
       try {
         let parsed = await callSubsystemJson('ExtractBlueprint', {
           AssetPath: asset_path,
@@ -102,6 +108,21 @@ export function registerExtractionTools({
             text: `Warning: Response is ${(text.length / 1024).toFixed(0)}KB (${text.length} chars). Consider using a narrower scope (ClassLevel, Variables, or FunctionsShallow) first, then Full with graph_filter for specific functions.`,
           });
         }
+
+        // Budget enforcement (Task 4.5 + 4.6)
+        if (!verbose) {
+          const budget = isOverBudget(parsed);
+          if (budget.over) {
+            const summary = summarizeResponse(parsed, 'blueprint');
+            return jsonToolSuccess({
+              ...summary.data,
+              _truncated: true,
+              _omitted_sections: summary.omittedSections,
+              _recommendations: ['Use extract_blueprint with verbose: true for full data', 'Use a narrower scope (ClassLevel, Variables, FunctionsShallow) first'],
+            }, { extraContent });
+          }
+        }
+
         return jsonToolSuccess(parsed, { extraContent });
       } catch (error) {
         return jsonToolError(error);
@@ -297,10 +318,22 @@ export function registerExtractionTools({
         max_results: z.number().int().min(1).max(200).default(50).describe(
           'Maximum number of results to return. Lower values keep the response small and the query fast.',
         ),
+        page: z.number().int().min(1).default(1).describe(
+          'Page number for paginated results.',
+        ),
+        per_page: z.number().int().min(1).max(200).default(50).describe(
+          'Number of results per page.',
+        ),
+        sort_by: z.enum(['path', 'name', 'class']).default('path').describe(
+          'Sort results by the specified field.',
+        ),
       },
       annotations: readOnlyAnnotations('Search Assets'),
     },
-    async ({ query, class_filter, max_results }) => {
+    async ({ query, class_filter, max_results, page: rawPage, per_page: rawPerPage, sort_by: rawSortBy }) => {
+      const page = rawPage ?? 1;
+      const per_page = rawPerPage ?? 50;
+      const sort_by = rawSortBy ?? 'path';
       try {
         const parsed = await callSubsystemJson('SearchAssets', {
           Query: query,
@@ -309,7 +342,42 @@ export function registerExtractionTools({
         });
         const rawResults = Array.isArray(parsed.results) ? parsed.results as Record<string, unknown>[] : [];
         const { filtered, removedCount } = await filterPhantomAssets(rawResults, callSubsystemJson);
-        return jsonToolSuccess(removedCount > 0 ? { results: filtered, _filtered_count: removedCount } : filtered);
+
+        // Sort results
+        const sorted = [...filtered].sort((a, b) => {
+          let aVal: string, bVal: string;
+          switch (sort_by) {
+            case 'name':
+              aVal = String(a.name ?? a.Name ?? a.assetName ?? '');
+              bVal = String(b.name ?? b.Name ?? b.assetName ?? '');
+              break;
+            case 'class':
+              aVal = String(a.className ?? a.class_name ?? a.assetClass ?? '');
+              bVal = String(b.className ?? b.class_name ?? b.assetClass ?? '');
+              break;
+            default: // 'path'
+              aVal = String(a.assetPath ?? a.asset_path ?? a.PackagePath ?? '');
+              bVal = String(b.assetPath ?? b.asset_path ?? b.PackagePath ?? '');
+              break;
+          }
+          return aVal.localeCompare(bVal);
+        });
+
+        // Paginate
+        const totalCount = sorted.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / per_page));
+        const startIndex = (page - 1) * per_page;
+        const pageResults = sorted.slice(startIndex, startIndex + per_page);
+
+        return jsonToolSuccess({
+          results: pageResults,
+          page,
+          per_page,
+          total_count: totalCount,
+          total_pages: totalPages,
+          has_more: page < totalPages,
+          ...(removedCount > 0 ? { _filtered_count: removedCount } : {}),
+        });
       } catch (error) {
         return jsonToolError(error);
       }
@@ -331,19 +399,120 @@ export function registerExtractionTools({
         class_filter: z.string().default('').describe(
           'Filter by asset class (e.g. "Blueprint", "StateTree"). Empty string returns all asset types.',
         ),
+        page: z.number().int().min(1).default(1).describe(
+          'Page number for paginated results.',
+        ),
+        per_page: z.number().int().min(1).max(200).default(50).describe(
+          'Number of results per page.',
+        ),
+        sort_by: z.enum(['path', 'name', 'class']).default('path').describe(
+          'Sort results by the specified field.',
+        ),
       },
       annotations: readOnlyAnnotations('List Assets'),
     },
-    async ({ package_path, recursive, class_filter }) => {
+    async ({ package_path, recursive, class_filter, page: rawPage, per_page: rawPerPage, sort_by: rawSortBy }) => {
+      const page = rawPage ?? 1;
+      const per_page = rawPerPage ?? 50;
+      const sort_by = rawSortBy ?? 'path';
       try {
         const parsed = await callSubsystemJson('ListAssets', {
           PackagePath: package_path,
           bRecursive: recursive,
           ClassFilter: class_filter,
         });
-        return jsonToolSuccess(parsed);
+
+        const rawAssets = Array.isArray(parsed.assets) ? parsed.assets as Record<string, unknown>[] : [];
+
+        // Sort results
+        const sorted = [...rawAssets].sort((a, b) => {
+          let aVal: string, bVal: string;
+          switch (sort_by) {
+            case 'name':
+              aVal = String(a.name ?? a.Name ?? a.assetName ?? '');
+              bVal = String(b.name ?? b.Name ?? b.assetName ?? '');
+              break;
+            case 'class':
+              aVal = String(a.className ?? a.class_name ?? a.assetClass ?? '');
+              bVal = String(b.className ?? b.class_name ?? b.assetClass ?? '');
+              break;
+            default: // 'path'
+              aVal = String(a.assetPath ?? a.asset_path ?? a.PackagePath ?? '');
+              bVal = String(b.assetPath ?? b.asset_path ?? b.PackagePath ?? '');
+              break;
+          }
+          return aVal.localeCompare(bVal);
+        });
+
+        // Paginate
+        const totalCount = sorted.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / per_page));
+        const startIndex = (page - 1) * per_page;
+        const pageAssets = sorted.slice(startIndex, startIndex + per_page);
+
+        return jsonToolSuccess({
+          assets: pageAssets,
+          page,
+          per_page,
+          total_count: totalCount,
+          total_pages: totalPages,
+          has_more: page < totalPages,
+        });
       } catch (error) {
         return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'check_asset_exists',
+    {
+      title: 'Check Asset Exists',
+      description: 'Check whether a UE asset exists at the given path. Returns existence status, asset class, and package path.',
+      inputSchema: {
+        asset_path: z.string().describe(
+          'UE content path to check (e.g. /Game/Blueprints/BP_Player).',
+        ),
+      },
+      annotations: readOnlyAnnotations('Check Asset Exists'),
+    },
+    async ({ asset_path }) => {
+      try {
+        const lastSlash = asset_path.lastIndexOf('/');
+        const parentDir = lastSlash > 0 ? asset_path.slice(0, lastSlash) : '/Game';
+
+        const parsed = await callSubsystemJson('ListAssets', {
+          PackagePath: parentDir,
+          bRecursive: false,
+          ClassFilter: '',
+        });
+
+        const assets = Array.isArray(parsed.assets) ? parsed.assets as Record<string, unknown>[] : [];
+        const match = assets.find((a) => {
+          const path = a.assetPath ?? a.asset_path ?? a.PackagePath ?? a.package_path ?? '';
+          return path === asset_path;
+        });
+
+        if (match) {
+          return jsonToolSuccess({
+            exists: true,
+            asset_class: String(match.className ?? match.class_name ?? match.assetClass ?? null),
+            package_path: String(match.assetPath ?? match.asset_path ?? match.PackagePath ?? asset_path),
+          });
+        }
+
+        return jsonToolSuccess({
+          exists: false,
+          asset_class: null,
+          package_path: asset_path,
+        });
+      } catch {
+        // If listing fails (e.g., invalid path), the asset does not exist
+        return jsonToolSuccess({
+          exists: false,
+          asset_class: null,
+          package_path: asset_path,
+        });
       }
     },
   );

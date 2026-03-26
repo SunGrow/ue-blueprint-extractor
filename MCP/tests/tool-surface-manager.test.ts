@@ -31,7 +31,7 @@ function createMockRegisteredToolMap(toolNames: string[]): Map<string, Registere
 }
 
 const ALL_TEST_TOOLS = [
-  // core tools
+  // core tools (includes check_asset_exists)
   ...CORE_TOOLS,
   // widget authoring structure
   'create_widget_blueprint', 'build_widget_tree', 'replace_widget_tree',
