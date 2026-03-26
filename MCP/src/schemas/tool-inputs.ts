@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { toolResultSchema } from './tool-results.js';
 
 // Recursive schema for widget tree nodes (used by build_widget_tree)
 export const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
@@ -346,9 +347,7 @@ export const ImportJobItemSchema = z.object({
   diagnostics: z.array(ImportDiagnosticSchema),
 });
 
-export const ImportJobSchema = z.object({
-  success: z.boolean(),
-  operation: z.string(),
+export const ImportJobSchema = toolResultSchema.extend({
   status: z.string(),
   terminal: z.boolean(),
   validateOnly: z.boolean(),
@@ -365,9 +364,7 @@ export const ImportJobSchema = z.object({
   diagnostics: z.array(ImportDiagnosticSchema),
 });
 
-export const ImportJobListSchema = z.object({
-  success: z.boolean(),
-  operation: z.string(),
+export const ImportJobListSchema = toolResultSchema.extend({
   includeCompleted: z.boolean(),
   jobCount: z.number().int().min(0),
   jobs: z.array(ImportJobSchema),

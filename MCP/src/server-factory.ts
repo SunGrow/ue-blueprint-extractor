@@ -64,10 +64,11 @@ export function createBlueprintExtractorServer(
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '6.0.0',
+    version: '6.0.1',
   }, {
     instructions: serverInstructions,
   });
+  const defaultOutputSchema = toolResultSchema.catchall(z.unknown());
 
   const {
     normalizeToolError,
@@ -92,7 +93,7 @@ export function createBlueprintExtractorServer(
     server,
     toolHelpRegistry,
     registeredToolMap,
-    defaultOutputSchema: toolResultSchema,
+    defaultOutputSchema,
     normalizeToolError,
     normalizeToolSuccess,
     executor,

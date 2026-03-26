@@ -7,6 +7,7 @@ export const toolResultSchema = z.object({
   message: z.string().optional(),
   recoverable: z.boolean().optional(),
   next_steps: z.array(z.string()).optional(),
+  _hints: z.array(z.string()).optional(),
   diagnostics: z.array(z.object({
     severity: z.string().optional(),
     code: z.string().optional(),
@@ -74,6 +75,33 @@ export const CascadeResultSchema = toolResultSchema.extend({
   total_count: z.number().int().min(0),
   output_directory: z.string(),
   manifest: z.array(cascadeManifestEntrySchema),
+});
+
+export const assetSearchResultItemSchema = z.record(z.string(), z.unknown());
+
+export const SearchAssetsResultSchema = toolResultSchema.extend({
+  results: z.array(assetSearchResultItemSchema),
+  page: z.number().int().min(1),
+  per_page: z.number().int().min(1),
+  total_count: z.number().int().min(0),
+  total_pages: z.number().int().min(1),
+  has_more: z.boolean(),
+  _filtered_count: z.number().int().min(0).optional(),
+});
+
+export const ListAssetsResultSchema = toolResultSchema.extend({
+  assets: z.array(assetSearchResultItemSchema),
+  page: z.number().int().min(1),
+  per_page: z.number().int().min(1),
+  total_count: z.number().int().min(0),
+  total_pages: z.number().int().min(1),
+  has_more: z.boolean(),
+});
+
+export const CheckAssetExistsResultSchema = toolResultSchema.extend({
+  exists: z.boolean(),
+  asset_class: z.string().nullable(),
+  package_path: z.string(),
 });
 
 export const verificationSurfaceSchema = z.enum([

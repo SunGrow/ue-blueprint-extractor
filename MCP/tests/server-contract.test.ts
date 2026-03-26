@@ -234,6 +234,9 @@ describe('createBlueprintExtractorServer', () => {
     const materialGraphOperation = tools.tools.find((tool) => tool.name === 'material_graph_operation');
     const createBlueprint = tools.tools.find((tool) => tool.name === 'create_blueprint');
     const extractCascade = tools.tools.find((tool) => tool.name === 'extract_cascade');
+    const searchAssets = tools.tools.find((tool) => tool.name === 'search_assets');
+    const listAssets = tools.tools.find((tool) => tool.name === 'list_assets');
+    const checkAssetExists = tools.tools.find((tool) => tool.name === 'check_asset_exists');
     const importAssets = tools.tools.find((tool) => tool.name === 'import_assets');
     const getImportJob = tools.tools.find((tool) => tool.name === 'get_import_job');
     const listImportJobs = tools.tools.find((tool) => tool.name === 'list_import_jobs');
@@ -335,6 +338,12 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'bind_material_property')).toBe(false);
     expect(tools.tools.every((tool) => tool.outputSchema)).toBe(true);
     expectSchemaProperty(extractAsset, 'success');
+    expectSchemaProperty(searchAssets, 'results');
+    expectSchemaProperty(searchAssets, 'total_count');
+    expectSchemaProperty(listAssets, 'assets');
+    expectSchemaProperty(listAssets, 'total_pages');
+    expectSchemaProperty(checkAssetExists, 'exists');
+    expectSchemaProperty(checkAssetExists, 'package_path');
     expectSchemaProperty(importAssets, 'jobId');
     expectSchemaProperty(importAssets, 'terminal');
     expectSchemaProperty(listImportJobs, 'jobs');

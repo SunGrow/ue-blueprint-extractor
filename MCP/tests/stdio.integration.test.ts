@@ -448,7 +448,7 @@ describe('stdio integration', () => {
     expect(JSON.parse(getTextContent(result))).toMatchObject({
       success: true,
       operation: 'search_assets',
-      data: [
+      results: [
         {
           path: '/Game/Test/BP_Player',
           name: 'BP_Player',
@@ -548,17 +548,17 @@ describe('stdio integration', () => {
       functionName: 'ModifyMaterial',
       parameters: {
         AssetPath: '/Game/Test/M_Test',
-        PayloadJson: JSON.stringify({
-          operations: [
-            {
-              operation: 'add_expression',
-              temp_id: 'roughness',
-              expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
-            },
-          ],
-        }),
         bValidateOnly: false,
       },
+    });
+    expect(JSON.parse(String(remoteServer.requests[3]?.parameters?.PayloadJson))).toMatchObject({
+      operations: [
+        {
+          operation: 'add_expression',
+          temp_id: 'roughness',
+          expression_class: '/Script/Engine.MaterialExpressionScalarParameter',
+        },
+      ],
     });
     if (process.platform === 'win32') {
       expect(remoteServer.requests[4]).toMatchObject({

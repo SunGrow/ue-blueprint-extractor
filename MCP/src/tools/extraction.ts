@@ -11,6 +11,11 @@ import { filterPhantomAssets } from '../helpers/phantom-filter.js';
 import { isOverBudget } from '../helpers/token-budget.js';
 import { summarizeResponse } from '../helpers/response-summarizer.js';
 import {
+  CheckAssetExistsResultSchema,
+  ListAssetsResultSchema,
+  SearchAssetsResultSchema,
+} from '../schemas/tool-results.js';
+import {
   jsonToolError,
   jsonToolSuccess,
 } from '../helpers/subsystem.js';
@@ -328,6 +333,7 @@ export function registerExtractionTools({
           'Sort results by the specified field.',
         ),
       },
+      outputSchema: SearchAssetsResultSchema,
       annotations: readOnlyAnnotations('Search Assets'),
     },
     async ({ query, class_filter, max_results, page: rawPage, per_page: rawPerPage, sort_by: rawSortBy }) => {
@@ -409,6 +415,7 @@ export function registerExtractionTools({
           'Sort results by the specified field.',
         ),
       },
+      outputSchema: ListAssetsResultSchema,
       annotations: readOnlyAnnotations('List Assets'),
     },
     async ({ package_path, recursive, class_filter, page: rawPage, per_page: rawPerPage, sort_by: rawSortBy }) => {
@@ -474,6 +481,7 @@ export function registerExtractionTools({
           'UE content path to check (e.g. /Game/Blueprints/BP_Player).',
         ),
       },
+      outputSchema: CheckAssetExistsResultSchema,
       annotations: readOnlyAnnotations('Check Asset Exists'),
     },
     async ({ asset_path }) => {

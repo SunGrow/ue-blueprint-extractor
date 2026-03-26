@@ -265,51 +265,61 @@ export function normalizeVerificationArtifactReference(payload: unknown): Record
 export function normalizeVerificationComparison(payload: unknown): Record<string, unknown> {
   const basePayload: Record<string, unknown> = isPlainObject(payload) ? payload : {};
   const nested = isPlainObject(basePayload.comparison) ? basePayload.comparison : {};
-  const result: Record<string, unknown> = { ...nested };
+  const result: Record<string, unknown> = {};
 
-  const assignString = (key: string) => {
-    const value = typeof nested[key] === 'string'
-      ? nested[key]
-      : typeof basePayload[key] === 'string'
-        ? basePayload[key]
+  const assignString = (targetKey: string, sourceKeys: string[]) => {
+    const value = sourceKeys.find((key) => typeof nested[key] === 'string' && nested[key].length > 0)
+      ? nested[sourceKeys.find((key) => typeof nested[key] === 'string' && nested[key].length > 0)!]
+      : sourceKeys.find((key) => typeof basePayload[key] === 'string' && basePayload[key].length > 0)
+        ? basePayload[sourceKeys.find((key) => typeof basePayload[key] === 'string' && basePayload[key].length > 0)!]
         : undefined;
     if (typeof value === 'string' && value.length > 0) {
-      result[key] = value;
+      result[targetKey] = value;
     }
   };
 
-  const assignNumber = (key: string) => {
-    const value = typeof nested[key] === 'number'
-      ? nested[key]
-      : typeof basePayload[key] === 'number'
-        ? basePayload[key]
+  const assignNumber = (targetKey: string, sourceKeys: string[]) => {
+    const value = sourceKeys.find((key) => typeof nested[key] === 'number' && Number.isFinite(nested[key]))
+      ? nested[sourceKeys.find((key) => typeof nested[key] === 'number' && Number.isFinite(nested[key]))!]
+      : sourceKeys.find((key) => typeof basePayload[key] === 'number' && Number.isFinite(basePayload[key]))
+        ? basePayload[sourceKeys.find((key) => typeof basePayload[key] === 'number' && Number.isFinite(basePayload[key]))!]
         : undefined;
     if (typeof value === 'number' && Number.isFinite(value)) {
-      result[key] = value;
+      result[targetKey] = value;
     }
   };
 
-  const assignBoolean = (key: string) => {
-    const value = typeof nested[key] === 'boolean'
-      ? nested[key]
-      : typeof basePayload[key] === 'boolean'
-        ? basePayload[key]
+  const assignBoolean = (targetKey: string, sourceKeys: string[]) => {
+    const value = sourceKeys.find((key) => typeof nested[key] === 'boolean')
+      ? nested[sourceKeys.find((key) => typeof nested[key] === 'boolean')!]
+      : sourceKeys.find((key) => typeof basePayload[key] === 'boolean')
+        ? basePayload[sourceKeys.find((key) => typeof basePayload[key] === 'boolean')!]
         : undefined;
     if (typeof value === 'boolean') {
-      result[key] = value;
+      result[targetKey] = value;
     }
   };
 
-  assignString('capturePath');
-  assignString('referencePath');
-  assignString('diffCaptureId');
-  assignString('diffArtifactPath');
-  assignNumber('tolerance');
-  assignBoolean('pass');
-  assignNumber('rmse');
-  assignNumber('maxPixelDelta');
-  assignNumber('mismatchPixelCount');
-  assignNumber('mismatchPercentage');
+  assignString('capturePath', ['capturePath', 'capture']);
+  assignString('referencePath', ['referencePath', 'reference']);
+  assignString('diffCaptureId', ['diffCaptureId']);
+  assignString('diffArtifactPath', ['diffArtifactPath']);
+  assignNumber('tolerance', ['tolerance']);
+  assignBoolean('pass', ['pass']);
+  assignNumber('rmse', ['rmse', 'normalizedRmse']);
+  assignNumber('maxPixelDelta', ['maxPixelDelta']);
+  assignNumber('mismatchPixelCount', ['mismatchPixelCount', 'mismatchPixels']);
+  assignNumber('mismatchPercentage', ['mismatchPercentage']);
+
+  if (
+    typeof result.mismatchPercentage !== 'number'
+    && typeof result.mismatchPixelCount === 'number'
+    && typeof nested.pixelCount === 'number'
+    && Number.isFinite(nested.pixelCount)
+    && nested.pixelCount > 0
+  ) {
+    result.mismatchPercentage = (result.mismatchPixelCount / nested.pixelCount) * 100;
+  }
 
   return result;
 }

@@ -5,6 +5,16 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.1] - 2026-03-26
+
+### Fixed
+
+- Restored stdio contract validation for `search_assets`, `list_assets`, and `check_asset_exists` by publishing explicit output schemas for the asset-discovery results.
+- Made the default MCP output schema accept tool-specific payload fields while preserving the shared result envelope, preventing stdio-only validation failures on generic tool outputs.
+- Updated import-job result schemas to inherit the shared execution and hint envelope returned by the normalizer.
+- Normalized verification comparison aliases such as `normalizedRmse`, `mismatchPixels`, `capture`, and `reference` onto the public contract fields so motion-bundle comparisons validate cleanly.
+- Hardened stdio regression coverage to assert the current `search_assets.results` payload and compare `ModifyMaterial` payload JSON structurally instead of by serializer key order.
+
 ## [4.0.0] - 2026-03-26
 
 ### Breaking

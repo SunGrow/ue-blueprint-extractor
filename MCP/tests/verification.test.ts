@@ -76,6 +76,30 @@ describe('verification helpers', () => {
     });
   });
 
+  it('maps raw comparison aliases onto the public contract fields', () => {
+    const comparison = normalizeVerificationComparison({
+      capture: 'actual.png',
+      reference: 'expected.png',
+      comparison: {
+        pass: true,
+        tolerance: 0.05,
+        normalizedRmse: 0.001,
+        mismatchPixels: 32,
+        pixelCount: 6400,
+      },
+    });
+
+    expect(comparison).toEqual({
+      pass: true,
+      tolerance: 0.05,
+      capturePath: 'actual.png',
+      referencePath: 'expected.png',
+      rmse: 0.001,
+      mismatchPixelCount: 32,
+      mismatchPercentage: 0.5,
+    });
+  });
+
   it('normalizes automation run artifacts into verification artifacts', () => {
     const run = normalizeAutomationRunResult({
       runId: 'run-123',
