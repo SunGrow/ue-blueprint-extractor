@@ -31,6 +31,7 @@ import {
   classifyRecoverableToolFailure,
   serverInstructions,
   taskAwareTools,
+  TOOL_MODE_ANNOTATIONS,
 } from './server-config.js';
 import { toolResultSchema } from './schemas/tool-results.js';
 import {
@@ -39,12 +40,16 @@ import {
   CORE_TOOLS,
   type WorkflowScopeId,
 } from './tool-surface-manager.js';
+import { EditorAdapter } from './execution/adapters/editor-adapter.js';
+import { ExecutionModeDetector } from './execution/execution-mode-detector.js';
+import { AdaptiveExecutor } from './execution/adaptive-executor.js';
 
 export type UEClientLike = Pick<UEClient, 'callSubsystem'> & Partial<Pick<UEClient, 'checkConnection'>>;
 
 export type BlueprintExtractorServerResult = {
   server: McpServer;
   toolSurfaceManager: ToolSurfaceManager;
+  executor: AdaptiveExecutor;
 };
 
 export function createBlueprintExtractorServer(
@@ -84,6 +89,16 @@ export function createBlueprintExtractorServer(
   const callSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
     callSubsystemJsonWithClient(client, method, params, options)
   );
+
+  // Dual-mode execution: create adapter + detector + executor
+  const editorAdapter = new EditorAdapter(client as UEClient);
+  const modeDetector = new ExecutionModeDetector(editorAdapter, null);
+  const executor = new AdaptiveExecutor(editorAdapter, null, modeDetector);
+
+  // Apply tool mode annotations
+  for (const [toolName, mode] of TOOL_MODE_ANNOTATIONS) {
+    executor.setToolMode(toolName, mode);
+  }
 
   function rememberExternalBuild(result: CompileProjectCodeResult): void {
     lastExternalBuildContext = buildExternalBuildContext(result);
@@ -195,5 +210,5 @@ export function createBlueprintExtractorServer(
     }
   };
 
-  return { server, toolSurfaceManager };
+  return { server, toolSurfaceManager, executor };
 }

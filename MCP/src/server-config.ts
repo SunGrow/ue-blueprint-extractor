@@ -53,7 +53,180 @@ export const taskAwareTools = new Set([
   'list_automation_test_runs',
 ]);
 
+/**
+ * Tool mode annotations for dual-mode (editor / commandlet) execution.
+ *
+ * 'both'        — Tool works in editor and commandlet modes (read-only extraction + simple writes).
+ * 'editor_only' — Tool requires the live editor (complex writes, interactive, verification).
+ * 'read_only'   — Tool is purely read-only (subset of 'both', used by executor for capability checks).
+ */
+import type { ToolModeAnnotation } from './execution/adaptive-executor.js';
+
+export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = new Map<string, ToolModeAnnotation>([
+  // ── Read-only extraction & search (both) ──
+  ['search_assets', 'both'],
+  ['list_assets', 'both'],
+  ['check_asset_exists', 'both'],
+  ['extract_blueprint', 'both'],
+  ['extract_asset', 'both'],
+  ['extract_material', 'both'],
+  ['extract_cascade', 'both'],
+  ['extract_widget_blueprint', 'both'],
+  ['extract_widget_animation', 'both'],
+  ['extract_commonui_button_style', 'both'],
+  ['find_and_extract', 'both'],
+  ['get_tool_help', 'both'],
+  ['get_project_automation_context', 'both'],
+  ['get_import_job', 'both'],
+  ['list_import_jobs', 'both'],
+  ['get_automation_test_run', 'both'],
+  ['list_automation_test_runs', 'both'],
+  ['list_captures', 'both'],
+
+  // ── Simple writes that work in both modes ──
+  ['save_assets', 'both'],
+  ['create_blueprint', 'both'],
+  ['create_material', 'both'],
+  ['create_data_asset', 'both'],
+  ['create_data_table', 'both'],
+
+  // ── Widget mutation tools (editor_only) ──
+  ['create_widget_blueprint', 'editor_only'],
+  ['build_widget_tree', 'editor_only'],
+  ['replace_widget_tree', 'editor_only'],
+  ['replace_widget_class', 'editor_only'],
+  ['insert_widget_child', 'editor_only'],
+  ['remove_widget', 'editor_only'],
+  ['move_widget', 'editor_only'],
+  ['wrap_widget', 'editor_only'],
+  ['patch_widget', 'editor_only'],
+  ['patch_widget_class_defaults', 'editor_only'],
+  ['modify_widget', 'editor_only'],
+  ['modify_widget_blueprint', 'editor_only'],
+  ['batch_widget_operations', 'editor_only'],
+  ['compile_widget', 'editor_only'],
+  ['compile_widget_blueprint', 'editor_only'],
+
+  // ── CommonUI style mutation (editor_only) ──
+  ['create_commonui_button_style', 'editor_only'],
+  ['apply_commonui_button_style', 'editor_only'],
+  ['modify_commonui_button_style', 'editor_only'],
+
+  // ── Widget animation authoring (editor_only) ──
+  ['create_widget_animation', 'editor_only'],
+  ['modify_widget_animation', 'editor_only'],
+
+  // ── Material mutation tools (editor_only) ──
+  ['modify_material', 'editor_only'],
+  ['material_graph_operation', 'editor_only'],
+  ['compile_material_asset', 'editor_only'],
+  ['create_material_instance', 'editor_only'],
+  ['modify_material_instance', 'editor_only'],
+
+  // ── Blueprint mutation tools (editor_only) ──
+  ['modify_blueprint_members', 'editor_only'],
+  ['modify_blueprint_graphs', 'editor_only'],
+
+  // ── Schema & AI authoring mutation (editor_only) ──
+  ['create_user_defined_struct', 'editor_only'],
+  ['modify_user_defined_struct', 'editor_only'],
+  ['create_user_defined_enum', 'editor_only'],
+  ['modify_user_defined_enum', 'editor_only'],
+  ['create_blackboard', 'editor_only'],
+  ['modify_blackboard', 'editor_only'],
+  ['create_behavior_tree', 'editor_only'],
+  ['modify_behavior_tree', 'editor_only'],
+  ['create_state_tree', 'editor_only'],
+  ['modify_state_tree', 'editor_only'],
+
+  // ── Animation authoring (editor_only) ──
+  ['create_anim_sequence', 'editor_only'],
+  ['modify_anim_sequence', 'editor_only'],
+  ['create_anim_montage', 'editor_only'],
+  ['modify_anim_montage', 'editor_only'],
+  ['create_blend_space', 'editor_only'],
+  ['modify_blend_space', 'editor_only'],
+
+  // ── Data & input mutation (editor_only) ──
+  ['modify_data_asset', 'editor_only'],
+  ['create_input_action', 'editor_only'],
+  ['modify_input_action', 'editor_only'],
+  ['create_input_mapping_context', 'editor_only'],
+  ['modify_input_mapping_context', 'editor_only'],
+  ['modify_data_table', 'editor_only'],
+  ['create_curve', 'editor_only'],
+  ['modify_curve', 'editor_only'],
+  ['create_curve_table', 'editor_only'],
+  ['modify_curve_table', 'editor_only'],
+
+  // ── Project control (editor_only) ──
+  ['compile_project_code', 'editor_only'],
+  ['restart_editor', 'editor_only'],
+  ['trigger_live_coding', 'editor_only'],
+  ['sync_project_code', 'editor_only'],
+  ['wait_for_editor', 'editor_only'],
+
+  // ── Import (editor_only) ──
+  ['import_assets', 'editor_only'],
+
+  // ── Automation tests (editor_only) ──
+  ['run_automation_tests', 'editor_only'],
+
+  // ── Verification / captures (editor_only) ──
+  ['capture_widget_preview', 'editor_only'],
+  ['capture_widget_motion_checkpoints', 'editor_only'],
+  ['compare_capture_to_reference', 'editor_only'],
+  ['compare_motion_capture_bundle', 'editor_only'],
+  ['cleanup_captures', 'editor_only'],
+
+  // ── Window UI (editor_only) ──
+  ['apply_window_ui_changes', 'editor_only'],
+
+  // ── Meta tools (both — no subsystem call needed) ──
+  ['activate_workflow_scope', 'both'],
+]);
+
 export function classifyRecoverableToolFailure(toolName: string, message: string, payload?: unknown) {
+  // ── Dual-mode execution errors ──
+  if (message.includes('MODE_UNAVAILABLE')) {
+    return {
+      code: 'mode_unavailable',
+      recoverable: true,
+      retry_after_ms: EDITOR_POLL_INTERVAL_MS,
+      next_steps: [
+        'Start the Unreal Editor and ensure Remote Control is enabled.',
+        'Call wait_for_editor to wait for the editor to come online.',
+        `Retry ${toolName} after the editor is available.`,
+      ],
+    };
+  }
+
+  if (message.includes('CAPABILITY_MISMATCH')) {
+    return {
+      code: 'capability_mismatch',
+      recoverable: true,
+      retry_after_ms: EDITOR_POLL_INTERVAL_MS,
+      next_steps: [
+        `Tool '${toolName}' requires the Unreal Editor for full functionality.`,
+        'Start the editor and call wait_for_editor before retrying.',
+        'Commandlet mode only supports read-only extraction and simple write operations.',
+      ],
+    };
+  }
+
+  if (message.includes('COMMANDLET_TIMEOUT') || (message.includes('Commandlet') && message.includes('timeout'))) {
+    return {
+      code: 'commandlet_timeout',
+      recoverable: true,
+      retry_after_ms: 10_000,
+      next_steps: [
+        'The commandlet process timed out. It may be loading a large project.',
+        'Retry the operation — the commandlet may have finished initializing.',
+        'Consider starting the editor for faster interactive operations.',
+      ],
+    };
+  }
+
   if (message.includes(EDITOR_UNAVAILABLE_MESSAGE_FRAGMENT)) {
     return {
       code: 'editor_unavailable',
