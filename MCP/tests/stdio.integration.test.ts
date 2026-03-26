@@ -10,6 +10,16 @@ import { getTextContent, startMockRemoteControlServer } from './test-helpers.js'
 const currentDir = fileURLToPath(new URL('.', import.meta.url));
 const serverEntry = resolve(currentDir, '../dist/index.js');
 
+function parseToolResult(result: {
+  content?: Array<{ text?: string; type: string }>;
+  structuredContent?: unknown;
+}) {
+  if (result.structuredContent !== undefined && result.structuredContent !== null) {
+    return result.structuredContent as Record<string, unknown>;
+  }
+  return JSON.parse(getTextContent(result));
+}
+
 describe('stdio integration', () => {
   const cleanup: Array<() => Promise<void>> = [];
 
@@ -478,7 +488,7 @@ describe('stdio integration', () => {
         roughness: 'expr-guid-2',
       },
     });
-    const triggerLiveCodingResult = JSON.parse(getTextContent(triggerLiveCoding));
+    const triggerLiveCodingResult = parseToolResult(triggerLiveCoding);
     expect(triggerLiveCodingResult).toMatchObject({
       operation: 'trigger_live_coding',
       status: process.platform === 'win32' ? 'success' : 'unsupported',
