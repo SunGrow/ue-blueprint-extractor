@@ -22,6 +22,8 @@ const NESTING_EXEMPTED_TOOLS = new Set([
   'import_assets',
   'create_behavior_tree', 'modify_behavior_tree',
   'apply_window_ui_changes',
+  // Material tools with operation-specific typed payloads (array of operation objects with nested fields)
+  'modify_material',
 ]);
 
 function countTopLevelFields(schema: z.ZodTypeAny): number {
@@ -126,6 +128,28 @@ describe('schema complexity budget', () => {
     ];
     const found = removedAliases.filter((alias) => tools.has(alias));
     expect(found).toEqual([]);
+  });
+
+  it('zero .passthrough() in tool-inputs.ts', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const content = fs.readFileSync(
+      path.resolve(import.meta.dirname, '../src/schemas/tool-inputs.ts'),
+      'utf-8',
+    );
+    const count = (content.match(/\.passthrough\(\)/g) || []).length;
+    expect(count).toBe(0);
+  });
+
+  it('zero .passthrough() in tool-results.ts', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const content = fs.readFileSync(
+      path.resolve(import.meta.dirname, '../src/schemas/tool-results.ts'),
+      'utf-8',
+    );
+    const count = (content.match(/\.passthrough\(\)/g) || []).length;
+    expect(count).toBe(0);
   });
 });
 

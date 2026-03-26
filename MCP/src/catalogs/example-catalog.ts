@@ -575,8 +575,8 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
             }],
             bindings: {
               propertyBindings: [{
-                sourcePath: { segments: [{ name: 'SelectedGestureTag' }] },
-                targetPath: { segments: [{ name: 'MontageTag' }] },
+                sourcePath: 'SelectedGestureTag',
+                targetPath: 'MontageTag',
               }],
             },
           },

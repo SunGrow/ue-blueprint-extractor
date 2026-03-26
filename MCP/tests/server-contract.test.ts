@@ -1432,7 +1432,19 @@ describe('createBlueprintExtractorServer', () => {
         success: true,
       },
     });
-    expect(fakeClient.calls).toEqual([
+    // Parse any JSON-string params before comparing so field order does not matter.
+    const parseJsonFields = (calls: Array<{ method: string; params: Record<string, unknown> }>) =>
+      calls.map(({ method, params }) => {
+        const parsed: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(params)) {
+          parsed[k] = typeof v === 'string' && (k === 'PayloadJson' || k === 'SettingsJson')
+            ? JSON.parse(v)
+            : v;
+        }
+        return { method, params: parsed };
+      });
+
+    expect(parseJsonFields(fakeClient.calls)).toEqual(parseJsonFields([
       {
         method: 'ExtractMaterial',
         params: {
@@ -1551,7 +1563,7 @@ describe('createBlueprintExtractorServer', () => {
           AssetPath: '/Game/Materials/M_Test',
         },
       },
-    ]);
+    ]));
   });
 
   it('passes widget_path selectors and validate_only through modify_widget', async () => {

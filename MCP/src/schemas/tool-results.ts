@@ -12,14 +12,14 @@ export const toolResultSchema = z.object({
     code: z.string().optional(),
     message: z.string().optional(),
     path: z.string().optional(),
-  }).passthrough()).optional(),
+  })).optional(),
   execution: z.object({
     mode: z.enum(['immediate', 'task_aware']),
     task_support: z.enum(['optional', 'required', 'forbidden']),
     status: z.string().optional(),
     progress_message: z.string().optional(),
   }).optional(),
-}).passthrough();
+});
 
 export const windowUiVerificationSchema = z.object({
   required: z.boolean(),
@@ -57,7 +57,7 @@ export const applyWindowUiChangesResultSchema = toolResultSchema.extend({
   failedAfterStep: z.string().optional(),
   steps: z.array(z.record(z.string(), z.unknown())).optional(),
   verification: windowUiVerificationSchema.optional(),
-}).passthrough();
+});
 
 export const cascadeManifestEntrySchema = z.object({
   assetPath: z.string(),
@@ -74,7 +74,7 @@ export const CascadeResultSchema = toolResultSchema.extend({
   total_count: z.number().int().min(0),
   output_directory: z.string(),
   manifest: z.array(cascadeManifestEntrySchema),
-}).passthrough();
+});
 
 export const verificationSurfaceSchema = z.enum([
   'editor_offscreen',
@@ -97,7 +97,7 @@ export const verificationComparisonSchema = z.object({
   mismatchPercentage: z.number().min(0).optional(),
   diffCaptureId: z.string().optional(),
   diffArtifactPath: z.string().optional(),
-}).passthrough();
+});
 
 export const verificationArtifactSchema = z.object({
   captureId: z.string(),
@@ -123,7 +123,7 @@ export const verificationArtifactSchema = z.object({
   checkpointMs: z.number().min(0).optional(),
   playbackSource: z.string().optional(),
   triggerMode: z.enum(['asset_animation', 'scenario_trigger']).optional(),
-}).passthrough();
+});
 
 export const verificationArtifactReferenceSchema = z.object({
   captureId: z.string(),
@@ -152,11 +152,11 @@ export const verificationArtifactReferenceSchema = z.object({
   triggerMode: z.enum(['asset_animation', 'scenario_trigger']).optional(),
   mimeType: z.string().optional(),
   relativePath: z.string().optional(),
-}).passthrough();
+});
 
 export const CaptureResultSchema = toolResultSchema.extend({
   resourceUri: z.string(),
-}).merge(verificationArtifactSchema).passthrough();
+}).merge(verificationArtifactSchema);
 
 export const CompareCaptureResultSchema = toolResultSchema.extend({
   capturePath: z.string(),
@@ -171,19 +171,19 @@ export const CompareCaptureResultSchema = toolResultSchema.extend({
   diffArtifactPath: z.string(),
   diffResourceUri: z.string(),
   comparison: verificationComparisonSchema,
-}).passthrough();
+});
 
 export const ListCapturesResultSchema = toolResultSchema.extend({
   assetPathFilter: z.string(),
   captureCount: z.number().int().min(0),
   captures: z.array(verificationArtifactSchema),
-}).passthrough();
+});
 
 export const CleanupCapturesResultSchema = toolResultSchema.extend({
   deletedCount: z.number().int().min(0),
   freedBytes: z.number().int().min(0),
   maxAgeDays: z.number().int().min(0),
-}).passthrough();
+});
 
 export const widgetAnimationTrackKindSchema = z.enum([
   'render_opacity',
@@ -198,19 +198,19 @@ export const widgetAnimationTrackSchema = z.object({
   widget_path: z.string().optional(),
   property: widgetAnimationTrackKindSchema,
   keys: z.array(z.record(z.string(), z.unknown())),
-}).passthrough();
+});
 
 export const widgetAnimationCheckpointSchema = z.object({
   name: z.string(),
   timeMs: z.number().min(0).optional(),
   time_ms: z.number().min(0).optional(),
-}).passthrough();
+});
 
 export const widgetAnimationTimelineSchema = z.object({
   duration_ms: z.number().min(0).optional(),
   fps: z.number().int().positive().optional(),
   tracks: z.array(widgetAnimationTrackSchema),
-}).passthrough();
+});
 
 export const extractedWidgetAnimationSchema = z.object({
   name: z.string(),
@@ -221,14 +221,14 @@ export const extractedWidgetAnimationSchema = z.object({
   supportedTracks: z.array(widgetAnimationTrackKindSchema).optional(),
   tracks: z.array(widgetAnimationTrackSchema),
   checkpoints: z.array(widgetAnimationCheckpointSchema).optional(),
-}).passthrough();
+});
 
 export const ExtractWidgetAnimationResultSchema = toolResultSchema.extend({
   assetPath: z.string(),
   animationName: z.string(),
   supportedTracks: z.array(widgetAnimationTrackKindSchema),
   animation: extractedWidgetAnimationSchema,
-}).passthrough();
+});
 
 export const CreateModifyWidgetAnimationResultSchema = toolResultSchema.extend({
   assetPath: z.string(),
@@ -239,7 +239,7 @@ export const CreateModifyWidgetAnimationResultSchema = toolResultSchema.extend({
   compile: z.record(z.string(), z.unknown()).optional(),
   dirtyPackages: z.array(z.string()).optional(),
   changedObjects: z.array(z.string()).optional(),
-}).passthrough();
+});
 
 export const motionCaptureModeSchema = z.enum(['editor_preview', 'automation_scenario']);
 export const motionTriggerModeSchema = z.enum(['asset_animation', 'scenario_trigger']);
@@ -254,7 +254,7 @@ export const MotionCaptureBundleResultSchema = toolResultSchema.extend({
   checkpointCount: z.number().int().min(0),
   partialVerification: z.boolean().optional(),
   verificationArtifacts: z.array(verificationArtifactReferenceSchema),
-}).passthrough();
+});
 
 export const motionCaptureComparisonEntrySchema = z.object({
   checkpointName: z.string(),
@@ -264,7 +264,7 @@ export const motionCaptureComparisonEntrySchema = z.object({
   captureArtifact: verificationArtifactReferenceSchema.optional(),
   referenceArtifact: verificationArtifactReferenceSchema.optional(),
   comparison: verificationComparisonSchema.optional(),
-}).passthrough();
+});
 
 export const CompareMotionCaptureBundleResultSchema = toolResultSchema.extend({
   mode: z.enum(['reference_frames', 'reference_bundle']),
@@ -273,7 +273,7 @@ export const CompareMotionCaptureBundleResultSchema = toolResultSchema.extend({
   matchedCount: z.number().int().min(0),
   pass: z.boolean(),
   comparisons: z.array(motionCaptureComparisonEntrySchema),
-}).passthrough();
+});
 
 export const automationArtifactSchema = z.object({
   name: z.string(),
@@ -281,7 +281,7 @@ export const automationArtifactSchema = z.object({
   mimeType: z.string(),
   resourceUri: z.string(),
   relativePath: z.string().optional(),
-}).passthrough();
+});
 
 export const automationRunSummarySchema = z.object({
   successful: z.boolean(),
@@ -291,7 +291,7 @@ export const automationRunSummarySchema = z.object({
   skippedTests: z.number().int().optional(),
   warningCount: z.number().int().optional(),
   reportAvailable: z.boolean(),
-}).passthrough();
+});
 
 export const automationRunSchema = toolResultSchema.extend({
   runId: z.string(),
@@ -317,10 +317,10 @@ export const automationRunSchema = toolResultSchema.extend({
   artifacts: z.array(automationArtifactSchema),
   verificationArtifacts: z.array(verificationArtifactReferenceSchema).optional(),
   summary: automationRunSummarySchema.optional(),
-}).passthrough();
+});
 
 export const AutomationRunListSchema = toolResultSchema.extend({
   includeCompleted: z.boolean(),
   runCount: z.number().int().min(0),
   runs: z.array(automationRunSchema),
-}).passthrough();
+});

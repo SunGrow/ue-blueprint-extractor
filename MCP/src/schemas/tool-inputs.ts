@@ -153,7 +153,7 @@ export const MaterialParameterSelectorSchema = z.object({
   name: z.string(),
   association: MaterialParameterAssociationSchema.optional(),
   index: z.number().int().optional(),
-}).passthrough();
+});
 export const MaterialColorValueSchema = z.object({
   r: z.number(),
   g: z.number(),
@@ -182,10 +182,10 @@ export const MaterialLayerEntrySchema = z.object({
   layerGuid: z.string().optional(),
   name: z.string().optional(),
   visible: z.boolean().optional(),
-}).passthrough();
+});
 export const MaterialLayerStackSchema = z.object({
   layers: z.array(MaterialLayerEntrySchema),
-}).passthrough();
+});
 export const MaterialGraphOperationSchema = z.object({
   operation: z.enum([
     'add_expression',
@@ -203,7 +203,39 @@ export const MaterialGraphOperationSchema = z.object({
     'set_material_settings',
     'set_layer_stack',
   ]),
-}).passthrough();
+  // Expression fields
+  expression_class: z.string().optional(),
+  expression_guid: z.string().optional(),
+  temp_id: z.string().optional(),
+  properties: JsonObjectSchema.optional(),
+  node_pos_x: z.number().optional(),
+  node_pos_y: z.number().optional(),
+  // Connection fields
+  from_expression_guid: z.string().optional(),
+  from_temp_id: z.string().optional(),
+  to_expression_guid: z.string().optional(),
+  to_temp_id: z.string().optional(),
+  from_output_name: z.string().optional(),
+  from_output_index: z.number().int().min(0).optional(),
+  to_input_name: z.string().optional(),
+  to_input_index: z.number().int().min(0).optional(),
+  // Material property
+  material_property: z.string().optional(),
+  // Settings
+  settings: JsonObjectSchema.optional(),
+  // Comment fields
+  comment_text: z.string().optional(),
+  comment_id: z.string().optional(),
+  comment_pos_x: z.number().optional(),
+  comment_pos_y: z.number().optional(),
+  comment_size_x: z.number().optional(),
+  comment_size_y: z.number().optional(),
+  // Parameter group
+  old_group_name: z.string().optional(),
+  new_group_name: z.string().optional(),
+  // Layer stack
+  layer_stack: MaterialLayerStackSchema.optional(),
+});
 export const MaterialGraphOperationKindSchema = z.enum([
   'set_material_settings',
   'add_expression',
@@ -215,7 +247,7 @@ export const MaterialGraphPayloadSchema = z.object({
   compile_after: z.boolean().optional(),
   layout_after: z.boolean().optional(),
   operations: z.array(MaterialGraphOperationSchema).default([]),
-}).passthrough();
+});
 export const MaterialNodePositionSchema = z.object({
   x: z.number(),
   y: z.number(),
@@ -262,7 +294,7 @@ export const ImportItemCommonSchema = z.object({
   asset_path: z.string().optional(),
   replace_existing: z.boolean().optional(),
   replace_existing_settings: z.boolean().optional(),
-}).passthrough();
+});
 
 export const TextureImportOptionsSchema = z.object({
   compression_settings: z.string().optional(),
@@ -271,7 +303,7 @@ export const TextureImportOptionsSchema = z.object({
   srgb: z.boolean().optional(),
   virtual_texture_streaming: z.boolean().optional(),
   flip_green_channel: z.boolean().optional(),
-}).passthrough();
+});
 
 export const MeshImportOptionsSchema = z.object({
   mesh_type: z.string().optional(),
@@ -281,30 +313,30 @@ export const MeshImportOptionsSchema = z.object({
   combine_meshes: z.boolean().optional(),
   generate_collision: z.boolean().optional(),
   skeleton_path: z.string().optional(),
-}).passthrough();
+});
 
 export const ImportPayloadSchema = z.object({
   items: z.array(ImportItemCommonSchema),
-}).passthrough();
+});
 
 export const TextureImportPayloadSchema = z.object({
   items: z.array(ImportItemCommonSchema.extend({
     options: TextureImportOptionsSchema.optional(),
-  }).passthrough()),
-}).passthrough();
+  })),
+});
 
 export const MeshImportPayloadSchema = z.object({
   items: z.array(ImportItemCommonSchema.extend({
     options: MeshImportOptionsSchema.optional(),
-  }).passthrough()),
-}).passthrough();
+  })),
+});
 
 export const ImportDiagnosticSchema = z.object({
   severity: z.string(),
   code: z.string(),
   message: z.string(),
   path: z.string().optional(),
-}).passthrough();
+});
 
 export const ImportJobItemSchema = z.object({
   index: z.number().int().min(0),
@@ -318,7 +350,7 @@ export const ImportJobItemSchema = z.object({
   importedObjects: z.array(z.string()),
   dirtyPackages: z.array(z.string()),
   diagnostics: z.array(ImportDiagnosticSchema),
-}).passthrough();
+});
 
 export const ImportJobSchema = z.object({
   success: z.boolean(),
@@ -337,7 +369,7 @@ export const ImportJobSchema = z.object({
   importedObjects: z.array(z.string()),
   dirtyPackages: z.array(z.string()),
   diagnostics: z.array(ImportDiagnosticSchema),
-}).passthrough();
+});
 
 export const ImportJobListSchema = z.object({
   success: z.boolean(),
@@ -345,7 +377,7 @@ export const ImportJobListSchema = z.object({
   includeCompleted: z.boolean(),
   jobCount: z.number().int().min(0),
   jobs: z.array(ImportJobSchema),
-}).passthrough();
+});
 
 export const UserDefinedStructMutationOperationSchema = z.enum([
   'replace_fields',
@@ -431,12 +463,12 @@ export const UserDefinedStructFieldSchema = z.object({
   pinType: JsonObjectSchema.optional(),
   metadata: JsonObjectSchema.optional(),
   defaultValue: z.unknown().optional(),
-}).passthrough();
+});
 
 export const UserDefinedEnumEntrySchema = z.object({
   name: z.string(),
   displayName: z.string().optional(),
-}).passthrough();
+});
 
 export const BlackboardKeySchema = z.object({
   entryName: z.string().optional(),
@@ -446,11 +478,11 @@ export const BlackboardKeySchema = z.object({
   enumType: z.string().optional(),
   enumName: z.string().optional(),
   properties: JsonObjectSchema.optional(),
-}).passthrough();
+});
 
 export const BehaviorTreeNodeSelectorSchema = z.object({
   nodePath: z.string().optional(),
-}).passthrough();
+});
 
 export const StateTreeStateSelectorSchema = z.object({
   stateId: z.string().optional(),
@@ -459,37 +491,26 @@ export const StateTreeStateSelectorSchema = z.object({
   path: z.string().optional(),
   stateName: z.string().optional(),
   name: z.string().optional(),
-}).passthrough();
+});
 
 export const StateTreeEditorNodeSelectorSchema = z.object({
   editorNodeId: z.string().optional(),
   id: z.string().optional(),
-}).passthrough();
+});
 
 export const StateTreeTransitionSelectorSchema = z.object({
   transitionId: z.string().optional(),
   id: z.string().optional(),
-}).passthrough();
-
-const PropertyPathSegmentSchema = z.object({
-  name: z.string().describe('Property name'),
-  arrayIndex: z.number().int().optional().describe('Array element index (for array properties)'),
-  instanceStruct: z.string().optional().describe('Script struct/class path for the property type (e.g., /Script/Module.FStructName)'),
-}).passthrough();
-
-const PropertyPathSchema = z.object({
-  structId: z.string().optional().describe('GUID of the struct owning the property (from extract_asset output)'),
-  segments: z.array(PropertyPathSegmentSchema).min(1).describe('Property path segments from owner to leaf property'),
-}).passthrough();
+});
 
 export const PropertyPathBindingSchema = z.object({
-  sourcePath: PropertyPathSchema.describe('Property path to read the value from (task/evaluator output)'),
-  targetPath: PropertyPathSchema.describe('Property path to write the value to (task input)'),
-}).passthrough();
+  sourcePath: z.string().describe('Property path string: "structGuid:Property.SubProp[ArrayIndex]"'),
+  targetPath: z.string().describe('Property path string: "structGuid:Property.SubProp[ArrayIndex]"'),
+});
 
 export const StateTreeBindingsObjectSchema = z.object({
   propertyBindings: z.array(PropertyPathBindingSchema),
-}).passthrough().describe('StateTree property bindings container matching C++ bindings.propertyBindings structure');
+}).describe('StateTree property bindings container matching C++ bindings.propertyBindings structure');
 
 export const AnimationNotifySelectorSchema = z.object({
   notifyId: z.string().optional(),
@@ -498,7 +519,7 @@ export const AnimationNotifySelectorSchema = z.object({
   notifyIndex: z.number().int().min(0).optional(),
   trackIndex: z.number().int().min(0).optional(),
   trackName: z.string().optional(),
-}).passthrough();
+});
 
 export const BlendParameterSchema = z.object({
   name: z.string().optional(),
@@ -508,11 +529,11 @@ export const BlendParameterSchema = z.object({
   interpolationType: z.string().optional(),
   snapToGrid: z.boolean().optional(),
   wrapInput: z.boolean().optional(),
-}).passthrough();
+});
 
 export const BlendSpaceSampleSchema = z.object({
   sampleIndex: z.number().int().min(0).optional(),
   animation: z.string().optional(),
   animSequence: z.string().optional(),
   sampleValue: JsonObjectSchema.optional(),
-}).passthrough();
+});
