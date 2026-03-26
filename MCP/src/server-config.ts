@@ -4,13 +4,13 @@ const SUBSYSTEM_UNAVAILABLE_MESSAGE_FRAGMENT = 'BlueprintExtractor subsystem not
 export const EDITOR_POLL_INTERVAL_MS = 1_000;
 
 export const serverInstructions = [
-  'Blueprint Extractor MCP v4 uses workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
+  'Blueprint Extractor MCP v5 uses workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
   // Tool discovery
-  'Only ~19 core tools are visible by default. Use activate_workflow_scope to load specialized tool families: widget_authoring, material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification.',
-  'Use find_and_extract for search+extract in one call when you know the search criteria and extraction type. Use search_assets when you only need to locate assets.',
+  'Only ~13 core tools are visible by default. Use activate_workflow_scope to load specialized tool families: widget_authoring (or sub-scopes: widget_authoring_structure, widget_authoring_visual, widget_verification), material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification.',
+  'Use find_and_extract for search+extract in one call (activate any authoring scope to access it). Use search_assets when you only need to locate assets.',
   'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance. This may also auto-activate the relevant workflow scope.',
   // Deferred tool directory (tools available via activate_workflow_scope)
-  'Deferred tool families — widget_authoring: create/replace/patch/insert/remove/move/wrap widgets, compile_widget, captures, CommonUI styles, widget animations. material_authoring: create/modify material, material_graph_operation, material instances. blueprint_authoring: create/modify blueprint members and graphs. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. automation_testing: run/get/list automation tests. verification: widget captures and comparisons.',
+  'Deferred tool families — widget_authoring_structure: create/replace/patch/insert/remove/move/wrap widgets. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create/modify material, material_graph_operation, material instances. blueprint_authoring: create/modify blueprint members and graphs, trigger_live_coding. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. automation_testing: run/get/list automation tests, project automation context. verification: widget captures and comparisons.',
   // Extraction
   'All extract_* tools default to compact: true. Pass compact: false for verbose output.',
   // Search

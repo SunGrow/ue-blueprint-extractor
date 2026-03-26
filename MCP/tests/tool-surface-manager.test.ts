@@ -33,19 +33,23 @@ function createMockRegisteredToolMap(toolNames: string[]): Map<string, Registere
 const ALL_TEST_TOOLS = [
   // core tools
   ...CORE_TOOLS,
-  // widget authoring tools
-  'create_widget_blueprint', 'replace_widget_tree', 'patch_widget',
-  'patch_widget_class_defaults', 'insert_widget_child', 'remove_widget',
-  'move_widget', 'wrap_widget', 'replace_widget_class',
-  'batch_widget_operations', 'compile_widget', 'modify_widget_blueprint',
-  'build_widget_tree', 'modify_widget', 'compile_widget_blueprint',
+  // widget authoring structure
+  'create_widget_blueprint', 'build_widget_tree', 'replace_widget_tree',
+  'replace_widget_class', 'insert_widget_child', 'remove_widget',
+  'move_widget', 'wrap_widget', 'patch_widget', 'patch_widget_class_defaults',
+  'modify_widget', 'modify_widget_blueprint', 'batch_widget_operations',
+  // widget authoring visual
+  'create_commonui_button_style', 'apply_commonui_button_style',
+  'modify_commonui_button_style', 'extract_commonui_button_style',
+  'extract_widget_blueprint',
+  'create_widget_animation', 'modify_widget_animation', 'extract_widget_animation',
+  'compile_widget', 'compile_widget_blueprint',
+  // widget verification
   'capture_widget_preview', 'capture_widget_motion_checkpoints',
-  'compare_capture_to_reference', 'list_captures', 'cleanup_captures',
-  'compare_motion_capture_bundle',
-  'create_commonui_button_style', 'modify_commonui_button_style',
-  'apply_commonui_button_style',
-  'create_widget_animation', 'modify_widget_animation',
-  'apply_window_ui_changes',
+  'compare_capture_to_reference', 'compare_motion_capture_bundle',
+  'list_captures', 'cleanup_captures',
+  // tools moved from core to scopes
+  'find_and_extract', 'trigger_live_coding', 'get_project_automation_context',
   // material authoring
   'create_material', 'material_graph_operation', 'modify_material',
   'compile_material_asset',
@@ -118,7 +122,7 @@ describe('ToolSurfaceManager', () => {
   });
 
   describe('activateScope', () => {
-    it('widget_authoring loads widget tools plus core', () => {
+    it('widget_authoring loads all widget sub-scope tools plus core', () => {
       manager.activateScope('widget_authoring');
       const active = manager.getActiveTools();
 
@@ -127,18 +131,73 @@ describe('ToolSurfaceManager', () => {
         expect(active.has(coreTool)).toBe(true);
       }
 
-      // Widget-specific tools should be active
+      // Structure sub-scope tools
       expect(active.has('create_widget_blueprint')).toBe(true);
       expect(active.has('patch_widget')).toBe(true);
-      expect(active.has('capture_widget_preview')).toBe(true);
+      expect(active.has('batch_widget_operations')).toBe(true);
+
+      // Visual sub-scope tools
       expect(active.has('create_commonui_button_style')).toBe(true);
       expect(active.has('create_widget_animation')).toBe(true);
-      expect(active.has('apply_window_ui_changes')).toBe(true);
+      expect(active.has('compile_widget')).toBe(true);
+
+      // Verification sub-scope tools
+      expect(active.has('capture_widget_preview')).toBe(true);
+      expect(active.has('compare_capture_to_reference')).toBe(true);
+      expect(active.has('cleanup_captures')).toBe(true);
+
+      // find_and_extract reachable via widget sub-scopes
+      expect(active.has('find_and_extract')).toBe(true);
 
       // Non-widget tools should be disabled
       expect(active.has('create_material')).toBe(false);
       expect(active.has('create_blueprint')).toBe(false);
       expect(active.has('import_assets')).toBe(false);
+    });
+
+    it('widget_authoring_structure loads structure tools plus core', () => {
+      manager.activateScope('widget_authoring_structure');
+      const active = manager.getActiveTools();
+
+      expect(active.has('create_widget_blueprint')).toBe(true);
+      expect(active.has('build_widget_tree')).toBe(true);
+      expect(active.has('replace_widget_tree')).toBe(true);
+      expect(active.has('patch_widget')).toBe(true);
+      expect(active.has('find_and_extract')).toBe(true);
+
+      // Visual tools should not be loaded
+      expect(active.has('create_commonui_button_style')).toBe(false);
+      expect(active.has('compile_widget')).toBe(false);
+    });
+
+    it('widget_authoring_visual loads visual tools plus core', () => {
+      manager.activateScope('widget_authoring_visual');
+      const active = manager.getActiveTools();
+
+      expect(active.has('create_commonui_button_style')).toBe(true);
+      expect(active.has('extract_widget_blueprint')).toBe(true);
+      expect(active.has('compile_widget')).toBe(true);
+      expect(active.has('find_and_extract')).toBe(true);
+
+      // Structure tools should not be loaded
+      expect(active.has('build_widget_tree')).toBe(false);
+      expect(active.has('replace_widget_tree')).toBe(false);
+    });
+
+    it('widget_verification loads verification tools plus core', () => {
+      manager.activateScope('widget_verification');
+      const active = manager.getActiveTools();
+
+      expect(active.has('capture_widget_preview')).toBe(true);
+      expect(active.has('compare_capture_to_reference')).toBe(true);
+      expect(active.has('capture_widget_motion_checkpoints')).toBe(true);
+      expect(active.has('compare_motion_capture_bundle')).toBe(true);
+      expect(active.has('list_captures')).toBe(true);
+      expect(active.has('cleanup_captures')).toBe(true);
+
+      // Non-verification widget tools should not be loaded
+      expect(active.has('create_widget_blueprint')).toBe(false);
+      expect(active.has('create_commonui_button_style')).toBe(false);
     });
 
     it('material_authoring loads material tools plus core', () => {
@@ -149,6 +208,7 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('material_graph_operation')).toBe(true);
       expect(active.has('create_material_instance')).toBe(true);
       expect(active.has('compile_material_asset')).toBe(true);
+      expect(active.has('find_and_extract')).toBe(true);
 
       expect(active.has('create_widget_blueprint')).toBe(false);
     });
@@ -160,6 +220,8 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('create_blueprint')).toBe(true);
       expect(active.has('modify_blueprint_members')).toBe(true);
       expect(active.has('modify_blueprint_graphs')).toBe(true);
+      expect(active.has('trigger_live_coding')).toBe(true);
+      expect(active.has('find_and_extract')).toBe(true);
 
       expect(active.has('create_material')).toBe(false);
     });
@@ -191,6 +253,7 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('run_automation_tests')).toBe(true);
       expect(active.has('get_automation_test_run')).toBe(true);
       expect(active.has('list_automation_test_runs')).toBe(true);
+      expect(active.has('get_project_automation_context')).toBe(true);
     });
 
     it('verification loads verification tools', () => {
@@ -307,7 +370,9 @@ describe('ToolSurfaceManager', () => {
   describe('all workflow scope IDs', () => {
     it('WORKFLOW_SCOPE_IDS contains all expected scopes', () => {
       const expected: WorkflowScopeId[] = [
-        'widget_authoring', 'material_authoring', 'blueprint_authoring',
+        'widget_authoring',
+        'widget_authoring_structure', 'widget_authoring_visual', 'widget_verification',
+        'material_authoring', 'blueprint_authoring',
         'schema_ai_authoring', 'animation_authoring', 'data_tables',
         'import', 'automation_testing', 'verification',
       ];

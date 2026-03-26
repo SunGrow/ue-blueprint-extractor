@@ -2,6 +2,9 @@ import type { RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export type WorkflowScopeId =
   | 'widget_authoring'
+  | 'widget_authoring_structure'
+  | 'widget_authoring_visual'
+  | 'widget_verification'
   | 'material_authoring'
   | 'blueprint_authoring'
   | 'schema_ai_authoring'
@@ -20,6 +23,9 @@ export interface WorkflowScope {
 
 export const WORKFLOW_SCOPE_IDS: readonly WorkflowScopeId[] = [
   'widget_authoring',
+  'widget_authoring_structure',
+  'widget_authoring_visual',
+  'widget_verification',
   'material_authoring',
   'blueprint_authoring',
   'schema_ai_authoring',
@@ -36,57 +42,80 @@ export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'extract_asset',
   'extract_material',
   'extract_cascade',
-  'extract_widget_blueprint',
-  'extract_widget_animation',
-  'extract_commonui_button_style',
   'list_assets',
-  'find_and_extract',
   'save_assets',
   'get_tool_help',
-  'wait_for_editor',
   'activate_workflow_scope',
-  'get_project_automation_context',
+  'wait_for_editor',
   'compile_project_code',
-  'trigger_live_coding',
   'restart_editor',
   'sync_project_code',
 ]);
 
+/**
+ * Parent scopes expand to the union of their sub-scopes when activated.
+ * This provides backward compatibility: activating 'widget_authoring' loads
+ * all three widget sub-scopes automatically.
+ */
+const PARENT_SCOPE_CHILDREN: Partial<Record<WorkflowScopeId, WorkflowScopeId[]>> = {
+  widget_authoring: ['widget_authoring_structure', 'widget_authoring_visual', 'widget_verification'],
+};
+
 const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
+  // -- Parent scope: tools list is the union of its children (computed at activation) --
   widget_authoring: {
     id: 'widget_authoring',
-    description: 'Widget authoring, verification, CommonUI, and extraction tools',
+    description: 'All widget authoring tools (structure, visual, and verification sub-scopes)',
+    prompts: [],
+    tools: [], // Populated dynamically from sub-scopes at activation time
+  },
+  // -- Widget sub-scopes --
+  widget_authoring_structure: {
+    id: 'widget_authoring_structure',
+    description: 'Widget tree structure and mutation tools',
     prompts: [],
     tools: [
-      // widget structure
-      'create_widget_blueprint', 'replace_widget_tree', 'patch_widget',
-      'patch_widget_class_defaults', 'insert_widget_child', 'remove_widget',
-      'move_widget', 'wrap_widget', 'replace_widget_class',
-      'batch_widget_operations', 'compile_widget', 'modify_widget_blueprint',
-      'build_widget_tree', 'modify_widget', 'compile_widget_blueprint',
-      // widget verification
-      'capture_widget_preview', 'capture_widget_motion_checkpoints',
-      'compare_capture_to_reference', 'list_captures', 'cleanup_captures',
-      'compare_motion_capture_bundle',
-      // commonui
-      'create_commonui_button_style', 'modify_commonui_button_style',
-      'apply_commonui_button_style',
-      // widget animation authoring
-      'create_widget_animation', 'modify_widget_animation',
-      // window UI
-      'apply_window_ui_changes',
+      'create_widget_blueprint', 'build_widget_tree', 'replace_widget_tree',
+      'replace_widget_class', 'insert_widget_child', 'remove_widget',
+      'move_widget', 'wrap_widget', 'patch_widget', 'patch_widget_class_defaults',
+      'modify_widget', 'modify_widget_blueprint', 'batch_widget_operations',
+      'find_and_extract',
     ],
   },
+  widget_authoring_visual: {
+    id: 'widget_authoring_visual',
+    description: 'Widget visual authoring, CommonUI styles, animations, and compilation tools',
+    prompts: [],
+    tools: [
+      'create_commonui_button_style', 'apply_commonui_button_style',
+      'modify_commonui_button_style', 'extract_commonui_button_style',
+      'extract_widget_blueprint',
+      'create_widget_animation', 'modify_widget_animation', 'extract_widget_animation',
+      'compile_widget', 'compile_widget_blueprint',
+      'capture_widget_preview',
+      'find_and_extract',
+    ],
+  },
+  widget_verification: {
+    id: 'widget_verification',
+    description: 'Widget capture, comparison, and verification tools',
+    prompts: [],
+    tools: [
+      'capture_widget_preview', 'compare_capture_to_reference',
+      'capture_widget_motion_checkpoints', 'compare_motion_capture_bundle',
+      'list_captures', 'cleanup_captures',
+    ],
+  },
+  // -- Other scopes --
   material_authoring: {
     id: 'material_authoring',
     description: 'Material authoring, material instances, and extraction tools',
     prompts: [],
     tools: [
-      // material authoring
       'create_material', 'material_graph_operation', 'modify_material',
       'compile_material_asset',
-      // material instance
       'create_material_instance', 'modify_material_instance',
+      'find_and_extract',
     ],
   },
   blueprint_authoring: {
@@ -95,6 +124,8 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     prompts: [],
     tools: [
       'create_blueprint', 'modify_blueprint_members', 'modify_blueprint_graphs',
+      'trigger_live_coding',
+      'find_and_extract',
     ],
   },
   schema_ai_authoring: {
@@ -111,19 +142,13 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
   },
   animation_authoring: {
     id: 'animation_authoring',
-    description: 'Animation authoring, widget animation, verification, and extraction tools',
+    description: 'Animation authoring and widget animation tools',
     prompts: [],
     tools: [
-      // animation authoring
       'create_anim_sequence', 'modify_anim_sequence',
       'create_anim_montage', 'modify_anim_montage',
       'create_blend_space', 'modify_blend_space',
-      // widget animation authoring
       'create_widget_animation', 'modify_widget_animation',
-      // widget verification (for animation previews)
-      'capture_widget_preview', 'capture_widget_motion_checkpoints',
-      'compare_capture_to_reference', 'list_captures', 'cleanup_captures',
-      'compare_motion_capture_bundle',
     ],
   },
   data_tables: {
@@ -131,11 +156,9 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     description: 'Data assets, input actions, tables, and curves tools',
     prompts: [],
     tools: [
-      // data and input
       'create_data_asset', 'modify_data_asset',
       'create_input_action', 'modify_input_action',
       'create_input_mapping_context', 'modify_input_mapping_context',
-      // tables and curves
       'create_data_table', 'modify_data_table',
       'create_curve', 'modify_curve',
       'create_curve_table', 'modify_curve_table',
@@ -155,6 +178,7 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     prompts: [],
     tools: [
       'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
+      'get_project_automation_context',
     ],
   },
   verification: {
@@ -185,10 +209,22 @@ export class ToolSurfaceManager {
       throw new Error(`Unknown workflow scope: ${scopeId}`);
     }
 
-    const targetTools = new Set<string>([
-      ...CORE_TOOLS,
-      ...scope.tools,
-    ]);
+    const targetTools = new Set<string>([...CORE_TOOLS]);
+
+    // If this is a parent scope, collect tools from all child sub-scopes
+    const children = PARENT_SCOPE_CHILDREN[scopeId];
+    if (children && children.length > 0) {
+      for (const childId of children) {
+        const childScope = SCOPE_DEFINITIONS[childId];
+        for (const tool of childScope.tools) {
+          targetTools.add(tool);
+        }
+      }
+    } else {
+      for (const tool of scope.tools) {
+        targetTools.add(tool);
+      }
+    }
 
     if (additive) {
       // Merge with currently active tools
@@ -250,7 +286,19 @@ export class ToolSurfaceManager {
   }
 
   getScopeDefinition(scopeId: WorkflowScopeId): WorkflowScope {
-    return SCOPE_DEFINITIONS[scopeId];
+    const scope = SCOPE_DEFINITIONS[scopeId];
+    const children = PARENT_SCOPE_CHILDREN[scopeId];
+    if (children && children.length > 0) {
+      // Return a computed scope with tools merged from all children
+      const mergedTools = new Set<string>();
+      for (const childId of children) {
+        for (const tool of SCOPE_DEFINITIONS[childId].tools) {
+          mergedTools.add(tool);
+        }
+      }
+      return { ...scope, tools: [...mergedTools] };
+    }
+    return scope;
   }
 
   private applyToolSet(targetTools: Set<string>): void {

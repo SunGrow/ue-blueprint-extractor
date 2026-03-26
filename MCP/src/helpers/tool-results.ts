@@ -1,6 +1,7 @@
 import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import { aliasMap } from './alias-registration.js';
 import { isRecord } from './formatting.js';
+import { NEXT_STEP_HINTS_REGISTRY } from './next-step-hints.js';
 
 type RecoverableToolFailure = {
   code: string;
@@ -98,6 +99,15 @@ export function createToolResultNormalizers({
     };
   }
 
+  function getHints(toolName: string, kind: 'on_success' | 'on_error'): string[] | undefined {
+    const resolvedName = aliasMap.get(toolName) ?? toolName;
+    const config = NEXT_STEP_HINTS_REGISTRY.get(resolvedName);
+    if (!config) return undefined;
+    const hints = config[kind];
+    // Return at most 3 hints
+    return hints.length > 0 ? hints.slice(0, 3) : undefined;
+  }
+
   function normalizeToolError(
     toolName: string,
     payloadOrError: unknown,
@@ -190,6 +200,11 @@ export function createToolResultNormalizers({
       envelope.diagnostics = diagnostics;
     }
 
+    const errorHints = getHints(toolName, 'on_error');
+    if (errorHints) {
+      envelope._hints = errorHints;
+    }
+
     return {
       ...(existingResult ?? {}),
       content: [
@@ -219,6 +234,11 @@ export function createToolResultNormalizers({
       operation: typeof basePayload.operation === 'string' ? basePayload.operation : toolName,
       execution: inferExecutionMetadata(toolName, basePayload),
     };
+
+    const successHints = getHints(toolName, 'on_success');
+    if (successHints) {
+      envelope._hints = successHints;
+    }
 
     return {
       content: extraContent,

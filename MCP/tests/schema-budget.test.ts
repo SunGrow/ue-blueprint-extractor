@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { z } from 'zod';
 import { createBlueprintExtractorServer } from '../src/server-factory.js';
+import { CORE_TOOLS, WORKFLOW_SCOPE_IDS, ToolSurfaceManager } from '../src/tool-surface-manager.js';
 import { connectInMemoryServer } from './test-helpers.js';
 
 // Tools exempted from the 15-field budget (pre-existing tech debt, per TDD §3.6)
@@ -150,6 +151,26 @@ describe('schema complexity budget', () => {
     );
     const count = (content.match(/\.passthrough\(\)/g) || []).length;
     expect(count).toBe(0);
+  });
+
+  it('CORE_TOOLS has at most 13 entries', () => {
+    expect(CORE_TOOLS.size).toBeLessThanOrEqual(13);
+  });
+
+  it('no leaf scope exceeds 15 tools', () => {
+    // Parent scopes (like widget_authoring) expand to all sub-scopes and are excluded
+    const parentScopes = new Set(['widget_authoring']);
+    const violations: string[] = [];
+    for (const scopeId of WORKFLOW_SCOPE_IDS) {
+      if (parentScopes.has(scopeId)) continue;
+      const registeredToolMap = new Map();
+      const manager = new ToolSurfaceManager(registeredToolMap as any);
+      const scope = manager.getScopeDefinition(scopeId);
+      if (scope && scope.tools && scope.tools.length > 15) {
+        violations.push(`${scopeId}: ${scope.tools.length} tools (max 15)`);
+      }
+    }
+    expect(violations).toEqual([]);
   });
 });
 
