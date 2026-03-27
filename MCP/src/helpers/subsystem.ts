@@ -84,6 +84,7 @@ function extractFailureMessage(parsed: Record<string, unknown>): string {
   if (typeof parsed.message === 'string' && parsed.message.length > 0) return parsed.message;
   if (typeof parsed.errorMessage === 'string' && parsed.errorMessage.length > 0) return parsed.errorMessage;
   if (typeof parsed.error === 'string' && parsed.error.length > 0) return parsed.error;
+  if (typeof parsed.errorSummary === 'string' && parsed.errorSummary.length > 0) return parsed.errorSummary;
 
   if (Array.isArray(parsed.diagnostics) && parsed.diagnostics.length > 0) {
     const messages = parsed.diagnostics
