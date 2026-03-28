@@ -68,7 +68,7 @@ Connects to the editor at `127.0.0.1:30010` by default.
 ```bash
 claude mcp add -s user -t stdio blueprint-extractor \
   -e UE_REMOTE_CONTROL_PORT=30010 \
-  -- npx -y blueprint-extractor-mcp@latest
+  -- npx -y blueprint-extractor-mcp@6.0.5
 ```
 
 </td></tr>
@@ -77,7 +77,7 @@ claude mcp add -s user -t stdio blueprint-extractor \
 
 ```bash
 codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
-  blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
+  blueprint-extractor -- npx -y blueprint-extractor-mcp@6.0.5
 ```
 
 </td></tr>
