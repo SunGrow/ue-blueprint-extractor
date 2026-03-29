@@ -7,6 +7,12 @@
 
 #include <initializer_list>
 
+namespace PropertySerializerInternal
+{
+	static bool IsInstancedObjectProperty(const FObjectPropertyBase* ObjectProperty);
+	static TSharedPtr<FJsonObject> BuildInlineObjectJson(const UObject* Object);
+}
+
 TSharedPtr<FJsonValue> FPropertySerializer::SerializePropertyValue(const FProperty* Property, const void* ValuePtr)
 {
 	if (!Property || !ValuePtr)
@@ -193,6 +199,12 @@ TSharedPtr<FJsonValue> FPropertySerializer::SerializePropertyValue(const FProper
 	{
 		if (const UObject* ReferencedObject = ObjProp->GetObjectPropertyValue(ValuePtr))
 		{
+			if (PropertySerializerInternal::IsInstancedObjectProperty(ObjProp))
+			{
+				return MakeShared<FJsonValueObject>(
+					PropertySerializerInternal::BuildInlineObjectJson(ReferencedObject).ToSharedRef());
+			}
+
 			return MakeShared<FJsonValueString>(ReferencedObject->GetPathName());
 		}
 
@@ -319,6 +331,93 @@ TArray<TSharedPtr<FJsonValue>> FPropertySerializer::SerializeUserProperties(
 
 namespace PropertySerializerInternal
 {
+
+static bool IsInstancedObjectProperty(const FObjectPropertyBase* ObjectProperty)
+{
+	return ObjectProperty && ObjectProperty->HasAnyPropertyFlags(
+		CPF_InstancedReference | CPF_ContainsInstancedReference | CPF_ExportObject | CPF_PersistentInstance);
+}
+
+static TSharedPtr<FJsonObject> CloneJsonObjectWithoutInlineMetadata(const TSharedPtr<FJsonObject>& Source)
+{
+	if (!Source.IsValid())
+	{
+		return MakeShared<FJsonObject>();
+	}
+
+	const TArray<FString> SkippedKeys = {
+		TEXT("class"),
+		TEXT("classPath"),
+		TEXT("objectClass"),
+		TEXT("objectClassPath"),
+		TEXT("objectPath"),
+		TEXT("objectName"),
+		TEXT("name"),
+		TEXT("properties")
+	};
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Source->Values)
+	{
+		if (SkippedKeys.Contains(Pair.Key))
+		{
+			continue;
+		}
+
+		Result->SetField(Pair.Key, Pair.Value);
+	}
+
+	return Result;
+}
+
+static TSharedPtr<FJsonObject> BuildInlineObjectJson(const UObject* Object)
+{
+	if (!Object)
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FJsonObject> JsonObject = MakeShared<FJsonObject>();
+	JsonObject->SetStringField(TEXT("classPath"), Object->GetClass()->GetPathName());
+	JsonObject->SetStringField(TEXT("objectName"), Object->GetName());
+	JsonObject->SetObjectField(
+		TEXT("properties"),
+		FPropertySerializer::SerializePropertyOverridesAgainstBaseline(
+			Object,
+			Object->GetClass()->GetDefaultObject()));
+	return JsonObject;
+}
+
+static bool ParseInlineObjectClassPath(const TSharedPtr<FJsonObject>& JsonObject, FString& OutClassPath)
+{
+	if (!JsonObject.IsValid())
+	{
+		return false;
+	}
+
+	return JsonObject->TryGetStringField(TEXT("classPath"), OutClassPath)
+		|| JsonObject->TryGetStringField(TEXT("class"), OutClassPath)
+		|| JsonObject->TryGetStringField(TEXT("objectClassPath"), OutClassPath)
+		|| JsonObject->TryGetStringField(TEXT("objectClass"), OutClassPath);
+}
+
+static TSharedPtr<FJsonObject> GetInlineObjectProperties(const TSharedPtr<FJsonObject>& JsonObject)
+{
+	if (!JsonObject.IsValid())
+	{
+		return nullptr;
+	}
+
+	const TSharedPtr<FJsonObject>* NestedProperties = nullptr;
+	if (JsonObject->TryGetObjectField(TEXT("properties"), NestedProperties)
+		&& NestedProperties
+		&& NestedProperties->IsValid())
+	{
+		return *NestedProperties;
+	}
+
+	return CloneJsonObjectWithoutInlineMetadata(JsonObject);
+}
 
 static void AddError(TArray<FString>& OutErrors, const FString& Message)
 {
@@ -641,6 +740,7 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 
 static bool ApplyObjectReference(const FObjectPropertyBase* ObjectProperty,
                                  void* ValuePtr,
+                                 UObject* OwnerObject,
                                  const TSharedPtr<FJsonValue>& JsonValue,
                                  TArray<FString>& OutErrors,
                                  bool bValidationOnly)
@@ -657,6 +757,96 @@ static bool ApplyObjectReference(const FObjectPropertyBase* ObjectProperty,
 		{
 			ObjectProperty->SetObjectPropertyValue(ValuePtr, nullptr);
 		}
+		return true;
+	}
+
+	const TSharedPtr<FJsonObject> JsonObject = JsonValue->Type == EJson::Object
+		? JsonValue->AsObject()
+		: nullptr;
+	if (JsonObject.IsValid())
+	{
+		if (!IsInstancedObjectProperty(ObjectProperty))
+		{
+			AddError(OutErrors, FString::Printf(
+				TEXT("Property '%s': expected string asset path for non-instanced object reference"),
+				*ObjectProperty->GetName()));
+			return false;
+		}
+
+		FString ClassPath;
+		UClass* ResolvedClass = ObjectProperty->PropertyClass;
+		if (ParseInlineObjectClassPath(JsonObject, ClassPath) && !ClassPath.IsEmpty())
+		{
+			ResolvedClass = FAuthoringHelpers::ResolveClass(ClassPath, ObjectProperty->PropertyClass);
+			if (!ResolvedClass)
+			{
+				AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to load inline object class '%s'"),
+					*ObjectProperty->GetName(), *ClassPath));
+				return false;
+			}
+			if (!ResolvedClass->IsChildOf(ObjectProperty->PropertyClass))
+			{
+				AddError(OutErrors, FString::Printf(TEXT("Property '%s': inline object class '%s' is not compatible with '%s'"),
+					*ObjectProperty->GetName(), *ResolvedClass->GetPathName(), *ObjectProperty->PropertyClass->GetPathName()));
+				return false;
+			}
+		}
+
+		UObject* ExistingObject = ObjectProperty->GetObjectPropertyValue(ValuePtr);
+		if (ExistingObject && ExistingObject->GetClass() != ResolvedClass)
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': inline object class changes are not supported; clear the property before assigning '%s'"),
+				*ObjectProperty->GetName(), *ResolvedClass->GetPathName()));
+			return false;
+		}
+
+		UObject* WorkingObject = ExistingObject;
+		if (bValidationOnly)
+		{
+			if (ExistingObject)
+			{
+				WorkingObject = DuplicateObject<UObject>(ExistingObject, GetTransientPackage());
+			}
+			else
+			{
+				WorkingObject = NewObject<UObject>(GetTransientPackage(), ResolvedClass);
+			}
+		}
+		else if (!ExistingObject)
+		{
+			WorkingObject = NewObject<UObject>(
+				OwnerObject ? OwnerObject : GetTransientPackage(),
+				ResolvedClass,
+				ObjectProperty->GetFName(),
+				RF_Transactional);
+		}
+
+		if (!WorkingObject)
+		{
+			AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to create inline object instance"),
+				*ObjectProperty->GetName()));
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject> PropertiesJson = GetInlineObjectProperties(JsonObject);
+		TArray<FString> NestedErrors;
+		const bool bNestedSuccess = FPropertySerializer::ApplyPropertiesFromJson(
+			WorkingObject,
+			PropertiesJson,
+			NestedErrors,
+			bValidationOnly,
+			true);
+		OutErrors.Append(NestedErrors);
+		if (!bNestedSuccess)
+		{
+			return false;
+		}
+
+		if (!bValidationOnly)
+		{
+			ObjectProperty->SetObjectPropertyValue(ValuePtr, WorkingObject);
+		}
+
 		return true;
 	}
 
@@ -1108,7 +1298,7 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 
 	if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
 	{
-		const bool bObjectResult = ApplyObjectReference(ObjectProperty, WorkingPtr, JsonValue, OutErrors, bValidationOnly);
+		const bool bObjectResult = ApplyObjectReference(ObjectProperty, WorkingPtr, OwnerObject, JsonValue, OutErrors, bValidationOnly);
 		return bObjectResult;
 	}
 

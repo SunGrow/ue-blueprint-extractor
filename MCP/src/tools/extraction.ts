@@ -229,7 +229,10 @@ export function registerExtractionTools({
         if (compact) {
           parsed = compactMaterial(parsed) as Record<string, unknown>;
         }
-        return jsonToolSuccess(parsed);
+        return jsonToolSuccess({
+          ...parsed,
+          operation: 'extract_material',
+        });
       } catch (error) {
         return jsonToolError(error);
       }

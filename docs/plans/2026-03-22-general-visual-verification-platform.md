@@ -1,5 +1,7 @@
 # General Visual Verification Platform Follow-Up
 
+> Historical plan. Use `docs/CURRENT_STATUS.md`, `docs/testing.md`, and `docs/vision-verification-plan.md` for the current contract and validation state.
+
 ## Purpose
 
 This plan updates the visual verification roadmap before broader implementation work starts.

@@ -13,6 +13,23 @@ class UImage;
 class UNamedSlot;
 class UTextBlock;
 class UWidget;
+class UBlueprintExtractorFixtureInlineObject;
+
+UCLASS(BlueprintType, EditInlineNew, DefaultToInstanced)
+class BLUEPRINTEXTRACTORFIXTURE_API UBlueprintExtractorFixtureInlineObject : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fixture")
+	FString Label = TEXT("Inline");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fixture")
+	int32 Count = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Fixture")
+	TObjectPtr<UBlueprintExtractorFixtureInlineObject> Child = nullptr;
+};
 
 USTRUCT(BlueprintType)
 struct BLUEPRINTEXTRACTORFIXTURE_API FBlueprintExtractorFixtureRow : public FTableRowBase
@@ -31,6 +48,9 @@ class BLUEPRINTEXTRACTORFIXTURE_API UBlueprintExtractorFixtureDataAsset : public
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fixture")
 	int32 Count = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Instanced, Category = "Fixture")
+	TObjectPtr<UBlueprintExtractorFixtureInlineObject> InlineObject = nullptr;
 };
 
 UCLASS(BlueprintType)

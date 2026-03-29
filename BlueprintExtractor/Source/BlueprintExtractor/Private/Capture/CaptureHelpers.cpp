@@ -3,6 +3,7 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Editor.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/FileManager.h"
@@ -17,11 +18,13 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Slate/WidgetRenderer.h"
+#include "UnrealClient.h"
 #include "Blueprint/UserWidget.h"
 #include "Animation/WidgetAnimation.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
 #include "MovieScene.h"
 #include "WidgetBlueprint.h"
+#include "Slate/SceneViewport.h"
 
 namespace BlueprintExtractorCapture
 {
@@ -147,6 +150,14 @@ namespace
 		{
 			return TEXT("widget_motion_checkpoint");
 		}
+		if (CaptureType == TEXT("editor_screenshot"))
+		{
+			return TEXT("editor_tool_viewport");
+		}
+		if (CaptureType == TEXT("runtime_screenshot"))
+		{
+			return TEXT("pie_runtime");
+		}
 		if (CaptureType == TEXT("widget_preview") || CaptureType == TEXT("comparison_diff"))
 		{
 			return TEXT("editor_offscreen");
@@ -180,6 +191,18 @@ namespace
 			Context->SetStringField(TEXT("contextType"), TEXT("widget_blueprint"));
 			Context->SetStringField(TEXT("renderLane"), TEXT("offscreen"));
 		}
+		else if (Metadata.Surface == TEXT("editor_tool_viewport"))
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("editor_viewport"));
+			Context->SetStringField(TEXT("renderLane"), TEXT("viewport"));
+			Context->SetBoolField(TEXT("isPlayingInEditor"), false);
+		}
+		else if (Metadata.Surface == TEXT("pie_runtime"))
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("runtime_viewport"));
+			Context->SetStringField(TEXT("renderLane"), TEXT("viewport"));
+			Context->SetBoolField(TEXT("isPlayingInEditor"), true);
+		}
 		else
 		{
 			Context->SetStringField(TEXT("contextType"), TEXT("capture"));
@@ -191,9 +214,22 @@ namespace
 	TSharedPtr<FJsonObject> BuildDefaultCameraContext(const FBlueprintExtractorCaptureMetadata& Metadata)
 	{
 		const TSharedPtr<FJsonObject> Context = MakeShared<FJsonObject>();
-		Context->SetStringField(TEXT("contextType"), Metadata.Surface == TEXT("editor_offscreen")
-			? TEXT("offscreen_widget")
-			: TEXT("capture_frame"));
+		if (Metadata.Surface == TEXT("editor_offscreen"))
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("offscreen_widget"));
+		}
+		else if (Metadata.Surface == TEXT("editor_tool_viewport"))
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("editor_viewport"));
+		}
+		else if (Metadata.Surface == TEXT("pie_runtime"))
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("runtime_viewport"));
+		}
+		else
+		{
+			Context->SetStringField(TEXT("contextType"), TEXT("capture_frame"));
+		}
 		if (Metadata.Width > 0)
 		{
 			Context->SetNumberField(TEXT("width"), Metadata.Width);
@@ -575,6 +611,11 @@ namespace
 	}
 }
 
+bool CaptureEditorScreenshot(FBlueprintExtractorCaptureMetadata& OutMetadata, FString& OutError)
+{
+	return CaptureEditorScreenshot(TEXT("editor"), OutMetadata, OutError);
+}
+
 TSharedPtr<FJsonObject> CaptureMetadataToJson(const FBlueprintExtractorCaptureMetadata& Metadata)
 {
 	FBlueprintExtractorCaptureMetadata Normalized = Metadata;
@@ -635,8 +676,98 @@ TSharedPtr<FJsonObject> CaptureMetadataToJson(const FBlueprintExtractorCaptureMe
 	{
 		Result->SetObjectField(TEXT("comparison"), Normalized.Comparison);
 	}
-	return Result;
-}
+		return Result;
+	}
+
+	bool CaptureViewportImage(FViewport* Viewport, FImage& OutImage, FString& OutError)
+	{
+		if (!Viewport)
+		{
+			OutError = TEXT("Viewport is null.");
+			return false;
+		}
+
+		const FIntPoint Size = Viewport->GetSizeXY();
+		if (Size.X <= 0 || Size.Y <= 0)
+		{
+			OutError = TEXT("Viewport has no drawable size.");
+			return false;
+		}
+
+		TArray<FColor> Pixels;
+		const FIntRect CaptureRect(0, 0, Size.X, Size.Y);
+		FReadSurfaceDataFlags ReadFlags(RCM_UNorm);
+		ReadFlags.SetLinearToGamma(true);
+		if (!Viewport->ReadPixels(Pixels, ReadFlags, CaptureRect))
+		{
+			OutError = TEXT("Failed to read pixels from the viewport.");
+			return false;
+		}
+
+		if (Pixels.Num() != Size.X * Size.Y)
+		{
+			OutError = TEXT("Viewport pixel count did not match the reported size.");
+			return false;
+		}
+
+		OutImage = FImage(Size.X, Size.Y, ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+		TArrayView64<FColor> DestPixels = OutImage.AsBGRA8();
+		for (int64 Index = 0; Index < Pixels.Num(); ++Index)
+		{
+			DestPixels[Index] = Pixels[Index];
+		}
+
+		return true;
+	}
+
+	bool CaptureViewportScreenshot(FViewport* Viewport,
+	                               const FString& CaptureName,
+	                               const FString& CaptureType,
+	                               const FString& Surface,
+	                               FBlueprintExtractorCaptureMetadata& OutMetadata,
+	                               FString& OutError)
+	{
+		if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
+		{
+			OutError = TEXT("Viewport screenshot capture requires rendering to be enabled. Avoid -NullRHI for visual verification runs.");
+			return false;
+		}
+
+		FImage CapturedImage;
+		if (!CaptureViewportImage(Viewport, CapturedImage, OutError))
+		{
+			return false;
+		}
+
+		OutMetadata.CaptureId = MakeCaptureId(CaptureName, CaptureType);
+		OutMetadata.CaptureType = CaptureType;
+		OutMetadata.Surface = Surface;
+		OutMetadata.AssetPath = FString::Printf(TEXT("%s://%s"), *CaptureType, *FPaths::MakeValidFileName(CaptureName));
+		OutMetadata.AssetPaths = { OutMetadata.AssetPath };
+		OutMetadata.ScenarioId = FString::Printf(TEXT("%s:%s"), *CaptureType, *OutMetadata.AssetPath);
+		OutMetadata.CaptureDirectory = BuildCaptureDirectory(OutMetadata.CaptureId);
+		OutMetadata.ArtifactPath = BuildCaptureArtifactPath(OutMetadata.CaptureId);
+		OutMetadata.MetadataPath = BuildCaptureMetadataPath(OutMetadata.CaptureId);
+		OutMetadata.Width = CapturedImage.SizeX;
+		OutMetadata.Height = CapturedImage.SizeY;
+		OutMetadata.CreatedAt = FDateTime::UtcNow().ToIso8601();
+		OutMetadata.ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+		OutMetadata.WorldContext = BuildDefaultWorldContext(OutMetadata);
+		OutMetadata.CameraContext = BuildDefaultCameraContext(OutMetadata);
+
+		if (!EnsureDirectory(OutMetadata.CaptureDirectory, OutError))
+		{
+			return false;
+		}
+
+		if (!SaveImageAsPng(OutMetadata.ArtifactPath, CapturedImage, OutError))
+		{
+			return false;
+		}
+
+		OutMetadata.FileSizeBytes = FMath::Max<int64>(0, IFileManager::Get().FileSize(*OutMetadata.ArtifactPath));
+		return WriteCaptureMetadata(OutMetadata, OutError);
+	}
 
 TSharedPtr<FJsonObject> CaptureCompareResultToJson(const FBlueprintExtractorCaptureCompareResult& Result)
 {
@@ -912,6 +1043,52 @@ bool CaptureWidgetPreview(UWidgetBlueprint* WidgetBlueprint,
 
 	OutMetadata.FileSizeBytes = FMath::Max<int64>(0, IFileManager::Get().FileSize(*OutMetadata.ArtifactPath));
 	return WriteCaptureMetadata(OutMetadata, OutError);
+}
+
+bool CaptureEditorScreenshot(const FString& CaptureName,
+	FBlueprintExtractorCaptureMetadata& OutMetadata,
+	FString& OutError)
+{
+	if (!GEditor)
+	{
+		OutError = TEXT("Editor is not available.");
+		return false;
+	}
+
+	if (GEditor->PlayWorld)
+	{
+		OutError = TEXT("Editor screenshot capture requires PIE to be inactive.");
+		return false;
+	}
+
+	return CaptureViewportScreenshot(
+		GEditor->GetActiveViewport(),
+		CaptureName,
+		TEXT("editor_screenshot"),
+		TEXT("editor_tool_viewport"),
+		OutMetadata,
+		OutError);
+}
+
+bool CaptureRuntimeScreenshot(const FString& CaptureName,
+	FBlueprintExtractorCaptureMetadata& OutMetadata,
+	FString& OutError)
+{
+	if (!GEditor || !GEditor->PlayWorld)
+	{
+		OutError = TEXT("Runtime screenshot capture requires an active PIE session.");
+		return false;
+	}
+
+	UGameViewportClient* GameViewportClient = GEditor->PlayWorld->GetGameViewport();
+	FSceneViewport* Viewport = GameViewportClient ? GameViewportClient->GetGameViewport() : nullptr;
+	return CaptureViewportScreenshot(
+		Viewport,
+		CaptureName,
+		TEXT("runtime_screenshot"),
+		TEXT("pie_runtime"),
+		OutMetadata,
+		OutError);
 }
 
 bool CompareCaptureToReference(const FString& CaptureIdOrPath,

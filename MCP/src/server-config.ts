@@ -4,13 +4,13 @@ const SUBSYSTEM_UNAVAILABLE_MESSAGE_FRAGMENT = 'BlueprintExtractor subsystem not
 export const EDITOR_POLL_INTERVAL_MS = 1_000;
 
 export const serverInstructions = [
-  'Blueprint Extractor MCP v5 uses workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
+  'Blueprint Extractor MCP uses a v2 public contract with workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
   // Tool discovery
   'Only ~13 core tools are visible by default. Use activate_workflow_scope to load specialized tool families: widget_authoring (or sub-scopes: widget_authoring_structure, widget_authoring_visual, widget_verification), material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification.',
   'Use find_and_extract for search+extract in one call (activate any authoring scope to access it). Use search_assets when you only need to locate assets.',
   'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance. This may also auto-activate the relevant workflow scope.',
   // Deferred tool directory (tools available via activate_workflow_scope)
-  'Deferred tool families — widget_authoring_structure: create/replace/patch/insert/remove/move/wrap widgets. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create/modify material, material_graph_operation, material instances. blueprint_authoring: create/modify blueprint members and graphs, trigger_live_coding. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. automation_testing: run/get/list automation tests, project automation context. verification: widget captures and comparisons.',
+  'Deferred tool families — widget_authoring_structure: create/replace/patch/insert/remove/move/wrap widgets. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create/modify material, material_graph_operation, material instances. blueprint_authoring: create/modify blueprint members and graphs, trigger_live_coding. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. automation_testing: run/get/list automation tests, project automation context, and PIE lifecycle control. verification: widget captures, editor screenshots, runtime screenshots, and comparisons.',
   // Extraction
   'All extract_* tools default to compact: true. Pass compact: false for verbose output.',
   // Search
@@ -36,6 +36,7 @@ export const serverInstructions = [
   'Motion support includes dedicated widget animation authoring for render_opacity, render_transform translation/scale/angle, and color_and_opacity tracks. Treat broader arbitrary MovieScene track synthesis as deferred_to_future or unsupported when it exceeds that subset.',
   // Testing
   'Use run_automation_tests for gameplay or runtime verification. If no Automation Spec or Functional Test exists for a mechanic, report verification as partial instead of inferring success from structure alone.',
+  'Use capture_runtime_screenshot when a runtime verification lane already exports screenshot artifacts through automation. Use capture_editor_screenshot for the active editor viewport when a rendered editor reference is needed.',
   // Results format
   'Successful tool results use structuredContent as the canonical JSON payload. Recoverable execution failures return isError=true with code, message, recoverable, and next_steps.',
 ].join('\n');
@@ -49,6 +50,7 @@ export const taskAwareTools = new Set([
   'get_import_job',
   'list_import_jobs',
   'run_automation_tests',
+  'capture_runtime_screenshot',
   'get_automation_test_run',
   'list_automation_test_runs',
 ]);
@@ -165,6 +167,9 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['trigger_live_coding', 'editor_only'],
   ['sync_project_code', 'editor_only'],
   ['wait_for_editor', 'editor_only'],
+  ['start_pie', 'editor_only'],
+  ['stop_pie', 'editor_only'],
+  ['relaunch_pie', 'editor_only'],
 
   // ── Import (editor_only) ──
   ['import_assets', 'editor_only'],
@@ -174,6 +179,8 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
 
   // ── Verification / captures (editor_only) ──
   ['capture_widget_preview', 'editor_only'],
+  ['capture_editor_screenshot', 'editor_only'],
+  ['capture_runtime_screenshot', 'editor_only'],
   ['capture_widget_motion_checkpoints', 'editor_only'],
   ['compare_capture_to_reference', 'editor_only'],
   ['compare_motion_capture_bundle', 'editor_only'],

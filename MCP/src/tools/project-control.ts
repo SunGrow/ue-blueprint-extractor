@@ -118,6 +118,90 @@ export function registerProjectControlTools({
   );
 
   server.registerTool(
+    'start_pie',
+    {
+      title: 'Start PIE',
+      description: 'Request a Play-In-Editor session from the active editor.',
+      inputSchema: {
+        simulate: z.boolean().default(false).describe(
+          'When true, start Simulate-In-Editor instead of Play-In-Editor.',
+        ),
+      },
+      annotations: {
+        title: 'Start PIE',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ simulate }) => {
+      try {
+        const parsed = await callSubsystemJson('StartPIE', {
+          bSimulateInEditor: simulate,
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'stop_pie',
+    {
+      title: 'Stop PIE',
+      description: 'Stop the current Play-In-Editor session if one is active.',
+      inputSchema: {},
+      annotations: {
+        title: 'Stop PIE',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        const parsed = await callSubsystemJson('StopPIE', {});
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'relaunch_pie',
+    {
+      title: 'Relaunch PIE',
+      description: 'Restart the current Play-In-Editor session by stopping it and scheduling a fresh launch.',
+      inputSchema: {
+        simulate: z.boolean().default(false).describe(
+          'When true, relaunch into Simulate-In-Editor instead of Play-In-Editor.',
+        ),
+      },
+      annotations: {
+        title: 'Relaunch PIE',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ simulate }) => {
+      try {
+        const parsed = await callSubsystemJson('RelaunchPIE', {
+          bSimulateInEditor: simulate,
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
     'wait_for_editor',
     {
       title: 'Wait For Editor',

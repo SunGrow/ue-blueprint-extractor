@@ -1,10 +1,10 @@
 # Testing
 
-`ue-blueprint-extractor` now has three test layers:
+`ue-blueprint-extractor` uses three test layers:
 
-1. UE editor automation inside the plugin under `BlueprintExtractor/Source/BlueprintExtractor/Private/Tests`.
-2. MCP contract and transport tests under `MCP/tests` with `vitest`.
-3. A gated live UE-to-MCP smoke path that targets a real editor with Remote Control enabled.
+1. MCP contract and transport tests under `MCP/tests`.
+2. UE editor automation in `BlueprintExtractor/Source/BlueprintExtractor/Private/Tests`.
+3. A gated live UE-to-MCP smoke path against a real editor with Remote Control enabled.
 
 ## MCP Tests
 
@@ -14,44 +14,25 @@ From the repository root:
 pwsh ./scripts/test-mcp.ps1
 ```
 
-Optional flags:
+Useful flags:
 
-- `-Install`: run `npm install` in `MCP/` before the test pass.
-- `-Live`: run the gated live MCP smoke suite (`npm run test:live`) instead of the default unit + stdio pass.
+- `-Install`: run `npm install` in `MCP/` first.
+- `-Live`: run the gated live MCP smoke suite instead of the default unit + stdio pass.
 - `-PackSmoke`: run `npm run test:pack-smoke` after the main MCP suite.
 - `-PublishDryRun`: run `npm publish --dry-run` after the main MCP suite.
-- Optional fixture extraction smoke paths for `-Live`:
-  `BLUEPRINT_EXTRACTOR_TEST_BLUEPRINT`, `BLUEPRINT_EXTRACTOR_TEST_WIDGET_BLUEPRINT`, `BLUEPRINT_EXTRACTOR_TEST_STATE_TREE`, `BLUEPRINT_EXTRACTOR_TEST_BEHAVIOR_TREE`, `BLUEPRINT_EXTRACTOR_TEST_BLACKBOARD`, `BLUEPRINT_EXTRACTOR_TEST_DATA_ASSET`, `BLUEPRINT_EXTRACTOR_TEST_DATA_TABLE`, `BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_STRUCT`, `BLUEPRINT_EXTRACTOR_TEST_USER_DEFINED_ENUM`, `BLUEPRINT_EXTRACTOR_TEST_CURVE`, `BLUEPRINT_EXTRACTOR_TEST_CURVE_TABLE`, `BLUEPRINT_EXTRACTOR_TEST_MATERIAL`, `BLUEPRINT_EXTRACTOR_TEST_MATERIAL_FUNCTION`, `BLUEPRINT_EXTRACTOR_TEST_MATERIAL_INSTANCE`, `BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE`, `BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE`, `BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE`.
 
-The default MCP run executes:
+The default MCP path covers:
 
-- `tests/server-contract.test.ts`: in-memory contract checks against the exported `createBlueprintExtractorServer(...)`.
-  Covers static resources, generated example validation, prompt registration, compact widget/material extraction, widget-path mutation routing, host-side project-control tools, and structured error behavior.
-- `tests/ue-client.test.ts`: HTTP-layer `UEClient` coverage with a local mock Remote Control server.
-- `tests/project-controller.test.ts`: host-side build command selection, changed-path classification, editor launch, and disconnect/reconnect polling.
-- `tests/automation-controller.test.ts`: host-side async automation-run orchestration, artifact indexing, timeout handling, and `null_rhi` command selection.
-- `tests/stdio.integration.test.ts`: real stdio server smoke test against the built `dist/index.js`, including the material graph guidance resource plus compact material read/write transport coverage.
-- `tests/pack-smoke.mjs`: `npm pack` plus `npx blueprint-extractor-mcp` startup smoke from the produced tarball.
-- `tests/live.e2e.test.ts`: gated end-to-end import and extraction smoke against a real editor. It imports a texture through a local HTTP fixture server, verifies header forwarding, imports a local mesh fixture, exercises the composable v2 material tools, round-trips dedicated Enhanced Input assets, polls job status, and explicitly saves the imported and authored assets.
-
-Live MCP smoke requires a running editor with the plugin loaded. Set:
-
-- `BLUEPRINT_EXTRACTOR_LIVE_E2E=1`
-- `UE_REMOTE_CONTROL_HOST`
-- `UE_REMOTE_CONTROL_PORT`
-- optionally `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH` for a deterministic subsystem path override
-- optionally `UE_ENGINE_ROOT`, `UE_PROJECT_PATH`, and `UE_PROJECT_TARGET` / `UE_EDITOR_TARGET` for host-side `compile_project_code` and `sync_project_code`
-
-The narrowed project-code path is intentionally explicit:
-
-- `sync_project_code` requires `changed_paths`
-- generic Live Coding `Failure` is returned directly to the caller
-- automatic fallback is only used for deterministic preconditions such as unsupported, unavailable, or `NoChanges` Live Coding
+- contract registration, resource templates, prompts, and output schemas
+- scope activation and tool-surface management
+- project-control tools including `get_project_automation_context`, `start_pie`, `stop_pie`, and `relaunch_pie`
+- verification tools including `capture_widget_preview`, `capture_editor_screenshot`, `capture_runtime_screenshot`, and comparison flows
+- version/count drift, static resources, example catalogs, and pack/publish gates
 
 ## UE Automation
 
-The checked-in fixture shell lives at `tests/fixtures/BlueprintExtractorFixture/`, with the short project file `BPXFixture.uproject`.
-The fixture intentionally does not commit a plugin copy; `scripts/test-ue.*` stage the fixture to a temp directory and sync the local `BlueprintExtractor/` plugin into `Plugins/BlueprintExtractor` there.
+The checked-in fixture shell lives under `tests/fixtures/BlueprintExtractorFixture/` with the project file `BPXFixture.uproject`.
+The fixture intentionally does not commit a plugin copy; `scripts/test-ue.ps1` and `scripts/test-ue.sh` stage the fixture to a temp directory and sync the local `BlueprintExtractor/` plugin into `Plugins/BlueprintExtractor` there.
 
 Windows:
 
@@ -67,57 +48,123 @@ macOS/Linux:
 
 Useful options:
 
-- `-BuildPlugin` or `--build-plugin`: run `RunUAT BuildPlugin` as a packaging gate before the automation run.
-- `-SkipBuildProject` or `--skip-build-project`: reuse an existing staged fixture build when `Binaries/<platform>/<ProjectName>Editor.target` is already present. On a fresh stage, the runner falls back to building the fixture editor target.
-- `-AutomationFilter` or `--automation-filter`: override the default `BlueprintExtractor` test filter.
-- `-NoNullRHI` or `--no-null-rhi`: run with rendering enabled so visual capture tests and screenshot-based verification can execute. The default runner keeps `-NullRHI` for faster logic-only coverage.
+- `-BuildPlugin` / `--build-plugin`: run `RunUAT BuildPlugin` before the automation run.
+- `-SkipBuildProject` / `--skip-build-project`: reuse an existing staged fixture build when the staged editor target already exists.
+- `-AutomationFilter` / `--automation-filter`: override the default filter. The validated default is `BlueprintExtractor`.
+- `-NoNullRHI` / `--no-null-rhi`: enable rendered verification lanes.
+- `-AllowSoftwareRendering`: Windows-only helper for rendered lanes on machines where software rendering is needed.
 
 The UE runner:
 
 1. stages the fixture project into a temp directory,
-2. syncs `BlueprintExtractor/` into the staged fixture's `Plugins/BlueprintExtractor`,
+2. syncs `BlueprintExtractor/` into the staged fixture,
 3. optionally runs `BuildPlugin`,
 4. builds `BPXFixtureEditor`,
-5. runs headless editor automation via `UnrealEditor-Cmd`.
+5. runs automation through `UnrealEditor-Cmd`.
 
-The current automation spec focuses on subsystem-level create/modify/extract/save workflows under `/Game/__GeneratedTests__`, explicit-save semantics, native `BindWidget` reconciliation, compact widget extraction, degraded widget extraction recovery, structural widget mutations, non-variable widget selector coverage, batched widget class-default patches, override-coupled widget properties such as `bOverride_*`, classic material graph authoring, material-instance parity, widget preview capture/diff verification, and CommonUI widget/style round-trips.
+### Lane Split
 
-Use the visual filter without `-NullRHI` when you need to exercise the capture lane directly, for example:
+Two automation lanes are part of the current contract:
+
+- Headless/default lane:
+  - uses `-NullRHI`
+  - default filter is `BlueprintExtractor`
+  - covers extraction, create/modify/save flows, blueprint graph authoring, state trees, montages, sequences, data assets/data tables, inline instanced DataAsset graphs, property diagnostics, compile-failure extraction, CommonUI logical round-trips, and project-control smoke
+- Rendered verification lane:
+  - uses `-NoNullRHI`
+  - can add `-AllowSoftwareRendering` on Windows when needed
+  - covers screenshot-backed or render-dependent flows such as `BlueprintExtractor.ProjectControl.PIEAndScreenshots`, `BlueprintExtractor.Authoring.WidgetCaptureVerification`, and `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
+
+Screenshot assertions and rendered comparison work belong in the rendered lane, not the default `-NullRHI` lane.
+
+### Example Commands
+
+Headless full pass:
 
 ```powershell
-pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.7" -AutomationFilter "BlueprintExtractor.Authoring.WidgetCaptureVerification" -NoNullRHI
+pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.7"
 ```
+
+Rendered PIE/editor/runtime screenshot lane:
+
+```powershell
+pwsh ./scripts/test-ue.ps1 `
+  -EngineRoot "C:\Program Files\Epic Games\UE_5.7" `
+  -AutomationFilter "BlueprintExtractor.ProjectControl.PIEAndScreenshots" `
+  -NoNullRHI `
+  -AllowSoftwareRendering
+```
+
+Rendered widget capture lane:
+
+```powershell
+pwsh ./scripts/test-ue.ps1 `
+  -EngineRoot "C:\Program Files\Epic Games\UE_5.7" `
+  -AutomationFilter "BlueprintExtractor.Authoring.WidgetCaptureVerification" `
+  -NoNullRHI `
+  -AllowSoftwareRendering
+```
+
+## Live MCP Smoke
+
+From `MCP/`:
+
+```powershell
+cd MCP
+$env:BLUEPRINT_EXTRACTOR_LIVE_E2E = "1"
+npm run test:live
+```
+
+Live smoke requires a running editor with the plugin loaded. Set:
+
+- `UE_REMOTE_CONTROL_HOST`
+- `UE_REMOTE_CONTROL_PORT`
+- optionally `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH`
+- optionally `UE_ENGINE_ROOT`, `UE_PROJECT_PATH`, and `UE_PROJECT_TARGET` / `UE_EDITOR_TARGET`
+
+The live suite covers real stdio startup, widget authoring, material authoring, import jobs, Enhanced Input round-trips, explicit save flows, and project-control round-trips.
+
+## Validation Snapshot
+
+Validated on `2026-03-28`:
+
+- MCP:
+  - `cd MCP && npm test`
+  - `cd MCP && npm run test:pack-smoke`
+  - `cd MCP && npm run test:publish-gate`
+- UE 5.6 headless:
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.6"`
+  - result: `succeeded=9`, `succeededWithWarnings=17`, `failed=0`
+- UE 5.7 headless:
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.7"`
+  - result: `succeeded=9`, `succeededWithWarnings=17`, `failed=0`
+- UE 5.6 rendered targeted:
+  - `BlueprintExtractor.ProjectControl.PIEAndScreenshots`
+  - `BlueprintExtractor.Authoring.WidgetCaptureVerification`
+  - `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
+  - all passed with `-NoNullRHI -AllowSoftwareRendering`
+- UE 5.7 rendered targeted:
+  - `BlueprintExtractor.ProjectControl.PIEAndScreenshots` passed with `succeeded=1`, `failed=0`
+  - `BlueprintExtractor.Authoring.WidgetCaptureVerification` passed as `Success` with warning-only report output
+  - `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip` passed as `Success` with warning-only report output
+
+Known rendered-lane warnings:
+
+- `WidgetCaptureVerification` and `CommonUIButtonStyleRoundTrip` can emit non-fatal `LogUObjectGlobals` class lookup warnings on this machine while still returning successful automation results.
 
 ## CI Shape
 
-Recommended CI split:
+Recommended split:
 
 - PR gate:
   - `pwsh ./scripts/test-mcp.ps1 -PackSmoke -PublishDryRun`
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT>`
-  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -BuildPlugin -AutomationFilter "BlueprintExtractor.Authoring.CommonUIWidgetRoundTrip"`
-  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -BuildPlugin -AutomationFilter "BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip"`
+- Rendered validation:
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.ProjectControl.PIEAndScreenshots" -NoNullRHI`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.Authoring.WidgetCaptureVerification" -NoNullRHI`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip" -NoNullRHI`
 - Nightly or release:
-  - repeat the PR gate on UE 5.6 and 5.7
-  - add the live MCP smoke pass with `BLUEPRINT_EXTRACTOR_LIVE_E2E=1`
+  - repeat the same split on UE 5.6 and UE 5.7
+  - add the gated live MCP smoke path
 
-The repository now includes:
-
-- `.github/workflows/ci.yml` for PR and push gates
-- `.github/workflows/nightly.yml` for scheduled or manual nightly runs
-
-The UE workflow lanes are intentionally opt-in so public pushes do not queue forever when no self-hosted UE runner is online.
-
-- `ci.yml`
-  - MCP gates always run.
-  - UE 5.6 runs on push/PR only when `UE_5_6_CI_ENABLED=true` and `UE_5_6_ROOT` is set.
-  - UE 5.7 runs on push/PR only when `UE_5_7_CI_ENABLED=true` and `UE_5_7_ROOT` is set.
-  - Manual dispatch can force either UE lane with the `run_ue_5_6` / `run_ue_5_7` inputs.
-- `nightly.yml`
-  - scheduled UE jobs are also opt-in through the same repo vars
-  - live MCP runs only when `UE_LIVE_CI_ENABLED=true` and Remote Control vars are set
-  - manual dispatch can force UE or live lanes with workflow inputs
-
-When enabled, the UE lanes assume self-hosted Windows runners labeled `ue-5.6`, `ue-5.7`, and `ue-live`, plus repository variables such as `UE_5_6_ROOT`, `UE_5_7_ROOT`, `UE_REMOTE_CONTROL_HOST`, and `UE_REMOTE_CONTROL_PORT`.
-
-Do not run `install-mcp.*`, `install-codex-mcp.*`, `claude mcp add`, or `codex mcp add` in shared CI. Those flows mutate user-global client configuration and should stay manual or isolated-config only.
+Do not run `install-mcp.*`, `install-codex-mcp.*`, `claude mcp add`, or `codex mcp add` in shared CI. Those commands mutate user-global client configuration.

@@ -4,23 +4,32 @@
 #include "Authoring/AuthoringHelpers.h"
 #include "PropertySerializer.h"
 
+#include "Animation/AnimBlueprint.h"
+#include "Animation/AnimInstance.h"
 #include "AssetRegistry/AssetRegistryModule.h"
-#include "EdGraphSchema_K2_Actions.h"
+#include "BaseWidgetBlueprint.h"
 #include "Components/ActorComponent.h"
+#include "Components/Widget.h"
+#include "EdGraphSchema_K2_Actions.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
+#include "Editor.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "Engine/LevelScriptActor.h"
 #include "Engine/MemberReference.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/InheritableComponentHandler.h"
 #include "Engine/SimpleConstructionScript.h"
+#include "GameFramework/Actor.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_ExecutionSequence.h"
 #include "K2Node_FunctionEntry.h"
+#include "KismetCompilerModule.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
+#include "Modules/ModuleManager.h"
 #include "PackageTools.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
@@ -187,6 +196,49 @@ static bool ParseFunctionName(const TSharedPtr<FJsonObject>& FunctionObject,
 		     || FunctionObject->TryGetStringField(TEXT("graphName"), OutFunctionName)
 		     || FunctionObject->TryGetStringField(TEXT("name"), OutFunctionName))
 		    && !OutFunctionName.IsEmpty());
+}
+
+static bool ParseParentClassPath(const TSharedPtr<FJsonObject>& Payload,
+                                 FString& OutParentClassPath)
+{
+	return Payload.IsValid()
+		&& ((Payload->TryGetStringField(TEXT("parentClassPath"), OutParentClassPath)
+		     || Payload->TryGetStringField(TEXT("parent_class_path"), OutParentClassPath))
+		    && !OutParentClassPath.IsEmpty());
+}
+
+static bool IsClassChildOfAny(const UClass* CandidateClass,
+                              const TSet<const UClass*>& ClassSet)
+{
+	if (!CandidateClass)
+	{
+		return false;
+	}
+
+	for (const UClass* Class : ClassSet)
+	{
+		if (Class && CandidateClass->IsChildOf(Class))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool IsClassAllowedByReparentRules(const UClass* CandidateClass,
+                                          const TSet<const UClass*>& AllowedChildrenOfClasses,
+                                          const TSet<const UClass*>& DisallowedChildrenOfClasses)
+{
+	if (!CandidateClass)
+	{
+		return false;
+	}
+
+	const bool bMatchesAllowedClasses = AllowedChildrenOfClasses.Num() == 0
+		|| IsClassChildOfAny(CandidateClass, AllowedChildrenOfClasses);
+	return bMatchesAllowedClasses
+		&& !IsClassChildOfAny(CandidateClass, DisallowedChildrenOfClasses);
 }
 
 static int32 FindVariableIndex(const UBlueprint* Blueprint, const FName VariableName)
@@ -1553,42 +1605,294 @@ static bool ApplyClassDefaults(UBlueprint* Blueprint,
 		return false;
 	}
 
-	// Pre-validate all property paths exist on the CDO before mutation.
-	// This catches typos and nested-object-where-string-expected errors
-	// before DuplicateObject or property application triggers a crash.
-	bool bPreValidationPassed = true;
-	for (const auto& Pair : DefaultsObject->Values)
-	{
-		// Use TFieldIterator to walk the full class hierarchy, consistent with
-		// how ApplyPropertiesFromJson resolves properties via FindPropertyOnClassHierarchy.
-		FProperty* Prop = nullptr;
-		for (TFieldIterator<FProperty> It(DefaultTarget->GetClass()); It; ++It)
-		{
-			if (It->GetFName() == FName(*Pair.Key))
-			{
-				Prop = *It;
-				break;
-			}
-		}
-		if (!Prop)
-		{
-			OutErrors.Add(FString::Printf(
-				TEXT("Property '%s' not found on class '%s'. Check spelling or use a string path for asset/component references."),
-				*Pair.Key, *DefaultTarget->GetClass()->GetName()));
-			bPreValidationPassed = false;
-		}
-	}
-	if (!bPreValidationPassed)
+	TArray<FString> ValidationErrors;
+	const bool bValidationSuccess = FPropertySerializer::ApplyPropertiesFromJson(
+		DefaultTarget,
+		DefaultsObject,
+		ValidationErrors,
+		true,
+		true);
+	OutErrors.Append(ValidationErrors);
+	if (!bValidationSuccess)
 	{
 		return false;
+	}
+
+	if (bValidationOnly)
+	{
+		return true;
 	}
 
 	return FPropertySerializer::ApplyPropertiesFromJson(
 		DefaultTarget,
 		DefaultsObject,
 		OutErrors,
-		bValidationOnly,
+		false,
 		true);
+}
+
+static bool ValidateBlueprintReparentTarget(UBlueprint* Blueprint,
+                                            UClass* NewParentClass,
+                                            TArray<FString>& OutErrors)
+{
+	if (!Blueprint)
+	{
+		OutErrors.Add(TEXT("Blueprint is null."));
+		return false;
+	}
+
+	if (!NewParentClass)
+	{
+		OutErrors.Add(TEXT("reparent requires a valid parent class."));
+		return false;
+	}
+
+	if (!FKismetEditorUtilities::CanCreateBlueprintOfClass(NewParentClass))
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("Class '%s' cannot be used as a Blueprint parent."),
+			*NewParentClass->GetPathName()));
+		return false;
+	}
+
+	const bool bIsActor = Blueprint->ParentClass
+		&& Blueprint->ParentClass->IsChildOf(AActor::StaticClass());
+	const bool bIsAnimBlueprint = Blueprint->IsA(UAnimBlueprint::StaticClass());
+	const bool bIsLevelScriptActor = Blueprint->ParentClass
+		&& Blueprint->ParentClass->IsChildOf(ALevelScriptActor::StaticClass());
+	const bool bIsComponentBlueprint = Blueprint->ParentClass
+		&& Blueprint->ParentClass->IsChildOf(UActorComponent::StaticClass());
+	const bool bIsEditorOnlyBlueprint = FBlueprintEditorUtils::IsEditorUtilityBlueprint(Blueprint);
+	const bool bIsWidgetBlueprint = Blueprint->IsA(UBaseWidgetBlueprint::StaticClass());
+
+	if (bIsLevelScriptActor)
+	{
+		if (!NewParentClass->IsChildOf(ALevelScriptActor::StaticClass()))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is not compatible with LevelScript Blueprints."),
+				*NewParentClass->GetPathName()));
+			return false;
+		}
+
+		if (!NewParentClass->HasAnyClassFlags(CLASS_Native))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is not a native LevelScriptActor parent."),
+				*NewParentClass->GetPathName()));
+			return false;
+		}
+	}
+	else if (bIsActor)
+	{
+		if (!NewParentClass->IsChildOf(AActor::StaticClass())
+			|| NewParentClass->IsChildOf(ALevelScriptActor::StaticClass()))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is not compatible with Actor-based Blueprints."),
+				*NewParentClass->GetPathName()));
+			return false;
+		}
+	}
+	else if (bIsAnimBlueprint)
+	{
+		if (!NewParentClass->IsChildOf(UAnimInstance::StaticClass()))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is not compatible with Anim Blueprints."),
+				*NewParentClass->GetPathName()));
+			return false;
+		}
+	}
+	else if (bIsComponentBlueprint)
+	{
+		if (!NewParentClass->IsChildOf(UActorComponent::StaticClass()))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is not compatible with Component Blueprints."),
+				*NewParentClass->GetPathName()));
+			return false;
+		}
+	}
+	else if (bIsEditorOnlyBlueprint && !bIsWidgetBlueprint)
+	{
+		if (NewParentClass->IsChildOf(UWidget::StaticClass()))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is not compatible with non-widget editor utility Blueprints."),
+				*NewParentClass->GetPathName()));
+			return false;
+		}
+	}
+	else if (NewParentClass->IsChildOf(AActor::StaticClass()))
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("Class '%s' is not compatible with non-Actor Blueprints."),
+			*NewParentClass->GetPathName()));
+		return false;
+	}
+
+	TSet<const UClass*> AllowedChildrenOfClasses;
+	TSet<const UClass*> DisallowedChildrenOfClasses;
+	Blueprint->GetReparentingRules(AllowedChildrenOfClasses, DisallowedChildrenOfClasses);
+	if (!IsClassAllowedByReparentRules(
+		    NewParentClass,
+		    AllowedChildrenOfClasses,
+		    DisallowedChildrenOfClasses))
+	{
+		const bool bAllowedMismatch = AllowedChildrenOfClasses.Num() > 0
+			&& !IsClassChildOfAny(NewParentClass, AllowedChildrenOfClasses);
+		if (bAllowedMismatch)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is outside this Blueprint's allowed reparenting hierarchy."),
+				*NewParentClass->GetPathName()));
+		}
+		else
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' is disallowed by this Blueprint's reparenting rules."),
+				*NewParentClass->GetPathName()));
+		}
+		return false;
+	}
+
+	if (const UClass* SelfClass = Blueprint->GeneratedClass
+			? Blueprint->GeneratedClass
+			: Blueprint->SkeletonGeneratedClass)
+	{
+		if (NewParentClass == SelfClass || NewParentClass->IsChildOf(SelfClass))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' cannot parent this Blueprint because it is the Blueprint's generated class or one of its children."),
+				*NewParentClass->GetPathName()));
+			return false;
+		}
+	}
+
+	const IKismetCompilerInterface& KismetCompilerModule =
+		FModuleManager::LoadModuleChecked<IKismetCompilerInterface>(KISMET_COMPILER_MODULENAME);
+
+	if (Blueprint->ParentClass)
+	{
+		TSet<const UClass*> MismatchedSubclasses;
+		KismetCompilerModule.GetSubclassesWithDifferingBlueprintTypes(
+			Blueprint->ParentClass,
+			MismatchedSubclasses);
+		if (IsClassChildOfAny(NewParentClass, MismatchedSubclasses))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' uses a different Blueprint type and cannot parent '%s'."),
+				*NewParentClass->GetPathName(),
+				*Blueprint->GetPathName()));
+			return false;
+		}
+
+		UClass* CurrentBlueprintClassType = nullptr;
+		UClass* CurrentGeneratedClassType = nullptr;
+		KismetCompilerModule.GetBlueprintTypesForClass(
+			Blueprint->ParentClass,
+			CurrentBlueprintClassType,
+			CurrentGeneratedClassType);
+
+		UClass* TargetBlueprintClassType = nullptr;
+		UClass* TargetGeneratedClassType = nullptr;
+		KismetCompilerModule.GetBlueprintTypesForClass(
+			NewParentClass,
+			TargetBlueprintClassType,
+			TargetGeneratedClassType);
+
+		if ((CurrentBlueprintClassType && TargetBlueprintClassType
+		     && CurrentBlueprintClassType != TargetBlueprintClassType)
+		    || (CurrentGeneratedClassType && TargetGeneratedClassType
+		        && CurrentGeneratedClassType != TargetGeneratedClassType))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Class '%s' uses Blueprint type '%s', which does not match the current Blueprint type '%s'."),
+				*NewParentClass->GetPathName(),
+				TargetBlueprintClassType ? *TargetBlueprintClassType->GetName() : TEXT("Unknown"),
+				CurrentBlueprintClassType ? *CurrentBlueprintClassType->GetName() : TEXT("Unknown")));
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool ReparentBlueprint(UBlueprint* Blueprint,
+                              const TSharedPtr<FJsonObject>& Payload,
+                              TArray<FString>& OutErrors,
+                              const bool bValidationOnly,
+                              bool& bOutRequiresMutation)
+{
+	bOutRequiresMutation = false;
+
+	if (!Blueprint)
+	{
+		OutErrors.Add(TEXT("Blueprint is null."));
+		return false;
+	}
+
+	FString ParentClassPath;
+	if (!ParseParentClassPath(Payload, ParentClassPath))
+	{
+		OutErrors.Add(TEXT("reparent requires payload.parentClassPath or payload.parent_class_path."));
+		return false;
+	}
+
+	UClass* NewParentClass = FAuthoringHelpers::ResolveClass(
+		ParentClassPath,
+		UObject::StaticClass());
+	if (!NewParentClass)
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("Parent class not found: %s"),
+			*ParentClassPath));
+		return false;
+	}
+
+	if (NewParentClass == Blueprint->ParentClass)
+	{
+		return true;
+	}
+
+	if (!ValidateBlueprintReparentTarget(Blueprint, NewParentClass, OutErrors))
+	{
+		return false;
+	}
+
+	const bool bCanMutateBlueprint = !bValidationOnly
+		|| Blueprint->GetOutermost() == GetTransientPackage();
+	if (!bCanMutateBlueprint)
+	{
+		return true;
+	}
+
+	Blueprint->ParentClass = NewParentClass;
+	if (Blueprint->SimpleConstructionScript != nullptr)
+	{
+		Blueprint->SimpleConstructionScript->ValidateSceneRootNodes();
+	}
+
+	FBlueprintEditorUtils::RefreshAllNodes(Blueprint);
+	bOutRequiresMutation = true;
+	return true;
+}
+
+static EBlueprintCompileOptions GetCompileOptionsForOperation(const FString& Operation)
+{
+	EBlueprintCompileOptions CompileOptions = EBlueprintCompileOptions::None;
+	if (Operation == TEXT("reparent"))
+	{
+		CompileOptions |= EBlueprintCompileOptions::UseDeltaSerializationDuringReinstancing;
+		CompileOptions |= EBlueprintCompileOptions::SkipNewVariableDefaultsDetection;
+		if (GEditor && GEditor->PlayWorld != nullptr)
+		{
+			CompileOptions |= EBlueprintCompileOptions::IncludeCDOInReferenceReplacement;
+		}
+	}
+
+	return CompileOptions;
 }
 
 static bool ApplyOperation(UBlueprint* Blueprint,
@@ -1644,6 +1948,23 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 		OutMutationFlags |=
 			EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
 		return ReplaceFunctionStubs(Blueprint, GetFunctionArray(Payload), OutErrors);
+	}
+
+	if (Operation == TEXT("reparent"))
+	{
+		bool bRequiresMutation = false;
+		const bool bSuccess = ReparentBlueprint(
+			Blueprint,
+			Payload,
+			OutErrors,
+			bValidationOnly,
+			bRequiresMutation);
+		if (bSuccess && bRequiresMutation)
+		{
+			OutMutationFlags |=
+				EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		}
+		return bSuccess;
 	}
 
 	if (Operation == TEXT("patch_class_defaults"))
@@ -1916,17 +2237,22 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 	}
 
 	const TSharedPtr<FJsonObject> Payload = NormalizePayload(PayloadJson);
+	const EBlueprintCompileOptions AdditionalCompileOptions =
+		GetCompileOptionsForOperation(Operation);
 	UBlueprint* WorkingBlueprint = Blueprint;
 	if (bValidateOnly)
 	{
 		// DuplicateObject is unsafe for BPs with inherited components: it triggers
 		// PostDuplicateBlueprint → CompileSynchronouslyImpl → CreateDefaultObject → FATAL.
 		// patch_class_defaults validates against live CDO via FTemporaryPropertyStorage.
-		// patch_component on BPs with Blueprint parents must skip to avoid the crash;
+		// patch_component on BPs with Blueprint parents must skip to avoid the crash.
+		// reparent validation also skips duplication entirely: transient duplicate compilation
+		// can fatal while recreating skeleton defaults during class replacement.
 		// BPs with only C++ parents can safely use DuplicateObject for rollback.
 		const bool bHasBlueprintParent = Blueprint->ParentClass
 			&& Cast<UBlueprintGeneratedClass>(Blueprint->ParentClass) != nullptr;
 		const bool bSkipDuplicate = (Operation == TEXT("patch_class_defaults"))
+			|| (Operation == TEXT("reparent"))
 			|| (Operation == TEXT("patch_component") && bHasBlueprintParent);
 		if (!bSkipDuplicate)
 		{
@@ -1972,7 +2298,11 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 
 	if (EnumHasAnyFlags(MutationFlags, EBlueprintMutationFlags::Compile))
 	{
-		FAuthoringHelpers::CompileBlueprint(WorkingBlueprint, Context, TEXT("Blueprint"));
+		FAuthoringHelpers::CompileBlueprint(
+			WorkingBlueprint,
+			Context,
+			TEXT("Blueprint"),
+			AdditionalCompileOptions);
 		if (Context.CompileSummary.IsValid()
 			&& !Context.CompileSummary->GetBoolField(TEXT("success")))
 		{
@@ -2030,7 +2360,11 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 
 	if (EnumHasAnyFlags(MutationFlags, EBlueprintMutationFlags::Compile))
 	{
-		FAuthoringHelpers::CompileBlueprint(Blueprint, Context, TEXT("Blueprint"));
+		FAuthoringHelpers::CompileBlueprint(
+			Blueprint,
+			Context,
+			TEXT("Blueprint"),
+			AdditionalCompileOptions);
 		if (Context.CompileSummary.IsValid()
 			&& !Context.CompileSummary->GetBoolField(TEXT("success")))
 		{

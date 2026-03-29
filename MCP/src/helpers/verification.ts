@@ -11,20 +11,41 @@ type VerificationSurface =
   | 'external_packaged'
   | 'widget_motion_checkpoint';
 
-function isVerificationSurface(value: unknown): value is VerificationSurface {
+function normalizeVerificationSurface(value: unknown): VerificationSurface | undefined {
+  if (value === 'editor_viewport') {
+    return 'editor_tool_viewport';
+  }
+  if (value === 'runtime_viewport') {
+    return 'pie_runtime';
+  }
+
   return value === 'editor_offscreen'
     || value === 'pie_runtime'
     || value === 'editor_tool_viewport'
     || value === 'external_packaged'
-    || value === 'widget_motion_checkpoint';
+    || value === 'widget_motion_checkpoint'
+    ? value
+    : undefined;
+}
+
+function isVerificationSurface(value: unknown): value is VerificationSurface {
+  return normalizeVerificationSurface(value) !== undefined;
 }
 
 function inferVerificationSurface(captureType: unknown): VerificationSurface {
-  if (isVerificationSurface(captureType)) {
-    return captureType;
+  const normalizedSurface = normalizeVerificationSurface(captureType);
+  if (normalizedSurface) {
+    return normalizedSurface;
   }
 
   switch (captureType) {
+    case 'editor_screenshot':
+      return 'editor_tool_viewport';
+    case 'runtime_screenshot':
+    case 'automation_screenshot':
+    case 'automation_image_artifact':
+    case 'automation_diff':
+      return 'pie_runtime';
     case 'widget_motion_checkpoint':
       return 'widget_motion_checkpoint';
     case 'widget_preview':
@@ -73,6 +94,30 @@ function buildDefaultWorldContext(payload: Record<string, unknown>, surface: Ver
     return context;
   }
 
+  if (surface === 'editor_tool_viewport') {
+    return {
+      contextType: 'editor_viewport',
+      renderLane: 'viewport',
+      ...(typeof payload.assetPath === 'string' && payload.assetPath.length > 0
+        ? { assetPath: payload.assetPath }
+        : {}),
+      ...(typeof payload.isPlayingInEditor === 'boolean'
+        ? { isPlayingInEditor: payload.isPlayingInEditor }
+        : { isPlayingInEditor: false }),
+    };
+  }
+
+  if (surface === 'pie_runtime') {
+    return {
+      contextType: 'runtime_viewport',
+      renderLane: 'viewport',
+      ...(typeof payload.assetPath === 'string' && payload.assetPath.length > 0
+        ? { assetPath: payload.assetPath }
+        : {}),
+      isPlayingInEditor: true,
+    };
+  }
+
   if (surface === 'widget_motion_checkpoint') {
     const context: Record<string, unknown> = {
       contextType: 'widget_motion',
@@ -109,6 +154,14 @@ function buildDefaultCameraContext(payload: Record<string, unknown>, surface: Ve
   if (surface === 'editor_offscreen' && (typeof width === 'number' || typeof height === 'number')) {
     return {
       contextType: 'offscreen_widget',
+      ...(typeof width === 'number' ? { width } : {}),
+      ...(typeof height === 'number' ? { height } : {}),
+    };
+  }
+
+  if (surface === 'editor_tool_viewport' || surface === 'pie_runtime') {
+    return {
+      contextType: surface === 'editor_tool_viewport' ? 'editor_viewport' : 'runtime_viewport',
       ...(typeof width === 'number' ? { width } : {}),
       ...(typeof height === 'number' ? { height } : {}),
     };
@@ -155,7 +208,7 @@ function normalizeAutomationVerificationArtifacts(payload: Record<string, unknow
     return existing.map((artifact) => {
       const normalized = normalizeVerificationArtifact({
         ...artifact,
-        surface: isVerificationSurface(artifact.surface) ? artifact.surface : 'pie_runtime',
+        surface: normalizeVerificationSurface(artifact.surface) ?? 'pie_runtime',
         captureType: typeof artifact.captureType === 'string' && artifact.captureType.length > 0
           ? artifact.captureType
           : 'automation_image_artifact',
@@ -231,9 +284,11 @@ export function normalizeVerificationArtifact(payload: unknown): Record<string, 
     : assetPath
       ? [assetPath]
       : [];
-  const surface = isVerificationSurface(basePayload.surface)
-    ? basePayload.surface
-    : inferVerificationSurface(basePayload.captureType);
+  const surface = normalizeVerificationSurface(basePayload.surface)
+    ?? (isVerificationSurface(basePayload.surface)
+      ? basePayload.surface
+      : undefined)
+    ?? inferVerificationSurface(basePayload.captureType);
   const worldContext = buildDefaultWorldContext(basePayload, surface);
   const cameraContext = buildDefaultCameraContext(basePayload, surface);
 

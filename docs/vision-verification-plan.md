@@ -2,88 +2,63 @@
 
 ## Intent
 
-The goal is not a widget-only vision feature. The goal is a verification platform that lets the MCP and the model determine whether an operation actually succeeded across three different failure modes:
+Verification in this repository is not a widget-only feature. It is a shared platform for answering three different questions:
 
-- semantic failures: wrong Blueprint wiring, wrong graph layout, wrong widget tree, wrong class defaults, wrong DataAsset values;
-- visual failures: the widget compiles but the rendered result is clipped, misaligned, or styled incorrectly;
-- gameplay/runtime failures: a mechanic, interaction, or scenario does not behave correctly even if the authored data looks valid.
+- semantic correctness: did the authored Blueprint, widget tree, class defaults, or data values land correctly?
+- rendered correctness: does the compiled result actually look right?
+- runtime correctness: does the interaction or scenario behave correctly once Unreal is driving it?
 
-The implementation in this repository now follows that split.
-
-Follow-up planning note:
-
-- The current phase-1 implementation proved that widget capture works technically, but it did not fully solve model adoption of verification in widget workflows.
-- The next implementation pass should use [General Visual Verification Platform Follow-Up](D:\Development\llm-tools\ue-blueprint-extractor\docs\plans\2026-03-22-general-visual-verification-platform.md) as the controlling plan for anti-skip guidance, helper-flow behavior, and verification-specific regression tests.
+The current implementation keeps those lanes separate so models do not treat screenshots as proof of authored data or gameplay behavior.
 
 ## Verification Lanes
 
-### 1. Semantic verification
+### 1. Semantic Verification
 
-Semantic verification stays authoritative for:
+Semantic verification remains authoritative for:
 
-- Blueprint graph connections and node layout;
-- widget hierarchy, slot data, bindings, and class defaults;
-- DataAsset, DataTable, Blackboard, BehaviorTree, StateTree, and input asset values.
+- Blueprint graph wiring and member state
+- widget hierarchy, slot data, bindings, and class defaults
+- DataAsset, DataTable, Blackboard, BehaviorTree, StateTree, montage, sequence, blend space, and input asset values
 
-Use the existing extractors and compile diagnostics first:
+Primary tools:
 
 - `extract_blueprint`
 - `extract_widget_blueprint`
-- `extract_dataasset`
-- `extract_datatable`
-- `compile_widget_blueprint`
+- `extract_asset`
+- `compile_widget`
 - `compile_material_asset`
 
-The `blueprint://verification-workflows` resource now tells the model when semantic verification is the right answer and explicitly warns against inferring gameplay success from screenshots alone.
+### 2. Rendered Verification
 
-### 2. Visual verification
+Rendered verification now has three public surfaces:
 
-Visual verification now exists for widget previews through a file-backed capture lane:
+- `capture_widget_preview` for offscreen WidgetBlueprint rendering
+- `capture_editor_screenshot` for the active editor viewport
+- `capture_runtime_screenshot` for automation-backed runtime frames
 
-- `capture_widget_preview`
-- `compare_capture_to_reference`
-- `list_captures`
-- `cleanup_captures`
+All capture outputs normalize to the shared `verification_artifact` shape, including the canonical surface values:
 
-Implementation details:
+- `editor_tool_viewport`
+- `pie_runtime`
 
-- Unreal renders a compiled `WidgetBlueprint` offscreen through `FWidgetRenderer`.
-- Captures are written under `<Project>/Saved/BlueprintExtractor/Captures/<capture_id>/`.
-- Each capture directory contains:
-  - `capture.png`
-  - `metadata.json`
-- Widget preview and diff captures now normalize to the shared `verification_artifact` shape with `surface`, `scenarioId`, `assetPaths`, `worldContext`, `cameraContext`, and optional `comparison` metadata.
-- The subsystem returns JSON metadata only.
-- The MCP host reads the PNG from disk and returns:
-  - the normal text/structured v2 envelope;
-  - a `resource_link` to `blueprint://captures/{capture_id}`;
-  - an inline `image` block when the file is small enough.
+`compare_capture_to_reference`, `list_captures`, and `cleanup_captures` operate on the same shared artifact model.
 
-The MCP wrapper was extended so non-text content blocks survive normalization instead of being discarded.
+### 3. Runtime / Gameplay Verification
 
-### 3. Gameplay/runtime verification
-
-Gameplay verification is host-side and async:
+Runtime verification remains automation-backed:
 
 - `run_automation_tests`
 - `get_automation_test_run`
 - `list_automation_test_runs`
 
-This is intentionally separate from the live editor subsystem. The host launches `UnrealEditor-Cmd` automation runs, indexes reports, stdout, stderr, and exported artifacts, and exposes them through:
+Use runtime automation for:
 
-- `blueprint://test-runs/{run_id}/{artifact}`
+- gameplay mechanics
+- scripted interactions
+- HUD/runtime flows
+- scenario validation
 
-The MCP runtime lane now also lifts image-based automation report outputs into `verificationArtifacts`, so the model receives typed visual artifacts in the shared verification shape instead of only generic report-file links.
-
-This is the primary verification lane for:
-
-- gameplay mechanics;
-- interactions;
-- runtime flows;
-- scenario validation;
-- project-owned Automation Specs and Functional Tests.
-
-If no Automation Spec or Functional Test exists for a mechanic, the model should report verification as partial rather than pretending a screenshot proves behavior.
+Use `start_pie`, `stop_pie`, and `relaunch_pie` when a live editor PIE session itself is part of the workflow, but do not treat live PIE control as a substitute for automation-backed gameplay verification.
 
 ## Current Implementation
 
@@ -91,80 +66,76 @@ If no Automation Spec or Functional Test exists for a mechanic, the model should
 
 Implemented:
 
-- rich content preservation in the tool wrapper;
-- `blueprint://verification-workflows`;
-- `blueprint://captures/{capture_id}`;
-- `blueprint://test-runs/{run_id}/{artifact}`;
-- widget capture and comparison tools;
-- async automation run tools;
-- indexed automation artifacts with resource links;
-- optional inline image previews for small captures.
+- shared verification-artifact normalization for widget preview, editor screenshot, runtime screenshot, and automation-exported artifacts
+- resource-backed capture access through `blueprint://captures/{capture_id}`
+- automation artifact access through `blueprint://test-runs/{run_id}/{artifact}`
+- explicit screenshot tools:
+  - `capture_widget_preview`
+  - `capture_editor_screenshot`
+  - `capture_runtime_screenshot`
+- motion checkpoint capture and comparison
+- PIE lifecycle controls:
+  - `start_pie`
+  - `stop_pie`
+  - `relaunch_pie`
+- `get_project_automation_context.isPlayingInEditor`
 
-### Unreal plugin
+### Unreal Plugin
 
 Implemented:
 
-- editor-only widget preview capture;
-- PNG persistence plus metadata persistence;
-- pixel-diff comparison with RMSE, max delta, mismatch count, and mismatch percentage;
-- capture listing and cleanup;
-- a plugin automation spec that exercises capture, comparison, listing, and cleanup.
+- offscreen widget preview capture through `FWidgetRenderer`
+- editor viewport screenshot capture
+- PIE lifecycle control in the active editor
+- runtime screenshot export through the automation-backed verification lane
+- PNG + metadata persistence under `<Project>/Saved/BlueprintExtractor/Captures/<capture_id>/`
+- shared capture metadata normalization for later MCP/resource consumption
 
-The capture implementation is deliberately narrow:
+### UE Runners
 
-- `RenderCore`
-- `RHI`
-- `ImageCore`
+The UE test runners now expose an explicit lane split:
 
-No runtime automation modules were added to the plugin for phase 1.
+- default/headless: `-NullRHI`
+- rendered verification: `-NoNullRHI`
+- Windows rendered fallback: `-AllowSoftwareRendering`
 
-### UE runners
-
-The checked-in UE test runners now support rendered verification runs:
-
-- PowerShell: `-NoNullRHI`
-- Bash: `--no-null-rhi`
-
-Default runs still use `-NullRHI` for fast logic-only coverage. Visual capture tests should be run without `-NullRHI`.
+Rendered verification is where screenshot and diff assertions belong. Headless coverage stays focused on logic, contract, and authoring correctness.
 
 ## Validation Status
 
-Validated in-repo:
+Validated in-repo on `2026-03-28`:
 
-- MCP unit tests pass.
-- MCP stdio integration passes.
-- UE 5.7 targeted rendered automation pass succeeds for `BlueprintExtractor.Authoring.WidgetCaptureVerification`.
-- UE 5.7 default headless automation pass succeeds with the broader `BlueprintExtractor` filter.
+- MCP unit, stdio, pack-smoke, and publish-gate paths passed.
+- UE 5.6 headless `BlueprintExtractor` pass succeeded with `failed=0`.
+- UE 5.7 headless `BlueprintExtractor` pass succeeded with `failed=0`.
+- UE 5.6 rendered targeted filters succeeded for:
+  - `BlueprintExtractor.ProjectControl.PIEAndScreenshots`
+  - `BlueprintExtractor.Authoring.WidgetCaptureVerification`
+  - `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
+- UE 5.7 rendered targeted filters succeeded for the same three filters.
+
+Known rendered-lane noise:
+
+- `WidgetCaptureVerification` and `CommonUIButtonStyleRoundTrip` can emit warning-only `LogUObjectGlobals` class lookup messages on this machine while the automation result still returns `Success`.
 
 ## Known Limits
 
-- Offscreen widget capture validates authored UI state, not full in-game viewport composition.
-- Widgets that depend on runtime-only services may still need PIE/runtime capture later.
-- The current comparison lane uses custom image diffing, not Unreal’s automation screenshot comparison framework.
-- Gameplay verification depends on project-owned Automation Specs or Functional Tests existing in the target project.
+- Offscreen widget preview validates authored UI state, not the entire in-game composition stack.
+- `capture_runtime_screenshot` depends on an automation scenario exporting a screenshot-backed artifact. It is not a blind live-scene screenshot command.
+- Screenshots support verification, but they do not replace semantic extraction or gameplay assertions.
+- Gameplay/runtime verification still depends on project-owned Automation Specs or Functional Tests.
 
 ## Later Phases
 
-Not implemented yet:
+Still out of scope:
 
-- `capture_runtime_screenshot`
-- PIE/runtime scene capture tied to a named automation scenario
-- Automation Driver-backed interaction steps before capture
-- Gauntlet-based packaged or multi-process verification
-- explicit Blueprint graph image capture
-
-These remain later-phase work. The current system already covers the original intent better by combining:
-
-- semantic verification for authored correctness;
-- visual verification for rendered UI correctness;
-- automation-driven verification for mechanic correctness.
+- Gauntlet-based packaged verification
+- broader Automation Driver interaction orchestration in the public MCP contract
+- explicit Blueprint graph image capture as a first-class tool
+- multi-process or packaged runtime verification beyond the current automation-report path
 
 ## References
 
-- [MCP tools spec](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
-- [MCP resources spec](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
-- [MCP schema](https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/2025-11-25/schema.ts)
 - [Automation Spec](https://dev.epicgames.com/documentation/en-us/unreal-engine/automation-spec-in-unreal-engine)
 - [Functional Testing in Unreal Engine](https://dev.epicgames.com/documentation/en-us/unreal-engine/functional-testing-in-unreal-engine)
 - [FWidgetRenderer](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/UMG/Slate/FWidgetRenderer/DrawWidget/3)
-- [FWidgetBlueprintEditorUtils](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Editor/UMGEditor/FWidgetBlueprintEditorUtils/DrawSWidgetInRenderTarget)

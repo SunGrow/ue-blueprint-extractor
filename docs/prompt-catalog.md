@@ -46,6 +46,7 @@ Blueprint Extractor v2 ships prompt entries for repeatable MCP workflows. Prompt
 
 - Separates menu/shell verification from HUD/runtime verification instead of treating them as one interchangeable lane.
 - Prefers `editor_preview` for authored WidgetBlueprint playback and `automation_scenario` for runtime/HUD playback driven by `run_automation_tests`.
+- Uses `capture_runtime_screenshot` only as a supporting rendered reference lane when a runtime scenario needs a still frame outside the checkpoint bundle.
 - Requires verification output to be a keyframe bundle, not a video capture.
 - Uses `closed`, `opening_peak`, `open`, `focused`, and `pressed` as the default checkpoint vocabulary unless the design spec narrows or extends it.
 
@@ -56,11 +57,12 @@ Blueprint Extractor v2 ships prompt entries for repeatable MCP workflows. Prompt
 - Points high-fidelity multimodal work toward `normalize_ui_design_input` first.
 - Prefers pattern-driven, minimal edits over full rewrites.
 - Reminds the model to compile after each structural pass.
+- Uses `capture_editor_screenshot` only when the active editor viewport is the right rendered reference and offscreen widget preview is not enough.
 - Requires the plan to end with `capture_widget_preview` or an explicit `partial verification` fallback when rendering is blocked.
 
 ### `author_material_button_style`
 
-- Pushes the model toward `set_material_settings`, `add_material_expression`, `connect_material_expressions`, and `bind_material_property`.
+- Pushes the model toward `material_graph_operation` with `set_material_settings`, `add_expression`, `connect_expressions`, and `connect_material_property`.
 - Accepts an optional `design_spec_json` so material states can inherit palette, spacing, and motion cues from the shared menu contract.
 - Prefers material parameters and instances for hover, pressed, focused, and disabled states before escalating to authored widget timelines.
 - Treats `modify_material` as a fallback, not the default.

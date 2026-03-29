@@ -55,8 +55,10 @@ describe('server bootstrap helpers', () => {
   it('exports stable server instructions and task-aware metadata', () => {
     expect(serverInstructions).toContain('get_tool_help');
     expect(serverInstructions).toContain('capture_widget_preview');
+    expect(serverInstructions).toContain('capture_runtime_screenshot');
     expect(serverInstructions).toContain('run_automation_tests');
     expect(taskAwareTools.has('run_automation_tests')).toBe(true);
+    expect(taskAwareTools.has('capture_runtime_screenshot')).toBe(true);
     expect(taskAwareTools.has('list_import_jobs')).toBe(true);
     expect(taskAwareTools.has('search_assets')).toBe(false);
   });

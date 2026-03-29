@@ -13,12 +13,14 @@ Blueprint Extractor connects a running Unreal Editor to MCP clients such as [Cla
 
 | Capability | Current contract |
 |---|---|
-| Tools | 90 |
+| Tools | 95 |
 | Resources | 16 |
 | Resource templates | 4 |
 | Prompts | 8 |
 | Transport | MCP over stdio + Unreal Remote Control over HTTP |
 | Save model | Explicit save via `save_assets` |
+
+See [docs/CURRENT_STATUS.md](docs/CURRENT_STATUS.md) for the current validation snapshot, the normative doc set, and the active one-shot ledger.
 
 ## Why This Exists
 
@@ -41,8 +43,8 @@ Supported families include Blueprint, WidgetBlueprint, StateTree, BehaviorTree, 
 | Work on materials | `create_material`, `modify_material`, `material_graph_operation`, `modify_material_instance` |
 | Author data and AI assets | `create_data_table`, `modify_curve`, `create_state_tree`, `modify_behavior_tree`, `modify_blackboard` |
 | Import external content | `import_assets`, `get_import_job`, `list_import_jobs` |
-| Verify visuals and motion | `capture_widget_preview`, `compare_capture_to_reference`, `capture_widget_motion_checkpoints`, `compare_motion_capture_bundle` |
-| Drive the project lifecycle | `compile_project_code`, `trigger_live_coding`, `restart_editor`, `sync_project_code`, `run_automation_tests` |
+| Verify visuals and motion | `capture_widget_preview`, `capture_editor_screenshot`, `capture_runtime_screenshot`, `compare_capture_to_reference`, `capture_widget_motion_checkpoints`, `compare_motion_capture_bundle` |
+| Drive the project lifecycle | `compile_project_code`, `trigger_live_coding`, `restart_editor`, `sync_project_code`, `run_automation_tests`, `start_pie`, `stop_pie`, `relaunch_pie` |
 
 ## Quick Start
 
@@ -73,12 +75,12 @@ Manual registration is also supported:
 
 ```bash
 # Claude Code
-claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@6.0.5
-claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@6.0.5
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@6.0.6
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@6.0.6
 
 # Codex
-codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@6.0.5
-codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@6.0.5
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@6.0.6
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@6.0.6
 ```
 
 ### 3. Verify the connection
@@ -123,8 +125,8 @@ The server exposes a compact default surface and expands into specialized famili
 | `animation_authoring` | Anim sequences, montages, blend spaces, widget motion |
 | `data_tables` | Data assets, tables, curves, input actions, mapping contexts |
 | `import` | Import jobs and import status |
-| `automation_testing` | Host-side automation runs and inspection |
-| `verification` | Capture, compare, list, cleanup, and motion verification |
+| `automation_testing` | Host-side automation runs, project automation context, and PIE lifecycle control |
+| `verification` | Widget captures, editor/runtime screenshots, comparisons, list/cleanup, and motion verification |
 
 ## Resources And Prompts
 
@@ -192,6 +194,8 @@ The repository includes a fixture project at `tests/fixtures/BlueprintExtractorF
 ./scripts/test-ue.sh --engine-root "/path/to/UE_5.6"
 ```
 
+Default runs use the broader `BlueprintExtractor` filter with `-NullRHI` for logic and contract coverage. Use `-NoNullRHI` for rendered verification lanes such as widget capture, CommonUI style capture, editor screenshots, and automation-backed runtime screenshots. On software-rendered environments, `scripts/test-ue.ps1` also supports `-AllowSoftwareRendering`.
+
 ### Live MCP smoke tests
 
 ```bash
@@ -220,4 +224,3 @@ Before opening a PR:
 ## Package README
 
 If you only need the npm package view, see [MCP/README.md](MCP/README.md).
-

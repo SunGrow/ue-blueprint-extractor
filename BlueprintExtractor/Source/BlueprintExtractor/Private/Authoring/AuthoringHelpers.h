@@ -11,6 +11,7 @@ class UClass;
 class UObject;
 class UScriptStruct;
 class UEnum;
+enum class EBlueprintCompileOptions;
 struct FAssetMutationContext;
 
 struct FAuthoringHelpers
@@ -38,5 +39,6 @@ struct FAuthoringHelpers
 
 	static bool CompileBlueprint(UBlueprint* Blueprint,
 	                             FAssetMutationContext& Context,
-	                             const FString& AssetKind);
+	                             const FString& AssetKind,
+	                             EBlueprintCompileOptions AdditionalCompileOptions = static_cast<EBlueprintCompileOptions>(0));
 };

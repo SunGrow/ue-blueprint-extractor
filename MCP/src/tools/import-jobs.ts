@@ -109,7 +109,10 @@ export function registerImportJobTools({
           PayloadJson: JSON.stringify(transformedPayload),
           bValidateOnly: validate_only,
         });
-        return jsonToolSuccess(parsed);
+        return jsonToolSuccess({
+          ...parsed,
+          operation: 'import_assets',
+        });
       } catch (error) {
         return jsonToolError(error);
       }

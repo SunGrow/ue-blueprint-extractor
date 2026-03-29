@@ -8,6 +8,7 @@ automation_filter="BlueprintExtractor"
 build_plugin=0
 skip_build_project=0
 use_null_rhi=1
+cleanup_patterns=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -73,7 +74,61 @@ run_step() {
   shift
 
   echo "==> $label"
-  "$@"
+  local exit_code=0
+  if ! "$@"; then
+    exit_code=$?
+  fi
+
+  stop_bpx_fixture_processes
+  return "$exit_code"
+}
+
+stop_bpx_fixture_processes() {
+  local deadline=$((SECONDS + 30))
+
+  while (( SECONDS < deadline )); do
+    local matched=0
+    while IFS= read -r pid; do
+      [[ -z "$pid" ]] && continue
+
+      local cmdline
+      cmdline="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+      [[ -z "$cmdline" ]] && continue
+
+      local process_name
+      process_name="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+      case "$process_name" in
+        UnrealEditor|UnrealEditor-Cmd|dotnet|UnrealBuildTool)
+          ;;
+        *)
+          continue
+          ;;
+      esac
+
+      local should_stop=0
+      for pattern in "${cleanup_patterns[@]}"; do
+        if [[ -n "$pattern" && "$cmdline" == *"$pattern"* ]]; then
+          should_stop=1
+          break
+        fi
+      done
+
+      if (( should_stop == 1 )); then
+        kill -TERM "$pid" 2>/dev/null || true
+        matched=1
+      fi
+    done < <(pgrep -f 'UnrealEditor|UnrealBuildTool|dotnet' 2>/dev/null || true)
+
+    if (( matched == 0 )); then
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && kill -KILL "$pid" 2>/dev/null || true
+  done < <(pgrep -f 'UnrealEditor|UnrealBuildTool|dotnet' 2>/dev/null || true)
 }
 
 plugin_source="$repo_root/BlueprintExtractor"
@@ -109,6 +164,15 @@ assert_path "$run_uat" "RunUAT"
 if [[ -z "$stage_root" ]]; then
   stage_root="$(mktemp -d "${TMPDIR:-/tmp}/BPXFixture-$engine_label-XXXXXX")"
 fi
+
+cleanup_patterns=(
+  "$project_path"
+  "$stage_root"
+  "BPXFixture"
+  "BlueprintExtractorFixture"
+  "UnrealBuildTool"
+)
+trap 'stop_bpx_fixture_processes' EXIT
 
 echo "==> Staging fixture project into $stage_root"
 if command -v rsync >/dev/null 2>&1; then

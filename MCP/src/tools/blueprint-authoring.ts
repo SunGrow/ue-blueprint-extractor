@@ -83,17 +83,13 @@ export function registerBlueprintAuthoringTools({
     'modify_blueprint_members',
     {
       title: 'Modify Blueprint Members',
-      description: 'Modify Blueprint member authoring surfaces without synthesizing arbitrary graphs.\n\n'
-        + 'Example (add_variable):\n'
+      description: 'Modify Blueprint member authoring surfaces, including reparenting, without synthesizing arbitrary graphs.\n\n'
+        + 'Example (reparent):\n'
         + '  {\n'
         + '    "asset_path": "/Game/Blueprints/BP_MyActor",\n'
-        + '    "operation": "add_variable",\n'
+        + '    "operation": "reparent",\n'
         + '    "payload": {\n'
-        + '      "variable": {\n'
-        + '        "name": "Health",\n'
-        + '        "type": "float",\n'
-        + '        "defaultValue": "100.0"\n'
-        + '      }\n'
+        + '      "parentClassPath": "/Script/Engine.Pawn"\n'
         + '    }\n'
         + '  }',
       inputSchema: {
@@ -115,6 +111,8 @@ export function registerBlueprintAuthoringTools({
           functionStubs: z.array(jsonObjectSchema).optional(),
           functions: z.array(jsonObjectSchema).optional(),
           functionName: z.string().optional(),
+          parentClassPath: z.string().optional(),
+          parent_class_path: z.string().optional(),
           classDefaults: jsonObjectSchema.optional(),
           properties: jsonObjectSchema.optional(),
         }).passthrough().default({}).describe(

@@ -83,6 +83,117 @@ function createProjectController(overrides: Record<string, unknown> = {}) {
 }
 
 describe('registerProjectControlTools', () => {
+  it('starts PIE through the subsystem wrapper', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'start_pie',
+      scheduled: true,
+      simulate: true,
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('start_pie').handler({
+      simulate: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('StartPIE', {
+      bSimulateInEditor: true,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'start_pie',
+      scheduled: true,
+      simulate: true,
+    });
+  });
+
+  it('stops PIE through the subsystem wrapper', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'stop_pie',
+      scheduled: true,
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('stop_pie').handler({});
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('StopPIE', {});
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'stop_pie',
+      scheduled: true,
+    });
+  });
+
+  it('relaunches PIE through the subsystem wrapper', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'relaunch_pie',
+      scheduled: true,
+      simulate: false,
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('relaunch_pie').handler({
+      simulate: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('RelaunchPIE', {
+      bSimulateInEditor: false,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'relaunch_pie',
+      scheduled: true,
+      simulate: false,
+    });
+  });
+
   it('compiles project code with resolved inputs and records the external build context', async () => {
     const registry = createToolRegistry();
     const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());

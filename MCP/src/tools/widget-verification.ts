@@ -41,6 +41,38 @@ type RegisterWidgetVerificationToolsOptions = {
   compareMotionCaptureBundleResultSchema: z.ZodTypeAny;
 };
 
+async function buildCaptureExtraContent(
+  artifact: Record<string, unknown>,
+  label: string,
+  description: string,
+): Promise<ContentBlock[]> {
+  const extraContent: ContentBlock[] = [];
+  const resourceUri = typeof artifact.resourceUri === 'string'
+    ? artifact.resourceUri
+    : '';
+  const captureId = typeof artifact.captureId === 'string'
+    ? artifact.captureId
+    : '';
+
+  if (resourceUri) {
+    extraContent.push(buildResourceLinkContent(
+      resourceUri,
+      label || `Capture ${captureId || 'capture'}`,
+      'image/png',
+      description,
+    ));
+  }
+
+  const inlineImage = await maybeBuildInlineImageContent(
+    typeof artifact.artifactPath === 'string' ? artifact.artifactPath : undefined,
+  );
+  if (inlineImage) {
+    extraContent.push(inlineImage);
+  }
+
+  return extraContent;
+}
+
 export function registerWidgetVerificationTools({
   server,
   callSubsystemJson,
@@ -110,6 +142,139 @@ export function registerWidgetVerificationTools({
         return jsonToolSuccess({
           ...artifact,
           resourceUri,
+        }, { extraContent });
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'capture_editor_screenshot',
+    {
+      title: 'Capture Editor Screenshot',
+      description: 'Capture the active editor viewport and return screenshot artifacts.',
+      inputSchema: {},
+      outputSchema: captureResultSchema,
+      annotations: {
+        title: 'Capture Editor Screenshot',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        const parsed = await callSubsystemJson('CaptureEditorScreenshot', {});
+        const artifact = normalizeVerificationArtifact(parsed);
+        const captureId = typeof artifact.captureId === 'string' ? artifact.captureId : '';
+        const resourceUri = buildCaptureResourceUri(captureId);
+        const normalizedArtifact = {
+          ...artifact,
+          resourceUri,
+        };
+        const extraContent = await buildCaptureExtraContent(
+          normalizedArtifact,
+          captureId ? `Editor ${captureId}` : 'Editor screenshot',
+          'Captured editor viewport screenshot.',
+        );
+
+        return jsonToolSuccess(normalizedArtifact, { extraContent });
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'capture_runtime_screenshot',
+    {
+      title: 'Capture Runtime Screenshot',
+      description: 'Run an automation scenario and return the first normalized runtime screenshot artifact.',
+      inputSchema: {
+        automation_filter: z.string().regex(
+          /^[A-Za-z0-9_.+* -]+$/u,
+          'automation_filter must contain only alphanumeric, dots, underscores, plus, asterisk, hyphen, and spaces',
+        ).describe(
+          'Automation test filter passed to run_automation_tests.',
+        ),
+        engine_root: z.string().optional().describe(
+          'Optional Unreal Engine root. Falls back to editor context or UE_ENGINE_ROOT.',
+        ),
+        project_path: z.string().optional().describe(
+          'Optional .uproject path. Falls back to editor context or UE_PROJECT_PATH.',
+        ),
+        target: z.string().optional().describe(
+          'Optional editor target name to keep in the run metadata.',
+        ),
+        report_output_dir: z.string().optional().describe(
+          'Optional host filesystem directory for this run.',
+        ),
+        timeout_seconds: z.number().int().positive().default(3600).describe(
+          'Maximum wall-clock time for the automation process before the host terminates it.',
+        ),
+        null_rhi: z.boolean().default(false).describe(
+          'Leave false for screenshot-backed runtime verification. Set true only when the automation path exports images without live rendering.',
+        ),
+      },
+      outputSchema: captureResultSchema,
+      annotations: {
+        title: 'Capture Runtime Screenshot',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ automation_filter, engine_root, project_path, target, report_output_dir, timeout_seconds, null_rhi }) => {
+      try {
+        const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+        if (!resolved.engineRoot || !resolved.projectPath) {
+          throw explainProjectResolutionFailure(
+            'capture_runtime_screenshot requires engine_root and project_path',
+            resolved,
+          );
+        }
+
+        const run = normalizeAutomationRunResult(await automationController.runAutomationTests({
+          automationFilter: automation_filter,
+          engineRoot: resolved.engineRoot,
+          projectPath: resolved.projectPath,
+          target: resolved.target,
+          reportOutputDir: report_output_dir,
+          timeoutMs: timeout_seconds * 1000,
+          nullRhi: null_rhi,
+        }));
+
+        const runtimeArtifact = (Array.isArray(run.verificationArtifacts) ? run.verificationArtifacts : [])
+          .map((artifact) => normalizeVerificationArtifactReference(artifact))
+          .find((artifact) => artifact.surface === 'pie_runtime');
+
+        if (!runtimeArtifact) {
+          return jsonToolError(new Error(
+            'capture_runtime_screenshot did not find a normalized pie_runtime artifact. Ensure the automation scenario exports a screenshot-backed artifact.',
+          ));
+        }
+
+        const extraContent = await buildCaptureExtraContent(
+          runtimeArtifact,
+          typeof runtimeArtifact.captureId === 'string' && runtimeArtifact.captureId.length > 0
+            ? `Runtime ${runtimeArtifact.captureId}`
+            : 'Runtime screenshot',
+          'Automation-exported runtime screenshot.',
+        );
+
+        return jsonToolSuccess({
+          ...runtimeArtifact,
+          operation: 'capture_runtime_screenshot',
+          automationRun: run,
+          inputResolution: {
+            engineRoot: resolved.sources.engineRoot,
+            projectPath: resolved.sources.projectPath,
+            target: resolved.sources.target,
+            contextError: resolved.contextError,
+          },
         }, { extraContent });
       } catch (error) {
         return jsonToolError(error);

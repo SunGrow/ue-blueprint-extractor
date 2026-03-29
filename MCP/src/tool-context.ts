@@ -7,6 +7,7 @@ export type ProjectAutomationContext = {
   engineDir?: string;
   engineRoot?: string;
   editorTarget?: string;
+  isPlayingInEditor?: boolean;
   hostPlatform?: string;
   supportsLiveCoding?: boolean;
   liveCodingAvailable?: boolean;

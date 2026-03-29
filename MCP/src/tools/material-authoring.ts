@@ -39,6 +39,16 @@ function structuredToolError(
   };
 }
 
+function normalizeMaterialToolOperation(
+  parsed: Record<string, unknown>,
+  operation: 'create_material' | 'extract_material' | 'modify_material',
+): Record<string, unknown> {
+  return {
+    ...parsed,
+    operation,
+  };
+}
+
 export function registerMaterialAuthoringTools({
   server,
   callSubsystemJson,
@@ -87,7 +97,7 @@ export function registerMaterialAuthoringTools({
             SettingsJson: JSON.stringify(settings ?? {}),
             bValidateOnly: validate_only,
           });
-          return jsonToolSuccess(parsed);
+          return jsonToolSuccess(normalizeMaterialToolOperation(parsed, 'create_material'));
         }
         const parsed = await callSubsystemJson('CreateMaterialFunction', {
           AssetPath: asset_path,
@@ -95,7 +105,7 @@ export function registerMaterialAuthoringTools({
           SettingsJson: JSON.stringify(settings ?? {}),
           bValidateOnly: validate_only,
         });
-        return jsonToolSuccess(parsed);
+        return jsonToolSuccess(normalizeMaterialToolOperation(parsed, 'create_material'));
       } catch (error) {
         return jsonToolError(error);
       }
@@ -274,7 +284,7 @@ export function registerMaterialAuthoringTools({
           PayloadJson: JSON.stringify(payload),
           bValidateOnly: validate_only,
         });
-        return jsonToolSuccess(parsed);
+        return jsonToolSuccess(normalizeMaterialToolOperation(parsed, 'modify_material'));
       } catch (error) {
         return jsonToolError(error);
       }

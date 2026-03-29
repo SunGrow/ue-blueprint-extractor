@@ -23,7 +23,7 @@ Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotoc
  AI Assistant         stdio           MCP Server         HTTP :30010        Unreal Editor
  ─────────────  ◄────────────►  ─────────────────  ◄──────────────────►  ─────────────────
   Claude Code                     Node.js process                         Remote Control API
-  Codex                           89 tools                                BlueprintExtractor
+  Codex                           95 tools                                BlueprintExtractor
   ...                             4 resource templates                    plugin
                                   8 prompts
 ```
@@ -35,9 +35,10 @@ Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotoc
 | **Extract** | Read Blueprints, widgets, materials, animations, data assets, state trees, and more |
 | **Author** | Create and modify widgets, materials, Blueprints, input actions, AI assets, data tables |
 | **Build** | Compile project code, trigger Live Coding, restart the editor, sync changes |
+| **PIE** | Start, stop, and relaunch Play-In-Editor sessions from the active editor |
 | **Import** | Bring in textures, meshes, and generic assets with async job polling |
 | **Test** | Run UE automation tests, collect results and artifacts |
-| **Verify** | Capture widget screenshots, compare against references, inspect motion checkpoints |
+| **Verify** | Capture widget previews, editor screenshots, runtime screenshots, compare against references, inspect motion checkpoints |
 
 <br>
 
@@ -68,7 +69,7 @@ Connects to the editor at `127.0.0.1:30010` by default.
 ```bash
 claude mcp add -s user -t stdio blueprint-extractor \
   -e UE_REMOTE_CONTROL_PORT=30010 \
-  -- npx -y blueprint-extractor-mcp@6.0.5
+  -- npx -y blueprint-extractor-mcp@6.0.6
 ```
 
 </td></tr>
@@ -77,7 +78,7 @@ claude mcp add -s user -t stdio blueprint-extractor \
 
 ```bash
 codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
-  blueprint-extractor -- npx -y blueprint-extractor-mcp@6.0.5
+  blueprint-extractor -- npx -y blueprint-extractor-mcp@6.0.6
 ```
 
 </td></tr>
@@ -101,8 +102,8 @@ Only **~13 core tools** are visible by default to keep the context window lean. 
 | `animation_authoring` | 7 | Anim sequences, montages, blend spaces, widget motion |
 | `data_tables` | 7 | Data assets, data tables, curves, Enhanced Input actions & mappings |
 | `import` | 3 | `import_assets` with texture/mesh options, job polling |
-| `automation_testing` | 4 | `run_automation_tests` + run inspection and artifact retrieval |
-| `verification` | 7 | Widget captures, motion checkpoint bundles, reference comparisons |
+| `automation_testing` | 7 | `run_automation_tests`, run inspection, project automation context, PIE lifecycle control |
+| `verification` | 9 | Widget captures, editor/runtime screenshots, motion checkpoint bundles, reference comparisons |
 
 ### Contract Design
 
@@ -114,6 +115,8 @@ The tool contract is optimized for model reliability:
 - **Structured error envelopes** with diagnostic codes and recovery hints
 - **Explicit-save semantics** &mdash; nothing persists until `save_assets` is called
 - **Next-step hints** guiding the assistant toward the logical follow-up action
+
+See [../docs/CURRENT_STATUS.md](../docs/CURRENT_STATUS.md) for the current validation snapshot, normative docs, and the one-shot stabilization ledger.
 
 <br>
 
@@ -129,6 +132,8 @@ The tool contract is optimized for model reliability:
 | `UE_PROJECT_TARGET` | &mdash; | Build target name (or `UE_EDITOR_TARGET`) |
 | `UE_BUILD_PLATFORM` | &mdash; | e.g. `Win64` |
 | `UE_BUILD_CONFIGURATION` | &mdash; | e.g. `Development` |
+
+`get_project_automation_context` surfaces the editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state that project-control and verification flows use for fallback or guard logic.
 
 <br>
 
@@ -175,7 +180,12 @@ npm test            # unit + stdio integration
 | `npm run test:publish-gate` | Version consistency and publish readiness |
 | `BLUEPRINT_EXTRACTOR_LIVE_E2E=1 npm run test:live` | Full end-to-end against a running editor |
 
-The live suite exercises texture/mesh import via HTTP fixtures, material authoring workflows, Enhanced Input round-trips, and asset persistence.
+The live suite exercises texture/mesh import via HTTP fixtures, material authoring workflows, Enhanced Input round-trips, widget authoring, and project-control round-trips.
+
+The UE runner keeps two explicit lanes:
+
+- headless/default: `BlueprintExtractor` with `-NullRHI`
+- rendered verification: targeted filters with `-NoNullRHI` and optional `-AllowSoftwareRendering`
 
 <br>
 

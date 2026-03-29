@@ -65,7 +65,8 @@ export async function getProjectAutomationContext(
 
 let cachedHeuristicEngineRoot: string | undefined;
 
-const HEURISTIC_ENGINE_CANDIDATES = [
+export const HEURISTIC_ENGINE_CANDIDATES = [
+  'C:/Program Files/Epic Games/UE_5.7',
   'C:/Program Files/Epic Games/UE_5.6',
   'C:/Program Files/Epic Games/UE_5.5',
   'C:/Program Files/Epic Games/UE_5.4',

@@ -157,12 +157,32 @@ export function collectToolExampleFamilies(
   exampleCatalog: Record<string, ExampleSummaryEntry>,
   toolName: string,
 ): Array<Record<string, unknown>> {
+  const equivalentToolNames = new Set<string>([toolName]);
+
+  if (toolName === 'modify_widget_blueprint') {
+    [
+      'patch_widget',
+      'patch_widget_class_defaults',
+      'insert_widget_child',
+      'remove_widget',
+      'move_widget',
+      'wrap_widget',
+      'replace_widget_class',
+      'replace_widget_tree',
+      'batch_widget_operations',
+    ].forEach((name) => equivalentToolNames.add(name));
+  }
+
+  if (toolName === 'compile_widget_blueprint') {
+    equivalentToolNames.add('compile_widget');
+  }
+
   return Object.entries(exampleCatalog)
     .flatMap(([family, entry]) => {
       const exampleTitles = entry.examples
-        .filter((example) => example.tool === toolName)
+        .filter((example) => equivalentToolNames.has(example.tool))
         .map((example) => example.title);
-      const usedInRecommendedFlow = entry.recommended_flow.includes(toolName);
+      const usedInRecommendedFlow = entry.recommended_flow.some((name) => equivalentToolNames.has(name));
 
       if (!usedInRecommendedFlow && exampleTitles.length === 0) {
         return [];
@@ -198,6 +218,16 @@ export function collectRelatedResources(toolName: string): string[] {
     resources.add('blueprint://widget-best-practices');
     resources.add('blueprint://verification-workflows');
   }
+  if (
+    toolName === 'capture_editor_screenshot'
+    || toolName === 'capture_runtime_screenshot'
+    || toolName === 'start_pie'
+    || toolName === 'stop_pie'
+    || toolName === 'relaunch_pie'
+  ) {
+    resources.add('blueprint://verification-workflows');
+    resources.add('blueprint://project-automation');
+  }
   if (toolName.includes('material')) {
     resources.add('blueprint://material-graph-guidance');
   }
@@ -211,6 +241,9 @@ export function collectRelatedResources(toolName: string): string[] {
     || toolName === 'restart_editor'
     || toolName === 'wait_for_editor'
     || toolName === 'sync_project_code'
+    || toolName === 'start_pie'
+    || toolName === 'stop_pie'
+    || toolName === 'relaunch_pie'
   ) {
     resources.add('blueprint://project-automation');
   }

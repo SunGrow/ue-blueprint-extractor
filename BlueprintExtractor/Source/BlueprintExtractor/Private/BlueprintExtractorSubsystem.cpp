@@ -52,6 +52,8 @@
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonReader.h"
 #include "Builders/WidgetTreeBuilder.h"
+#include "PlayInEditorDataTypes.h"
+#include "Tests/AutomationEditorCommon.h"
 #include "WidgetBlueprint.h"
 #include "Containers/Ticker.h"
 #include "GenericPlatform/GenericPlatformProperties.h"
@@ -62,6 +64,8 @@
 #include "Misc/EngineVersionComparison.h"
 #include "HAL/PlatformMisc.h"
 #include "FileHelpers.h"
+#include "Editor/UnrealEdEngine.h"
+#include "UnrealEdGlobals.h"
 #include "UnrealEdMisc.h"
 #include "UObject/UObjectIterator.h"
 
@@ -1273,6 +1277,34 @@ FString UBlueprintExtractorSubsystem::CaptureWidgetPreview(const FString& AssetP
 
 	const TSharedPtr<FJsonObject> Result = BlueprintExtractorCapture::CaptureMetadataToJson(Metadata);
 	Result->SetStringField(TEXT("operation"), TEXT("capture_widget_preview"));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CaptureEditorScreenshot()
+{
+	FBlueprintExtractorCaptureMetadata Metadata;
+	FString Error;
+	if (!BlueprintExtractorCapture::CaptureEditorScreenshot(Metadata, Error))
+	{
+		return MakeErrorJson(Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorCapture::CaptureMetadataToJson(Metadata);
+	Result->SetStringField(TEXT("operation"), TEXT("capture_editor_screenshot"));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::CaptureRuntimeScreenshot()
+{
+	FBlueprintExtractorCaptureMetadata Metadata;
+	FString Error;
+	if (!BlueprintExtractorCapture::CaptureRuntimeScreenshot(TEXT("runtime"), Metadata, Error))
+	{
+		return MakeErrorJson(Error);
+	}
+
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorCapture::CaptureMetadataToJson(Metadata);
+	Result->SetStringField(TEXT("operation"), TEXT("capture_runtime_screenshot"));
 	return SerializeJsonObject(Result);
 }
 
@@ -2853,6 +2885,7 @@ FString UBlueprintExtractorSubsystem::GetProjectAutomationContext()
 	Result->SetStringField(TEXT("engineRoot"), FPaths::GetPath(FPaths::GetPath(EngineDir)));
 	Result->SetStringField(TEXT("editorTarget"), FString::Printf(TEXT("%sEditor"), FApp::GetProjectName()));
 	Result->SetStringField(TEXT("hostPlatform"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()));
+	Result->SetBoolField(TEXT("isPlayingInEditor"), GEditor && GEditor->PlayWorld != nullptr);
 
 	bool bSupportsLiveCoding = false;
 	bool bLiveCodingAvailable = false;
@@ -2886,6 +2919,155 @@ FString UBlueprintExtractorSubsystem::GetProjectAutomationContext()
 		Result->SetStringField(TEXT("liveCodingError"), LiveCodingError);
 	}
 
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::StartPIE(const bool bSimulateInEditor)
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("operation"), TEXT("start_pie"));
+	Result->SetBoolField(TEXT("simulate"), bSimulateInEditor);
+
+	if (!GEditor)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("message"), TEXT("Editor instance is unavailable."));
+		return SerializeJsonObject(Result);
+	}
+	if (!GUnrealEd)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("message"), TEXT("UnrealEd engine instance is unavailable."));
+		return SerializeJsonObject(Result);
+	}
+
+	const bool bAlreadyPlaying = GEditor->PlayWorld != nullptr || GEditor->bIsSimulatingInEditor;
+	Result->SetBoolField(TEXT("wasPlayingInEditor"), bAlreadyPlaying);
+	if (bAlreadyPlaying)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetBoolField(TEXT("scheduled"), false);
+		Result->SetBoolField(TEXT("isPlayingInEditor"), true);
+		Result->SetStringField(TEXT("message"), TEXT("A Play-In-Editor session is already active. Stop PIE first or use relaunch_pie."));
+		return SerializeJsonObject(Result);
+	}
+
+	FRequestPlaySessionParams SessionParams;
+	if (bSimulateInEditor)
+	{
+		SessionParams.WorldType = EPlaySessionWorldType::SimulateInEditor;
+	}
+	FAutomationEditorCommonUtils::SetPlaySessionStartToActiveViewport(SessionParams);
+
+	GUnrealEd->RequestPlaySession(SessionParams);
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetBoolField(TEXT("scheduled"), true);
+	Result->SetBoolField(TEXT("isPlayingInEditor"), GEditor->PlayWorld != nullptr || GEditor->bIsSimulatingInEditor);
+	Result->SetStringField(
+		TEXT("message"),
+		bSimulateInEditor
+			? TEXT("Simulate-In-Editor session requested.")
+			: TEXT("Play-In-Editor session requested."));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::StopPIE()
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("operation"), TEXT("stop_pie"));
+
+	if (!GEditor)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("message"), TEXT("Editor instance is unavailable."));
+		return SerializeJsonObject(Result);
+	}
+	if (!GUnrealEd)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("message"), TEXT("UnrealEd engine instance is unavailable."));
+		return SerializeJsonObject(Result);
+	}
+
+	const bool bWasPlaying = GEditor->PlayWorld != nullptr || GEditor->bIsSimulatingInEditor;
+	Result->SetBoolField(TEXT("wasPlayingInEditor"), bWasPlaying);
+	if (!bWasPlaying)
+	{
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetBoolField(TEXT("scheduled"), false);
+		Result->SetBoolField(TEXT("isPlayingInEditor"), false);
+		Result->SetStringField(TEXT("message"), TEXT("No active Play-In-Editor session was running."));
+		return SerializeJsonObject(Result);
+	}
+
+	GUnrealEd->RequestEndPlayMap();
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetBoolField(TEXT("scheduled"), true);
+	Result->SetBoolField(TEXT("isPlayingInEditor"), GEditor->PlayWorld != nullptr || GEditor->bIsSimulatingInEditor);
+	Result->SetStringField(TEXT("message"), TEXT("Play-In-Editor stop requested."));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::RelaunchPIE(const bool bSimulateInEditor)
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("operation"), TEXT("relaunch_pie"));
+	Result->SetBoolField(TEXT("simulate"), bSimulateInEditor);
+
+	if (!GEditor)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("message"), TEXT("Editor instance is unavailable."));
+		return SerializeJsonObject(Result);
+	}
+	if (!GUnrealEd)
+	{
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("message"), TEXT("UnrealEd engine instance is unavailable."));
+		return SerializeJsonObject(Result);
+	}
+
+	const bool bWasPlaying = GEditor->PlayWorld != nullptr || GEditor->bIsSimulatingInEditor;
+	Result->SetBoolField(TEXT("wasPlayingInEditor"), bWasPlaying);
+	if (!bWasPlaying)
+	{
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetBoolField(TEXT("scheduled"), false);
+		Result->SetBoolField(TEXT("isPlayingInEditor"), false);
+		Result->SetStringField(TEXT("message"), TEXT("No active Play-In-Editor session was running."));
+		return SerializeJsonObject(Result);
+	}
+
+	GUnrealEd->RequestEndPlayMap();
+
+	FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateLambda([bSimulateInEditor](float)
+		{
+			if (!GEditor)
+			{
+				return false;
+			}
+
+			FRequestPlaySessionParams SessionParams;
+			if (bSimulateInEditor)
+		{
+			SessionParams.WorldType = EPlaySessionWorldType::SimulateInEditor;
+		}
+		FAutomationEditorCommonUtils::SetPlaySessionStartToActiveViewport(SessionParams);
+
+			GUnrealEd->RequestPlaySession(SessionParams);
+			return false;
+		}),
+		0.1f);
+
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetBoolField(TEXT("scheduled"), true);
+	Result->SetBoolField(TEXT("isPlayingInEditor"), GEditor->PlayWorld != nullptr || GEditor->bIsSimulatingInEditor);
+	Result->SetStringField(
+		TEXT("message"),
+		bSimulateInEditor
+			? TEXT("Simulate-In-Editor relaunch requested.")
+			: TEXT("Play-In-Editor relaunch requested."));
 	return SerializeJsonObject(Result);
 }
 

@@ -437,6 +437,7 @@ export const BlueprintMemberMutationOperationSchema = z.enum([
   'patch_component',
   'add_component',
   'replace_function_stubs',
+  'reparent',
   'patch_class_defaults',
   'compile',
 ]);

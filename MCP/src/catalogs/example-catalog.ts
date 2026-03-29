@@ -19,18 +19,18 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
     summary: 'Inspect the current widget, apply the smallest structural change that solves the layout problem, compile, visually confirm the rendered result, then save.',
     recommended_flow: [
       'extract_widget_blueprint',
-      'modify_widget_blueprint',
-      'compile_widget_blueprint',
+      'patch_widget',
+      'batch_widget_operations',
+      'compile_widget',
       'capture_widget_preview',
       'save_assets',
     ],
     examples: [
       {
         title: 'patch_title_text',
-        tool: 'modify_widget_blueprint',
+        tool: 'patch_widget',
         arguments: {
           asset_path: '/Game/UI/WBP_Window',
-          operation: 'patch_widget',
           widget_path: 'WindowRoot/TitleBar/TitleText',
           properties: { Text: 'Window' },
           compile_after: true,
@@ -38,10 +38,9 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
       },
       {
         title: 'insert_body_text',
-        tool: 'modify_widget_blueprint',
+        tool: 'batch_widget_operations',
         arguments: {
           asset_path: '/Game/UI/WBP_Window',
-          operation: 'batch',
           operations: [
             {
               operation: 'insert_child',
@@ -64,10 +63,11 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
       'normalize_ui_design_input',
       'design_menu_from_design_spec',
       'extract_widget_blueprint',
-      'import_textures',
+      'import_assets',
       'create_material_instance',
-      'modify_widget_blueprint',
-      'compile_widget_blueprint',
+      'patch_widget',
+      'batch_widget_operations',
+      'compile_widget',
       'capture_widget_preview',
       'compare_capture_to_reference',
       'save_assets',
@@ -75,10 +75,9 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
     examples: [
       {
         title: 'text_image_menu_screen',
-        tool: 'modify_widget_blueprint',
+        tool: 'patch_widget',
         arguments: {
           asset_path: '/Game/UI/Screens/WBP_MainMenu',
-          operation: 'patch_widget',
           widget_path: 'WindowRoot/TitleBar/TitleText',
           properties: { Text: 'Campaign' },
           compile_after: true,
@@ -447,6 +446,64 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
       },
     ],
   },
+  data_asset_instanced_graph: {
+    summary: 'Use generic DataAsset reflection for asset-owned config data, including inline instanced UObject graphs for UPROPERTY(Instanced) and EditInlineNew values.',
+    recommended_flow: [
+      'create_data_asset',
+      'modify_data_asset',
+      'extract_asset',
+      'save_assets',
+    ],
+    examples: [
+      {
+        title: 'create_inline_object_graph',
+        tool: 'create_data_asset',
+        arguments: {
+          asset_class_path: '/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureDataAsset',
+          asset_path: '/Game/Data/DA_MenuConfig',
+          properties: {
+            Count: 7,
+            InlineObject: {
+              classPath: '/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureInlineObject',
+              properties: {
+                Label: 'Root',
+                Count: 11,
+                Child: {
+                  classPath: '/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureInlineObject',
+                  properties: {
+                    Label: 'Leaf',
+                    Count: 12,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        title: 'patch_inline_object_graph',
+        tool: 'modify_data_asset',
+        arguments: {
+          asset_path: '/Game/Data/DA_MenuConfig.DA_MenuConfig',
+          properties: {
+            Count: 8,
+            InlineObject: {
+              properties: {
+                Label: 'RootModified',
+                Count: 13,
+                Child: {
+                  properties: {
+                    Label: 'LeafModified',
+                    Count: 14,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
   window_ui_polish: {
     summary: 'Use the thin sequencing helper when a screen change touches variable flags, class defaults, compile, and optional code sync in one flow, then gate persistence on visual confirmation.',
     recommended_flow: [
@@ -473,6 +530,46 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
           compile_after: true,
           save_after: false,
         },
+      },
+    ],
+  },
+  pie_and_screenshots: {
+    summary: 'Use explicit PIE lifecycle controls for live editor sessions, and use the editor/runtime screenshot tools when rendered evidence is needed in the shared verification-artifact format.',
+    recommended_flow: [
+      'get_project_automation_context',
+      'start_pie',
+      'capture_editor_screenshot',
+      'capture_runtime_screenshot',
+      'stop_pie',
+    ],
+    examples: [
+      {
+        title: 'start_play_session',
+        tool: 'start_pie',
+        arguments: {
+          simulate: false,
+        },
+      },
+      {
+        title: 'capture_editor_viewport',
+        tool: 'capture_editor_screenshot',
+        arguments: {},
+      },
+      {
+        title: 'capture_runtime_frame_from_automation',
+        tool: 'capture_runtime_screenshot',
+        arguments: {
+          automation_filter: 'BlueprintExtractor.ProjectControl.PIEAndScreenshots',
+          engine_root: 'C:/Program Files/Epic Games/UE_5.7',
+          project_path: 'C:/Projects/MyGame/MyGame.uproject',
+          target: 'MyGameEditor',
+          null_rhi: false,
+        },
+      },
+      {
+        title: 'stop_play_session',
+        tool: 'stop_pie',
+        arguments: {},
       },
     ],
   },

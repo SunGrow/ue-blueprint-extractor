@@ -67,22 +67,26 @@ Long-running tool families expose `execution` metadata in the same result envelo
 Task-aware families currently include:
 
 - `import_assets`
-- `reimport_assets`
-- `import_textures`
-- `import_meshes`
 - `get_import_job`
 - `list_import_jobs`
 - `compile_project_code`
 - `restart_editor`
 - `sync_project_code`
 - `trigger_live_coding`
+- `capture_runtime_screenshot`
+- `get_automation_test_run`
+- `list_automation_test_runs`
 
 ## Project-Code Notes
 
+- `get_project_automation_context` surfaces the editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state used by project-control fallbacks and PIE guards.
+- `start_pie`, `stop_pie`, and `relaunch_pie` are the explicit PIE lifecycle controls. Use them for live editor state, not as a replacement for automation-backed runtime verification.
 - `wait_for_editor` polls Remote Control once per second and returns `connected`, `elapsedMs`, `timeoutMs`, and `attempts`, with `editor_unavailable` when the timeout elapses.
 - `trigger_live_coding` returns `fallbackRecommended` and a normalized `reason` when editor-side Live Coding cannot apply the requested change. If a recent external build exists, it is surfaced as `lastExternalBuild`.
 - `sync_project_code.restart_first=true` now means shutdown-first orchestration: the editor is asked to close without relaunching, the host builds with unlocked DLLs, then the host launches the editor and waits for Remote Control to reconnect.
 - `run_automation_tests` and `get_automation_test_run` now surface `verificationArtifacts` for image-based automation report outputs, normalized to the same verification-artifact contract used by widget captures.
+- `capture_editor_screenshot` returns a shared verification artifact for the active editor viewport with surface `editor_tool_viewport`.
+- `capture_runtime_screenshot` runs an automation scenario, then returns the first normalized runtime artifact with surface `pie_runtime`.
 
 ## CommonUI Button Style Workflow
 
@@ -104,10 +108,10 @@ Use a shared `design_spec_json` before authoring a high-fidelity menu:
 1. `normalize_ui_design_input`
 2. `design_menu_from_design_spec`
 3. `extract_widget_blueprint`
-4. `import_textures` or `import_assets` when the design needs project-owned textures or rendered references
+4. `import_assets` when the design needs project-owned textures or rendered references
 5. `create_material_instance`, `modify_material_instance`, `create_commonui_button_style`, `modify_commonui_button_style`, or `apply_commonui_button_style`
-6. `modify_widget_blueprint`
-7. `compile_widget_blueprint`
+6. `patch_widget`, `insert_widget_child`, `batch_widget_operations`, or `replace_widget_tree` depending on the smallest required structural change
+7. `compile_widget`
 8. `capture_widget_preview`
 9. `compare_capture_to_reference` when reference frames exist
 10. `save_assets`
@@ -165,15 +169,27 @@ Canonical checkpoints:
 
 Compile/save alone is never accepted as motion verification. When a runtime scenario cannot export checkpoint artifacts yet, verification must stay partial.
 
+### PIE And Screenshot Verification
+
+Use the explicit screenshot tools when you need rendered editor or runtime evidence outside the offscreen widget-preview lane:
+
+1. `get_project_automation_context`
+2. `start_pie` / `stop_pie` / `relaunch_pie` when the live editor state matters
+3. `capture_editor_screenshot` for the active editor viewport
+4. `capture_runtime_screenshot` for automation-backed runtime frames
+5. `compare_capture_to_reference` when reference images exist
+
+Both screenshot tools reuse the shared verification-artifact contract. Screenshots support verification, but they do not replace semantic checks for authored data or gameplay assertions for runtime behavior.
+
 ### Material Authoring
 
-Use the smaller composable tools first:
+Use `material_graph_operation` with the composable operation names first:
 
 1. `create_material`
-2. `set_material_settings`
-3. `add_material_expression`
-4. `connect_material_expressions`
-5. `bind_material_property`
+2. `material_graph_operation` with `operation: "set_material_settings"`
+3. `material_graph_operation` with `operation: "add_expression"`
+4. `material_graph_operation` with `operation: "connect_expressions"`
+5. `material_graph_operation` with `operation: "connect_material_property"`
 6. `compile_material_asset`
 7. `save_assets`
 
@@ -188,19 +204,28 @@ Use the dedicated tools instead of generic DataAsset reflection:
 3. `create_input_mapping_context`
 4. `modify_input_mapping_context`
 
-Enhanced Input assets can still be inspected with `extract_dataasset`.
+Enhanced Input assets can still be inspected with `extract_asset` using `asset_type: "data_asset"`.
+
+### Inline Instanced DataAsset Graphs
+
+Generic DataAsset reflection supports inline instanced `UObject` graphs for `UPROPERTY(Instanced)` / `EditInlineNew` fields:
+
+- `create_data_asset` accepts nested `{ "classPath": "...", "properties": { ... } }` payloads for instanced object values.
+- `modify_data_asset` can patch nested `properties` without restating the full object graph.
+- `extract_asset` with `asset_type: "data_asset"` returns nested inline-object values instead of flattening them into asset-path strings.
 
 ### Widget Redesign
 
 - Normalize multimodal design input into `design_spec_json` first when the redesign is fidelity-sensitive.
 - Inspect the current widget and any owning HUD/transition assets first.
-- Prefer `modify_widget_blueprint` for small structural changes.
-- Use `build_widget_tree` only when replacing the full tree is justified.
+- Prefer operation-specific widget tools such as `patch_widget`, `insert_widget_child`, `remove_widget`, `move_widget`, `wrap_widget`, `replace_widget_class`, and `batch_widget_operations`.
+- Use `replace_widget_tree` only when replacing the full tree is justified. `modify_widget_blueprint`, `build_widget_tree`, and `compile_widget_blueprint` remain deprecated compatibility surfaces.
 - `extract_widget_blueprint` now always returns `rootWidget` as an object or `null`. If extraction degrades, inspect `widgetTreeStatus`, `widgetTreeError`, and `compile.errors` before rebuilding the tree.
-- Compile immediately after structural changes.
+- Compile immediately after structural changes with `compile_widget`.
 - Run `capture_widget_preview` after compile is clean; compile/save alone is not treated as visual proof for user-facing widget work.
+- Use `capture_editor_screenshot` when the active editor viewport is the relevant rendered reference rather than the offscreen widget preview.
 - If reference frames or motion checkpoints exist, use `compare_capture_to_reference` before save.
-- `capture_widget_preview`, `list_captures`, and diff captures now normalize to a shared verification-artifact shape with `surface`, `scenarioId`, `assetPaths`, `worldContext`, and `cameraContext`, so later runtime/editor lanes can reuse the same contract.
+- `capture_widget_preview`, `capture_editor_screenshot`, `capture_runtime_screenshot`, `list_captures`, and diff captures now normalize to a shared verification-artifact shape with `surface`, `scenarioId`, `assetPaths`, `worldContext`, and `cameraContext`.
 - Use `apply_window_ui_changes.checkpoint_after_mutation_steps=true` when a multi-step UI flow is likely to hit compile failures, debugger pauses, or editor `ensure()` breaks.
 - `apply_window_ui_changes` now returns `verification.status` so callers can distinguish `compile_pending` from `unverified` visual confirmation and finish the flow explicitly.
 - `apply_window_ui_changes.save_after` defaults to `false` so visual verification can stay ahead of final persistence unless the caller opts into saving.

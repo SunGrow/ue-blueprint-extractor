@@ -10,6 +10,7 @@ const blueprintMemberMutationOperationSchema = z.enum([
   'patch_variable',
   'add_component',
   'patch_component',
+  'reparent',
   'patch_class_defaults',
 ]);
 const blueprintGraphMutationOperationSchema = z.enum([
@@ -543,6 +544,74 @@ describe('registerBlueprintAuthoringTools', () => {
       AssetPath: '/Game/Test/BP_Test',
       Operation: 'patch_class_defaults',
       PayloadJson: JSON.stringify({ classDefaults: { SomeProperty: 'value' } }),
+      bValidateOnly: true,
+    });
+  });
+
+  it('accepts reparent and serializes parentClassPath unchanged', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'reparent',
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    const result = await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'reparent',
+      payload: {
+        parentClassPath: '/Script/Engine.Pawn',
+      },
+      validate_only: false,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyBlueprintMembers', {
+      AssetPath: '/Game/Test/BP_Test',
+      Operation: 'reparent',
+      PayloadJson: JSON.stringify({ parentClassPath: '/Script/Engine.Pawn' }),
+      bValidateOnly: false,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'reparent',
+    });
+  });
+
+  it('accepts reparent parent_class_path alias and forwards it unchanged', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'reparent',
+    }));
+
+    registerBlueprintAuthoringTools({
+      server: registry.server,
+      callSubsystemJson,
+      jsonObjectSchema,
+      blueprintMemberMutationOperationSchema,
+      blueprintGraphMutationOperationSchema,
+    });
+
+    await registry.getTool('modify_blueprint_members').handler({
+      asset_path: '/Game/Test/BP_Test',
+      operation: 'reparent',
+      payload: {
+        parent_class_path: '/Script/Engine.Pawn',
+      },
+      validate_only: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyBlueprintMembers', {
+      AssetPath: '/Game/Test/BP_Test',
+      Operation: 'reparent',
+      PayloadJson: JSON.stringify({ parent_class_path: '/Script/Engine.Pawn' }),
       bValidateOnly: true,
     });
   });

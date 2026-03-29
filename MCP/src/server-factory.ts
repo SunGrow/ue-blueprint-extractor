@@ -1,6 +1,7 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { UEClient } from './ue-client.js';
+import { packageVersion } from './helpers/package-metadata.js';
 import {
   ProjectController,
   type ProjectControllerLike,
@@ -64,7 +65,7 @@ export function createBlueprintExtractorServer(
 
   const server = new McpServer({
     name: 'blueprint-extractor',
-    version: '6.0.3',
+    version: packageVersion,
   }, {
     instructions: serverInstructions,
   });

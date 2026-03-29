@@ -64,6 +64,177 @@ describe('registerWidgetVerificationTools', () => {
     });
   });
 
+  it('captures editor screenshots and normalizes viewport capture artifacts', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      captureId: 'editor-cap-1',
+      captureType: 'editor_screenshot',
+      surface: 'editor_viewport',
+      assetPath: 'editor://active_level_viewport',
+      artifactPath: 'Z:/nonexistent/editor-cap-1.png',
+      metadataPath: 'Z:/nonexistent/editor-cap-1.json',
+      captureDirectory: 'Z:/nonexistent/editor-cap-1',
+      width: 1280,
+      height: 720,
+      fileSizeBytes: 12345,
+      createdAt: '2026-03-28T12:00:00Z',
+    }));
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson,
+      automationController: { runAutomationTests: vi.fn() } as never,
+      resolveProjectInputs: vi.fn(),
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('capture_editor_screenshot').handler({});
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CaptureEditorScreenshot', {});
+    expect(parseDirectToolResult(result)).toMatchObject({
+      captureId: 'editor-cap-1',
+      captureType: 'editor_screenshot',
+      surface: 'editor_tool_viewport',
+      resourceUri: 'blueprint://captures/editor-cap-1',
+    });
+  });
+
+  it('captures runtime screenshots from automation artifacts and normalizes legacy runtime surfaces', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => ({
+      engineRoot: 'C:/UE',
+      projectPath: 'C:/Proj/Proj.uproject',
+      target: 'ProjEditor',
+      context: null,
+      contextError: undefined,
+      sources: {
+        engineRoot: 'explicit',
+        projectPath: 'environment',
+        target: 'editor_context',
+      },
+    }));
+    const automationController = {
+      runAutomationTests: vi.fn(async () => ({
+        runId: 'run-1',
+        automationFilter: 'Runtime.Screenshot',
+        verificationArtifacts: [{
+          captureId: 'runtime-cap-1',
+          captureType: 'runtime_screenshot',
+          surface: 'runtime_viewport',
+          scenarioId: 'runtime_screenshot:runtime',
+          artifactPath: 'Z:/nonexistent/runtime-cap-1.png',
+          metadataPath: 'Z:/nonexistent/runtime-cap-1.json',
+          captureDirectory: 'Z:/nonexistent/runtime-cap-1',
+          assetPath: 'runtime_screenshot://runtime',
+          assetPaths: ['runtime_screenshot://runtime'],
+          width: 1920,
+          height: 1080,
+          fileSizeBytes: 67890,
+          createdAt: '2026-03-28T12:00:00Z',
+        }],
+      })),
+    };
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson: vi.fn(),
+      automationController: automationController as never,
+      resolveProjectInputs,
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('capture_runtime_screenshot').handler({
+      automation_filter: 'Runtime.Screenshot',
+      timeout_seconds: 45,
+      null_rhi: false,
+    });
+
+    expect(automationController.runAutomationTests).toHaveBeenCalledWith({
+      automationFilter: 'Runtime.Screenshot',
+      engineRoot: 'C:/UE',
+      projectPath: 'C:/Proj/Proj.uproject',
+      target: 'ProjEditor',
+      reportOutputDir: undefined,
+      timeoutMs: 45_000,
+      nullRhi: false,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      operation: 'capture_runtime_screenshot',
+      captureId: 'runtime-cap-1',
+      surface: 'pie_runtime',
+      inputResolution: {
+        engineRoot: 'explicit',
+        projectPath: 'environment',
+        target: 'editor_context',
+      },
+      automationRun: {
+        runId: 'run-1',
+      },
+    });
+  });
+
+  it('returns an error when runtime screenshot automation exports no runtime artifact', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => ({
+      engineRoot: 'C:/UE',
+      projectPath: 'C:/Proj/Proj.uproject',
+      target: 'ProjEditor',
+      context: null,
+      contextError: undefined,
+      sources: {
+        engineRoot: 'explicit',
+        projectPath: 'explicit',
+        target: 'explicit',
+      },
+    }));
+
+    registerWidgetVerificationTools({
+      server: registry.server,
+      callSubsystemJson: vi.fn(),
+      automationController: {
+        runAutomationTests: vi.fn(async () => ({
+          runId: 'run-2',
+          automationFilter: 'Runtime.Empty',
+          verificationArtifacts: [],
+        })),
+      } as never,
+      resolveProjectInputs,
+      captureResultSchema,
+      widgetAnimationCheckpointSchema,
+      motionCaptureModeSchema,
+      motionCaptureBundleResultSchema,
+      compareCaptureResultSchema,
+      listCapturesResultSchema,
+      cleanupCapturesResultSchema,
+      compareMotionCaptureBundleResultSchema,
+    });
+
+    const result = await registry.getTool('capture_runtime_screenshot').handler({
+      automation_filter: 'Runtime.Empty',
+      timeout_seconds: 15,
+      null_rhi: false,
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'did not find a normalized pie_runtime artifact',
+    );
+  });
+
   it('returns an error when editor_preview motion capture is missing required inputs', async () => {
     const registry = createToolRegistry();
 

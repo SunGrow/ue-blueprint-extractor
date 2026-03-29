@@ -14,7 +14,7 @@ function Get-UEFixtureBuildPlan {
         [bool]$SkipBuildProject
     )
 
-    $ProjectName = Split-Path -LeafBase $ProjectPath
+    $ProjectName = [System.IO.Path]::GetFileNameWithoutExtension($ProjectPath)
     $TargetMarkerPath = Join-Path $FixtureRoot (Join-Path "Binaries\$PlatformDir" "$ProjectName`Editor.target")
 
     if (-not $SkipBuildProject) {

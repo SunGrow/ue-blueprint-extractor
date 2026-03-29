@@ -5,6 +5,18 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.6] - 2026-03-30
+
+### Added
+
+- Added `reparent` support to `modify_blueprint_members`, including `parentClassPath` as the documented payload field and `parent_class_path` as a supported alias.
+
+### Fixed
+
+- Validated Blueprint reparent targets against UE editor rules before mutation and compiled reparented Blueprints with the required reinstancing flags.
+- Hardened `validate_only` reparenting to avoid duplicate-preview crashes during skeleton/CDO recreation while keeping the asset unchanged.
+- Extended MCP docs, tool-help output, and regression coverage for the new Blueprint member reparent flow.
+
 ## [6.0.3] - 2026-03-26
 
 ### Fixed

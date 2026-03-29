@@ -30,6 +30,7 @@ type ProjectAutomationContext = {
   projectDir?: string;
   engineRoot?: string;
   editorTarget?: string;
+  isPlayingInEditor?: boolean;
   supportsLiveCoding?: boolean;
   liveCodingAvailable?: boolean;
 };
@@ -182,8 +183,8 @@ const fixtureSmokeCases: FixtureSmokeCase[] = [
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_MATERIAL_FUNCTION',
-    tool: 'extract_material_function',
-    args: {},
+    tool: 'extract_material',
+    args: { asset_kind: 'function' },
   },
   {
     envVar: 'BLUEPRINT_EXTRACTOR_TEST_ANIM_SEQUENCE',
@@ -798,7 +799,7 @@ describeLive('live UE e2e', () => {
     cleanup.push(() => client.close());
 
     const textureEnqueue = await client.callTool({
-      name: 'import_textures',
+      name: 'import_assets',
       arguments: {
         payload: {
           items: [{
@@ -808,7 +809,7 @@ describeLive('live UE e2e', () => {
             },
             destination_path: liveImportRoot,
             destination_name: 'T_LiveTexture',
-            options: {
+            texture_options: {
               srgb: false,
             },
           }],
@@ -832,14 +833,14 @@ describeLive('live UE e2e', () => {
     ).toBe(true);
 
     const meshEnqueue = await client.callTool({
-      name: 'import_meshes',
+      name: 'import_assets',
       arguments: {
         payload: {
           items: [{
             file_path: meshFixture,
             destination_path: liveImportRoot,
             destination_name: 'SM_LiveMesh',
-            options: {
+            mesh_options: {
               mesh_type: 'static',
               combine_meshes: true,
               generate_collision: true,
@@ -1043,7 +1044,7 @@ describeLive('live UE e2e', () => {
 
     await callToolJson<Record<string, unknown>>(
       connection.client,
-      'create_material_function',
+      'create_material',
       {
         asset_path: materialFunctionPath,
         asset_kind: 'function',
@@ -1051,14 +1052,15 @@ describeLive('live UE e2e', () => {
           description: 'Live smoke material function',
         },
       },
-      'create_material_function live smoke',
+      'create_material function live smoke',
     );
 
     await callToolJson<Record<string, unknown>>(
       connection.client,
-      'modify_material_function',
+      'modify_material',
       {
         asset_path: materialFunctionObjectPath,
+        asset_kind: 'function',
         compile_after: true,
         operations: [
           {
@@ -1085,20 +1087,21 @@ describeLive('live UE e2e', () => {
           },
         ],
       },
-      'modify_material_function live smoke',
+      'modify_material function live smoke',
     );
 
     const extractMaterialFunction = await callToolJson<Record<string, unknown>>(
       connection.client,
-      'extract_material_function',
+      'extract_material',
       {
         asset_path: materialFunctionObjectPath,
+        asset_kind: 'function',
       },
-      'extract_material_function live smoke',
+      'extract_material function live smoke',
     );
     expect(extractMaterialFunction).toMatchObject({
       success: true,
-      operation: 'extract_material_function',
+      operation: 'extract_material',
       materialFunction: {
         assetKind: 'function',
       },

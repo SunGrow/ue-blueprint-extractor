@@ -61,6 +61,8 @@ struct FBlueprintExtractorMotionCaptureResult
 
 namespace BlueprintExtractorCapture
 {
+	bool CaptureEditorScreenshot(FBlueprintExtractorCaptureMetadata& OutMetadata, FString& OutError);
+
 	bool CaptureWidgetPreview(UWidgetBlueprint* WidgetBlueprint,
 		int32 RequestedWidth,
 		int32 RequestedHeight,
@@ -70,6 +72,14 @@ namespace BlueprintExtractorCapture
 	bool CaptureWidgetMotionCheckpoints(UWidgetBlueprint* WidgetBlueprint,
 		const TSharedPtr<FJsonObject>& Payload,
 		FBlueprintExtractorMotionCaptureResult& OutResult,
+		FString& OutError);
+
+	bool CaptureEditorScreenshot(const FString& CaptureName,
+		FBlueprintExtractorCaptureMetadata& OutMetadata,
+		FString& OutError);
+
+	bool CaptureRuntimeScreenshot(const FString& CaptureName,
+		FBlueprintExtractorCaptureMetadata& OutMetadata,
 		FString& OutError);
 
 	bool CompareCaptureToReference(const FString& CaptureIdOrPath,

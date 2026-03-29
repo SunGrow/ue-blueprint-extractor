@@ -392,7 +392,8 @@ bool FAuthoringHelpers::JsonValueToPropertyExportText(const FProperty* Property,
 
 bool FAuthoringHelpers::CompileBlueprint(UBlueprint* Blueprint,
                                          FAssetMutationContext& Context,
-                                         const FString& AssetKind)
+                                         const FString& AssetKind,
+                                         const EBlueprintCompileOptions AdditionalCompileOptions)
 {
 	using namespace AuthoringHelpersInternal;
 
@@ -418,7 +419,8 @@ bool FAuthoringHelpers::CompileBlueprint(UBlueprint* Blueprint,
 	FCompilerResultsLog CompileResults;
 	CompileResults.bSilentMode = true;
 	CompileResults.bAnnotateMentionedNodes = false;
-	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection, &CompileResults);
+	const EBlueprintCompileOptions CompileOptions = AdditionalCompileOptions | EBlueprintCompileOptions::SkipGarbageCollection;
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, CompileOptions, &CompileResults);
 
 	const EBlueprintStatus Status = Blueprint->Status;
 	const FString StatusString = GetBlueprintStatusString(Status);

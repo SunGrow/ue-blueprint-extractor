@@ -179,7 +179,7 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     prompts: [],
     tools: [
       'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
-      'get_project_automation_context',
+      'get_project_automation_context', 'start_pie', 'stop_pie', 'relaunch_pie',
     ],
   },
   verification: {
@@ -187,6 +187,7 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     description: 'Widget verification and capture tools',
     prompts: [],
     tools: [
+      'capture_editor_screenshot', 'capture_runtime_screenshot',
       'capture_widget_preview', 'capture_widget_motion_checkpoints',
       'compare_capture_to_reference', 'list_captures', 'cleanup_captures',
       'compare_motion_capture_bundle',

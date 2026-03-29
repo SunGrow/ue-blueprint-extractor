@@ -184,7 +184,39 @@ UObject* ResolveAssetByPath(const FString& AssetPath)
 
 bool DoesAssetExist(const FString& AssetPath)
 {
-	return ResolveAssetByPath(AssetPath) != nullptr;
+	const FString ObjectPath = NormalizeAssetObjectPath(AssetPath);
+	const FString PackagePath = NormalizeAssetPackagePath(AssetPath);
+	if (ObjectPath.IsEmpty() || PackagePath.IsEmpty())
+	{
+		return false;
+	}
+
+	const FString AssetName = FPackageName::GetLongPackageAssetName(PackagePath);
+	if (AssetName.IsEmpty())
+	{
+		return false;
+	}
+
+	if (UPackage* ExistingPackage = FindPackage(nullptr, *PackagePath))
+	{
+		if (UObject* ExistingAsset = StaticFindObject(UObject::StaticClass(), ExistingPackage, *AssetName))
+		{
+			return !ExistingAsset->IsA<UPackage>();
+		}
+	}
+
+	if (UObject* ExistingAsset = StaticFindObject(UObject::StaticClass(), nullptr, *ObjectPath))
+	{
+		return !ExistingAsset->IsA<UPackage>();
+	}
+
+	TArray<FAssetData> AssetDatas;
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	AssetRegistryModule.Get().GetAssetsByPackageName(FName(*PackagePath), AssetDatas, true);
+	return AssetDatas.ContainsByPredicate([&AssetName](const FAssetData& AssetData)
+	{
+		return AssetData.AssetName == FName(*AssetName);
+	});
 }
 
 FAssetMutationContext::FAssetMutationContext(const FString& InOperation,

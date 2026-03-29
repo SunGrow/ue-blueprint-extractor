@@ -48,6 +48,8 @@ const ALL_TEST_TOOLS = [
   'capture_widget_preview', 'capture_widget_motion_checkpoints',
   'compare_capture_to_reference', 'compare_motion_capture_bundle',
   'list_captures', 'cleanup_captures',
+  // generic verification captures
+  'capture_editor_screenshot', 'capture_runtime_screenshot',
   // tools moved from core to scopes
   'find_and_extract', 'trigger_live_coding', 'get_project_automation_context',
   // material authoring
@@ -78,6 +80,7 @@ const ALL_TEST_TOOLS = [
   'import_assets', 'get_import_job', 'list_import_jobs',
   // automation
   'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
+  'start_pie', 'stop_pie', 'relaunch_pie',
 ];
 
 describe('ToolSurfaceManager', () => {
@@ -254,12 +257,17 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('get_automation_test_run')).toBe(true);
       expect(active.has('list_automation_test_runs')).toBe(true);
       expect(active.has('get_project_automation_context')).toBe(true);
+      expect(active.has('start_pie')).toBe(true);
+      expect(active.has('stop_pie')).toBe(true);
+      expect(active.has('relaunch_pie')).toBe(true);
     });
 
     it('verification loads verification tools', () => {
       manager.activateScope('verification');
       const active = manager.getActiveTools();
 
+      expect(active.has('capture_editor_screenshot')).toBe(true);
+      expect(active.has('capture_runtime_screenshot')).toBe(true);
       expect(active.has('capture_widget_preview')).toBe(true);
       expect(active.has('compare_capture_to_reference')).toBe(true);
       expect(active.has('cleanup_captures')).toBe(true);

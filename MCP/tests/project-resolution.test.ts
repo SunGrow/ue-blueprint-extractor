@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   getProjectAutomationContext,
+  HEURISTIC_ENGINE_CANDIDATES,
   rememberExternalBuild,
   resolveProjectInputs,
 } from '../src/helpers/project-resolution.js';
@@ -119,6 +120,26 @@ describe('getProjectAutomationContext', () => {
     expect(result).toEqual(freshContext);
     expect(callSubsystemJson).toHaveBeenCalled();
   });
+
+  it('captures isPlayingInEditor when the editor context includes it', async () => {
+    const freshContext = {
+      engineRoot: 'C:/UE',
+      projectFilePath: 'C:/Proj/Proj.uproject',
+      editorTarget: 'ProjEditor',
+      isPlayingInEditor: true,
+    };
+    const callSubsystemJson = vi.fn(async () => freshContext);
+    const setCachedContext = vi.fn();
+
+    const result = await getProjectAutomationContext({
+      forceRefresh: true,
+      cachedContext: null,
+      setCachedContext,
+      callSubsystemJson,
+    });
+
+    expect(result.isPlayingInEditor).toBe(true);
+  });
 });
 
 describe('resolveProjectInputs', () => {
@@ -217,5 +238,10 @@ describe('resolveProjectInputs', () => {
 
     expect(result.contextError).toBe('subsystem unavailable');
     expect(result.sources.engineRoot).toBe('explicit');
+  });
+
+  it('includes UE 5.7 in the filesystem heuristic candidate list', () => {
+    expect(HEURISTIC_ENGINE_CANDIDATES[0]).toBe('C:/Program Files/Epic Games/UE_5.7');
+    expect(HEURISTIC_ENGINE_CANDIDATES).toContain('C:/Program Files/Epic Games/UE_5.7');
   });
 });

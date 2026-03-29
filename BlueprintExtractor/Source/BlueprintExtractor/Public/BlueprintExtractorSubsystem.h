@@ -170,6 +170,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CaptureWidgetPreview(const FString& AssetPath, int32 Width = 512, int32 Height = 512);
 
+	/** Captures the active editor viewport to a PNG artifact under Saved/BlueprintExtractor/Captures. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CaptureEditorScreenshot();
+
+	/** Captures the active PIE viewport to a PNG artifact under Saved/BlueprintExtractor/Captures. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString CaptureRuntimeScreenshot();
+
 	/** Renders one or more widget animation checkpoints to offscreen captures. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString CaptureWidgetMotionCheckpoints(const FString& AssetPath, const FString& PayloadJson);
@@ -477,6 +485,18 @@ public:
 	/** Returns current project/editor context to the MCP host for build and reconnect orchestration. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString GetProjectAutomationContext();
+
+	/** Requests a Play-In-Editor or Simulate-In-Editor session. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString StartPIE(const bool bSimulateInEditor = false);
+
+	/** Stops the active Play-In-Editor or Simulate-In-Editor session if one exists. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString StopPIE();
+
+	/** Stops the current PIE session if needed, then schedules a fresh launch. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString RelaunchPIE(const bool bSimulateInEditor = false);
 
 	/** Triggers an in-editor Live Coding compile when supported. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")

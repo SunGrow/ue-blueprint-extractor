@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,7 @@ import {
   promptCatalog,
   type UEClientLike,
 } from '../src/index.js';
+import { packageVersion } from '../src/helpers/package-metadata.js';
 import { connectInMemoryServer, getTextContent } from './test-helpers.js';
 
 class FakeUEClient implements UEClientLike {
@@ -217,6 +218,13 @@ describe('createBlueprintExtractorServer', () => {
     }
   });
 
+  it('single-sources the runtime server version from package.json', async () => {
+    const packageJson = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version?: string };
+    expect(packageVersion).toBe(packageJson.version);
+  });
+
   it('registers the expected resources, tools, prompts, and output schemas', async () => {
     const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()).server);
     cleanups.push(harness.close);
@@ -242,6 +250,8 @@ describe('createBlueprintExtractorServer', () => {
     const listImportJobs = tools.tools.find((tool) => tool.name === 'list_import_jobs');
     const saveAssets = tools.tools.find((tool) => tool.name === 'save_assets');
     const captureWidgetPreview = tools.tools.find((tool) => tool.name === 'capture_widget_preview');
+    const captureEditorScreenshot = tools.tools.find((tool) => tool.name === 'capture_editor_screenshot');
+    const captureRuntimeScreenshot = tools.tools.find((tool) => tool.name === 'capture_runtime_screenshot');
     const extractWidgetAnimation = tools.tools.find((tool) => tool.name === 'extract_widget_animation');
     const createWidgetAnimation = tools.tools.find((tool) => tool.name === 'create_widget_animation');
     const modifyWidgetAnimation = tools.tools.find((tool) => tool.name === 'modify_widget_animation');
@@ -252,6 +262,9 @@ describe('createBlueprintExtractorServer', () => {
     const runAutomationTests = tools.tools.find((tool) => tool.name === 'run_automation_tests');
     const getAutomationTestRun = tools.tools.find((tool) => tool.name === 'get_automation_test_run');
     const listAutomationTestRuns = tools.tools.find((tool) => tool.name === 'list_automation_test_runs');
+    const startPie = tools.tools.find((tool) => tool.name === 'start_pie');
+    const stopPie = tools.tools.find((tool) => tool.name === 'stop_pie');
+    const relaunchPie = tools.tools.find((tool) => tool.name === 'relaunch_pie');
     const waitForEditor = tools.tools.find((tool) => tool.name === 'wait_for_editor');
     const createCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'create_commonui_button_style');
     const extractCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'extract_commonui_button_style');
@@ -260,7 +273,7 @@ describe('createBlueprintExtractorServer', () => {
     const getToolHelp = tools.tools.find((tool) => tool.name === 'get_tool_help');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(90);
+    expect(tools.tools).toHaveLength(95);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -301,6 +314,8 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'sync_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'apply_window_ui_changes')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'capture_widget_preview')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'capture_editor_screenshot')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'capture_runtime_screenshot')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'capture_widget_motion_checkpoints')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compare_motion_capture_bundle')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compare_capture_to_reference')).toBe(true);
@@ -309,6 +324,9 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'run_automation_tests')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'get_automation_test_run')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'list_automation_test_runs')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'start_pie')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'stop_pie')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'relaunch_pie')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_input_action')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_input_action')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'create_input_mapping_context')).toBe(true);
@@ -353,6 +371,10 @@ describe('createBlueprintExtractorServer', () => {
     expectSchemaProperty(captureWidgetPreview, 'surface');
     expectSchemaProperty(captureWidgetPreview, 'scenarioId');
     expectSchemaProperty(captureWidgetPreview, 'assetPaths');
+    expectSchemaProperty(captureEditorScreenshot, 'captureId');
+    expectSchemaProperty(captureEditorScreenshot, 'surface');
+    expectSchemaProperty(captureRuntimeScreenshot, 'captureId');
+    expectSchemaProperty(captureRuntimeScreenshot, 'surface');
     expectSchemaProperty(materialGraphOperation, 'execution');
     expectSchemaProperty(extractWidgetAnimation, 'animation');
     expectSchemaProperty(createWidgetAnimation, 'assetPath');
@@ -372,6 +394,8 @@ describe('createBlueprintExtractorServer', () => {
     expect(importAssets?.annotations?.readOnlyHint).toBe(false);
     expect(getImportJob?.annotations?.readOnlyHint).toBe(true);
     expect(captureWidgetPreview?.annotations?.readOnlyHint).toBe(true);
+    expect(captureEditorScreenshot?.annotations?.readOnlyHint).toBe(true);
+    expect(captureRuntimeScreenshot?.annotations?.readOnlyHint).toBe(true);
     expect(extractWidgetAnimation?.annotations?.readOnlyHint).toBe(true);
     expect(createWidgetAnimation?.annotations?.readOnlyHint).toBe(false);
     expect(modifyWidgetAnimation?.annotations?.readOnlyHint).toBe(false);
@@ -379,6 +403,9 @@ describe('createBlueprintExtractorServer', () => {
     expect(compareMotionCaptureBundle?.annotations?.readOnlyHint).toBe(true);
     expectSchemaProperty(applyWindowUiChanges, 'verification');
     expect(getAutomationTestRun?.annotations?.readOnlyHint).toBe(true);
+    expect(startPie?.annotations?.readOnlyHint).toBe(false);
+    expect(stopPie?.annotations?.readOnlyHint).toBe(false);
+    expect(relaunchPie?.annotations?.readOnlyHint).toBe(false);
     expect(waitForEditor?.annotations?.readOnlyHint).toBe(true);
     expect(createCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
     expect(extractCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(true);
@@ -424,6 +451,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(writeCapabilities.contents[0]?.text).toContain('Current write-capable families:');
     expect(writeCapabilities.contents[0]?.text).toContain('extract_widget_blueprint');
     expect(writeCapabilities.contents[0]?.text).toContain('extract_material');
+    expect(writeCapabilities.contents[0]?.text).toContain('reparent');
     expect(importCapabilities.contents[0]?.text).toContain('Blueprint Extractor Import Capabilities');
     expect(importCapabilities.contents[0]?.text).toContain('get_import_job');
     expect(importCapabilities.contents[0]?.text).toContain('mesh_type');
@@ -610,6 +638,24 @@ describe('createBlueprintExtractorServer', () => {
         });
       }
 
+      if (method === 'CaptureEditorScreenshot') {
+        return JSON.stringify({
+          success: true,
+          operation: 'capture_editor_screenshot',
+          captureId: 'editor-capture-1',
+          captureType: 'editor_screenshot',
+          surface: 'editor_tool_viewport',
+          artifactPath: 'C:/Temp/editor-capture.png',
+          captureDirectory: 'C:/Temp/editor-capture-1',
+          metadataPath: 'C:/Temp/editor-capture-1/metadata.json',
+          width: 1280,
+          height: 720,
+          fileSizeBytes: 4096,
+          createdAt: '2026-03-28T16:00:00Z',
+          isPlayingInEditor: false,
+        });
+      }
+
       return JSON.stringify({ success: true, operation: method, method, params });
     });
     const fakeAutomationController = new FakeAutomationController((request) => ({
@@ -637,11 +683,30 @@ describe('createBlueprintExtractorServer', () => {
         captureType: 'widget_motion_checkpoint',
         surface: 'widget_motion_checkpoint',
         artifactPath: 'C:/Temp/motion-open.png',
+        captureDirectory: 'C:/Temp/motion-open-1',
+        metadataPath: 'C:/Temp/motion-open-1/metadata.json',
+        width: 512,
+        height: 512,
+        fileSizeBytes: 2048,
+        createdAt: '2026-03-28T16:00:00Z',
         resourceUri: 'blueprint://captures/motion-open-1',
         checkpointName: 'open',
         checkpointMs: 260,
         playbackSource: String(request.automationFilter ?? 'Project.UI.Motion'),
         triggerMode: 'scenario_trigger',
+      }, {
+        captureId: 'runtime-open-1',
+        captureType: 'screenshot',
+        surface: 'pie_runtime',
+        artifactPath: 'C:/Temp/runtime-open.png',
+        captureDirectory: 'C:/Temp/runtime-open-1',
+        metadataPath: 'C:/Temp/runtime-open-1/metadata.json',
+        width: 1280,
+        height: 720,
+        fileSizeBytes: 8192,
+        createdAt: '2026-03-28T16:00:00Z',
+        resourceUri: 'blueprint://captures/runtime-open-1',
+        scenarioId: String(request.automationFilter ?? 'Project.UI.Motion'),
       }],
     }));
     const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient, new FakeProjectController(), fakeAutomationController).server);
@@ -665,7 +730,7 @@ describe('createBlueprintExtractorServer', () => {
           continue;
         }
 
-        expect(result.isError).not.toBe(true);
+        expect(result.isError, `${example.tool}:${example.title} => ${getTextContent(result)}`).not.toBe(true);
         expect(parseToolResult(result)).toMatchObject({
           success: true,
         });
@@ -1300,7 +1365,7 @@ describe('createBlueprintExtractorServer', () => {
       if (method === 'CreateMaterialFunction') {
         return JSON.stringify({
           success: true,
-          operation: 'create_material_function',
+          operation: 'create_material',
           assetPath: params.AssetPath,
           assetKind: params.AssetKind,
         });
@@ -1437,7 +1502,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
     expect(parseToolResult(createFunctionResult)).toMatchObject({
-      operation: 'create_material_function',
+      operation: 'create_material',
       assetKind: 'layer_blend',
     });
     expect(parseToolResult(compileResult)).toMatchObject({
@@ -2007,7 +2072,7 @@ describe('createBlueprintExtractorServer', () => {
             }),
             makeImportJobResult({
               success: false,
-              operation: 'import_meshes',
+              operation: 'import_assets',
               status: 'failed',
               terminal: true,
               completedAt: '2026-03-09T10:02:00Z',
@@ -3378,7 +3443,7 @@ describe('createBlueprintExtractorServer', () => {
       if (method === 'ExtractMaterialFunction') {
         return JSON.stringify({
           success: true,
-          operation: 'extract_material_function',
+          operation: 'extract_material',
           materialFunction: {
             assetKind: 'function',
             functionGuid: 'function-guid-1',
@@ -3522,6 +3587,32 @@ describe('createBlueprintExtractorServer', () => {
     expect(parsed.tool.exampleFamilies).toEqual(expect.arrayContaining([
       expect.objectContaining({
         family: 'widget_blueprint',
+      }),
+    ]));
+  });
+
+  it('surfaces reparent help for modify_blueprint_members', async () => {
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(new FakeUEClient()).server);
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'get_tool_help',
+      arguments: {
+        tool_name: 'modify_blueprint_members',
+      },
+    });
+
+    const parsed = parseToolResult(result);
+    expect(parsed.operation).toBe('get_tool_help');
+    expect(parsed.tool.name).toBe('modify_blueprint_members');
+    expect(parsed.tool.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'operation',
+        values: expect.arrayContaining(['reparent']),
+      }),
+      expect.objectContaining({
+        name: 'payload',
+        properties: expect.arrayContaining(['parentClassPath', 'parent_class_path']),
       }),
     ]));
   });

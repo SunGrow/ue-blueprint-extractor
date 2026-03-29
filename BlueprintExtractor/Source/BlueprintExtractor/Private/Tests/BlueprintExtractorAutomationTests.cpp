@@ -52,6 +52,7 @@ static constexpr TCHAR EngineSkeletonPath[] = TEXT("/Engine/EngineMeshes/Skeleta
 static constexpr TCHAR EnginePreviewMeshPath[] = TEXT("/Engine/EngineMeshes/SkeletalCube.SkeletalCube");
 static constexpr TCHAR StateTreeSchemaPath[] = TEXT("/Script/GameplayStateTreeModule.StateTreeComponentSchema");
 static constexpr TCHAR FixtureDataAssetClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureDataAsset");
+static constexpr TCHAR FixtureInlineObjectClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureInlineObject");
 static constexpr TCHAR FixtureRowStructPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRow");
 static constexpr TCHAR FixtureBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureBindWidgetParent");
 static constexpr TCHAR FixtureRenameBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRenameBindWidgetParent");
@@ -695,6 +696,91 @@ static bool RunValidateOnlyCoverage(FAutomationTestBase& Test)
 			true),
 		TEXT("CreateBlendSpace validate_only"));
 
+	const TSharedPtr<FJsonObject> ProjectContext = ExpectSuccessfulResult(
+		Test,
+		Subsystem->GetProjectAutomationContext(),
+		TEXT("GetProjectAutomationContext"));
+	if (ProjectContext.IsValid())
+	{
+		Test.TestTrue(TEXT("Project automation context reports isPlayingInEditor"), ProjectContext->HasTypedField<EJson::Boolean>(TEXT("isPlayingInEditor")));
+		bool bIsPlayingInEditor = true;
+		Test.TestTrue(TEXT("Project automation context is not playing in editor during headless tests"), ProjectContext->TryGetBoolField(TEXT("isPlayingInEditor"), bIsPlayingInEditor) && !bIsPlayingInEditor);
+	}
+
+	return true;
+}
+
+static bool RunProjectControlCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
+	{
+		Test.AddInfo(TEXT("Skipping PIE/project-control coverage because rendering is unavailable. Run this filter without -NullRHI."));
+		return true;
+	}
+
+	const TSharedPtr<FJsonObject> StartResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->StartPIE(),
+		TEXT("StartPIE"));
+	if (!StartResult.IsValid())
+	{
+		return false;
+	}
+
+	bool bScheduled = false;
+	bool bSimulate = true;
+	Test.TestTrue(TEXT("StartPIE reports scheduled"), StartResult->TryGetBoolField(TEXT("scheduled"), bScheduled) && bScheduled);
+	Test.TestTrue(TEXT("StartPIE reports simulate=false by default"), StartResult->TryGetBoolField(TEXT("simulate"), bSimulate) && !bSimulate);
+
+	const TSharedPtr<FJsonObject> StopResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->StopPIE(),
+		TEXT("StopPIE"));
+	if (!StopResult.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> RelaunchResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->RelaunchPIE(),
+		TEXT("RelaunchPIE"));
+	if (!RelaunchResult.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> EditorScreenshot = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CaptureEditorScreenshot(),
+		TEXT("CaptureEditorScreenshot"));
+	if (!EditorScreenshot.IsValid())
+	{
+		return false;
+	}
+
+	FString CaptureType;
+	FString ArtifactPath;
+	Test.TestTrue(TEXT("Editor screenshot reports capture type"), EditorScreenshot->TryGetStringField(TEXT("captureType"), CaptureType) && CaptureType == TEXT("editor_screenshot"));
+	Test.TestTrue(TEXT("Editor screenshot returns an artifact path"), EditorScreenshot->TryGetStringField(TEXT("artifactPath"), ArtifactPath) && !ArtifactPath.IsEmpty());
+	Test.TestTrue(TEXT("Editor screenshot artifact exists"), FPaths::FileExists(ArtifactPath));
+
+	const FString RuntimeScreenshotJson = Subsystem->CaptureRuntimeScreenshot();
+	const TSharedPtr<FJsonObject> RuntimeScreenshot = ParseJsonObject(Test, RuntimeScreenshotJson, TEXT("CaptureRuntimeScreenshot without active PIE"));
+	if (!RuntimeScreenshot.IsValid())
+	{
+		return false;
+	}
+
+	FString RuntimeError;
+	Test.TestTrue(TEXT("Runtime screenshot fails cleanly when PIE is inactive"), RuntimeScreenshot->TryGetStringField(TEXT("error"), RuntimeError) && RuntimeError.Contains(TEXT("active PIE session")));
+
 	return true;
 }
 
@@ -1099,6 +1185,187 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 			false),
 		TEXT("Duplicate CreateBlueprint"));
 	Test.TestTrue(TEXT("Duplicate CreateBlueprint is rejected"), IsFailureResult(DuplicateBlueprintResult));
+
+	return true;
+}
+
+static bool RunInlineInstancedDataAssetCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString PreviewDataAssetPath = MakeUniqueAssetPath(TEXT("DA_InlineGraphPreview"));
+	const FString DataAssetPath = MakeUniqueAssetPath(TEXT("DA_InlineGraph"));
+	const FString DataAssetObjectPath = MakeObjectPath(DataAssetPath);
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->CreateDataAsset(
+			PreviewDataAssetPath,
+			FixtureDataAssetClassPath,
+			FString::Printf(
+				TEXT(R"json({"Count":7,"InlineObject":{"classPath":"%s","properties":{"Label":"Root","Count":11,"Child":{"classPath":"%s","properties":{"Label":"Leaf","Count":12}}}}})json"),
+				FixtureInlineObjectClassPath,
+				FixtureInlineObjectClassPath),
+			true),
+		TEXT("CreateDataAsset validate_only inline object graph"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateDataAsset(
+			DataAssetPath,
+			FixtureDataAssetClassPath,
+			FString::Printf(
+				TEXT(R"json({"Count":7,"InlineObject":{"classPath":"%s","properties":{"Label":"Root","Count":11,"Child":{"classPath":"%s","properties":{"Label":"Leaf","Count":12}}}}})json"),
+				FixtureInlineObjectClassPath,
+				FixtureInlineObjectClassPath),
+			false),
+		TEXT("CreateDataAsset inline object graph"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ DataAssetObjectPath })),
+		TEXT("SaveAssets inline object graph data asset"));
+
+	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractDataAsset(DataAssetObjectPath),
+		TEXT("ExtractDataAsset inline object graph"));
+	if (!ExtractResult.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> DataAssetJson;
+	Test.TestTrue(TEXT("Inline object extract returns dataAsset payload"), TryGetObjectFieldCopy(ExtractResult, TEXT("dataAsset"), DataAssetJson) && DataAssetJson.IsValid());
+	if (!DataAssetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* PropertiesArray = nullptr;
+	Test.TestTrue(TEXT("Inline object extract includes properties array"), DataAssetJson->TryGetArrayField(TEXT("properties"), PropertiesArray) && PropertiesArray && PropertiesArray->Num() > 0);
+	if (!PropertiesArray)
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> InlineObjectProperty = FindArrayObjectByStringField(DataAssetJson, TEXT("properties"), TEXT("name"), TEXT("InlineObject"));
+	Test.TestNotNull(TEXT("Inline object property is present"), InlineObjectProperty.Get());
+	if (!InlineObjectProperty.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> InlineObjectValue;
+	Test.TestTrue(TEXT("Inline object property exposes nested value"), TryGetObjectFieldCopy(InlineObjectProperty, TEXT("value"), InlineObjectValue) && InlineObjectValue.IsValid());
+	if (!InlineObjectValue.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> InlineProperties;
+	Test.TestTrue(TEXT("Inline object value exposes nested properties"), TryGetObjectFieldCopy(InlineObjectValue, TEXT("properties"), InlineProperties) && InlineProperties.IsValid());
+	if (!InlineProperties.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(TEXT("Inline object root label round-trips"), InlineProperties->GetStringField(TEXT("Label")), FString(TEXT("Root")));
+	Test.TestEqual(TEXT("Inline object root count round-trips"), static_cast<int32>(InlineProperties->GetNumberField(TEXT("Count"))), 11);
+
+	TSharedPtr<FJsonObject> InlineChildValue;
+	Test.TestTrue(TEXT("Inline object nested child is present"), TryGetObjectFieldCopy(InlineProperties, TEXT("Child"), InlineChildValue) && InlineChildValue.IsValid());
+	if (!InlineChildValue.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> InlineChildProperties;
+	Test.TestTrue(TEXT("Inline object nested child exposes properties"), TryGetObjectFieldCopy(InlineChildValue, TEXT("properties"), InlineChildProperties) && InlineChildProperties.IsValid());
+	if (!InlineChildProperties.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(TEXT("Inline child label round-trips"), InlineChildProperties->GetStringField(TEXT("Label")), FString(TEXT("Leaf")));
+	Test.TestEqual(TEXT("Inline child count round-trips"), static_cast<int32>(InlineChildProperties->GetNumberField(TEXT("Count"))), 12);
+
+	ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ModifyDataAsset(
+			DataAssetObjectPath,
+			TEXT(R"json({"Count":8,"InlineObject":{"properties":{"Label":"RootModified","Count":13,"Child":{"properties":{"Label":"LeafModified","Count":14}}}}})json"),
+			true),
+		TEXT("ModifyDataAsset validate_only inline object graph"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyDataAsset(
+			DataAssetObjectPath,
+			TEXT(R"json({"Count":8,"InlineObject":{"properties":{"Label":"RootModified","Count":13,"Child":{"properties":{"Label":"LeafModified","Count":14}}}}})json"),
+			false),
+		TEXT("ModifyDataAsset inline object graph"));
+
+	const TSharedPtr<FJsonObject> ModifiedExtract = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractDataAsset(DataAssetObjectPath),
+		TEXT("ExtractDataAsset modified inline object graph"));
+	if (!ModifiedExtract.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> ModifiedDataAssetJson;
+	Test.TestTrue(TEXT("Modified inline object extract returns dataAsset payload"), TryGetObjectFieldCopy(ModifiedExtract, TEXT("dataAsset"), ModifiedDataAssetJson) && ModifiedDataAssetJson.IsValid());
+	if (!ModifiedDataAssetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> ModifiedInlineObjectProperty = FindArrayObjectByStringField(ModifiedDataAssetJson, TEXT("properties"), TEXT("name"), TEXT("InlineObject"));
+	Test.TestNotNull(TEXT("Modified inline object property is present"), ModifiedInlineObjectProperty.Get());
+	if (!ModifiedInlineObjectProperty.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> ModifiedInlineObjectValue;
+	Test.TestTrue(TEXT("Modified inline object exposes nested value"), TryGetObjectFieldCopy(ModifiedInlineObjectProperty, TEXT("value"), ModifiedInlineObjectValue) && ModifiedInlineObjectValue.IsValid());
+	if (!ModifiedInlineObjectValue.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> ModifiedInlineProperties;
+	Test.TestTrue(TEXT("Modified inline object value exposes nested properties"), TryGetObjectFieldCopy(ModifiedInlineObjectValue, TEXT("properties"), ModifiedInlineProperties) && ModifiedInlineProperties.IsValid());
+	if (!ModifiedInlineProperties.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(TEXT("Modified inline root label round-trips"), ModifiedInlineProperties->GetStringField(TEXT("Label")), FString(TEXT("RootModified")));
+	Test.TestEqual(TEXT("Modified inline root count round-trips"), static_cast<int32>(ModifiedInlineProperties->GetNumberField(TEXT("Count"))), 13);
+
+	TSharedPtr<FJsonObject> ModifiedInlineChildValue;
+	Test.TestTrue(TEXT("Modified inline child is present"), TryGetObjectFieldCopy(ModifiedInlineProperties, TEXT("Child"), ModifiedInlineChildValue) && ModifiedInlineChildValue.IsValid());
+	if (!ModifiedInlineChildValue.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> ModifiedInlineChildProperties;
+	Test.TestTrue(TEXT("Modified inline child exposes properties"), TryGetObjectFieldCopy(ModifiedInlineChildValue, TEXT("properties"), ModifiedInlineChildProperties) && ModifiedInlineChildProperties.IsValid());
+	if (!ModifiedInlineChildProperties.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestEqual(TEXT("Modified inline child label round-trips"), ModifiedInlineChildProperties->GetStringField(TEXT("Label")), FString(TEXT("LeafModified")));
+	Test.TestEqual(TEXT("Modified inline child count round-trips"), static_cast<int32>(ModifiedInlineChildProperties->GetNumberField(TEXT("Count"))), 14);
 
 	return true;
 }
@@ -2698,9 +2965,19 @@ static bool RunWidgetCompileFailureExtractionCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->BuildWidgetTree(
 			WidgetObjectPath,
-			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"TextBlock","name":"WrongTitle","is_variable":true,"properties":{"Text":"Broken BindWidget layout"}}]})json"),
+			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"HorizontalBox","name":"TitleBarArea","is_variable":true,"children":[{"class":"TextBlock","name":"WrongTitle","is_variable":true},{"class":"Button","name":"MinimizeButton","is_variable":true},{"class":"Button","name":"MaximizeButton","is_variable":true},{"class":"Button","name":"CloseButton","is_variable":true}]},{"class":"NamedSlot","name":"ContentSlot","is_variable":true}]})json"),
 			false),
 		TEXT("BuildWidgetTree for compile failure extraction"));
+
+	UWidgetBlueprint* CompileFailureWidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Compile failure widget blueprint exists before compile"), CompileFailureWidgetBP);
+	if (CompileFailureWidgetBP)
+	{
+		// UMG treats missing BindWidget matches as warnings for newly created assets.
+		// Flip the fixture into the settled state so the compiler emits a true error
+		// contract for extract-after-failure coverage.
+		CompileFailureWidgetBP->bIsNewlyCreated = false;
+	}
 
 	ExpectFailureResult(
 		Test,
@@ -2735,8 +3012,8 @@ static bool RunWidgetCompileFailureExtractionCoverage(FAutomationTestBase& Test)
 	if (bHasRootWidget)
 	{
 		Test.TestEqual(TEXT("Compile failure keeps a degraded live widget tree when available"), WidgetTreeStatus, FString(TEXT("ok")));
-		const TSharedPtr<FJsonObject> WrongTitleNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/WrongTitle"));
-		Test.TestNotNull(TEXT("Degraded extract still returns the authored tree snapshot"), WrongTitleNode.Get());
+		const TSharedPtr<FJsonObject> TitleNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/TitleBarArea/WrongTitle"));
+		Test.TestNotNull(TEXT("Degraded extract still returns the authored tree snapshot"), TitleNode.Get());
 	}
 	else
 	{
@@ -2868,8 +3145,9 @@ static bool RunWidgetPropertyDiagnosticsCoverage(FAutomationTestBase& Test)
 		TEXT("{}"),
 		false);
 	ExpectFailureResult(Test, CheckBoxFailureJson, TEXT("ModifyWidget invalid CheckBox property"));
-	Test.TestTrue(TEXT("CheckBox property failure reports the resolved class"), CheckBoxFailureJson.Contains(TEXT("resolved class CheckBox")));
-	Test.TestTrue(TEXT("CheckBox property failure reports nearby editable suggestions"), CheckBoxFailureJson.Contains(TEXT("Closest editable properties")));
+	Test.TestTrue(TEXT("CheckBox property failure reports the resolved class"), CheckBoxFailureJson.Contains(TEXT("resolved class 'CheckBox")));
+	Test.TestTrue(TEXT("CheckBox property failure reports the native parent"), CheckBoxFailureJson.Contains(TEXT("native parent: ContentWidget")));
+	Test.TestTrue(TEXT("CheckBox property failure reports nearby editable suggestions"), CheckBoxFailureJson.Contains(TEXT("Closest editable properties: WidgetStyle")));
 
 	const FString CommonUIButtonAssetPath = MakeUniqueAssetPath(TEXT("WBP_CommonUIButtonDiagnostics"));
 	const FString CommonUIButtonObjectPath = MakeObjectPath(CommonUIButtonAssetPath);
@@ -3016,6 +3294,97 @@ static bool RunBlueprintGraphAppendAndRollbackCoverage(FAutomationTestBase& Test
 	return true;
 }
 
+static bool RunBlueprintReparentCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString BlueprintAssetPath = MakeUniqueAssetPath(TEXT("BP_Reparent"));
+	const FString BlueprintObjectPath = MakeObjectPath(BlueprintAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateBlueprint(
+			BlueprintAssetPath,
+			TEXT("/Script/Engine.Actor"),
+			TEXT("{}"),
+			false),
+		TEXT("CreateBlueprint for reparent coverage"));
+
+	UBlueprint* Blueprint = Cast<UBlueprint>(ResolveAssetByPath(BlueprintObjectPath));
+	Test.TestNotNull(TEXT("Reparent coverage blueprint exists"), Blueprint);
+	if (!Blueprint || !Blueprint->ParentClass)
+	{
+		return false;
+	}
+
+	const FString OriginalParentClassPath = Blueprint->ParentClass->GetPathName();
+
+	const bool bValidateOnlySucceeded = ExpectValidateOnlyResult(
+		Test,
+		Subsystem->ModifyBlueprintMembers(
+			BlueprintObjectPath,
+			TEXT("reparent"),
+			TEXT(R"json({"parentClassPath":"/Script/Engine.Pawn"})json"),
+			true),
+		TEXT("ModifyBlueprintMembers reparent validate_only"));
+	if (!bValidateOnlySucceeded)
+	{
+		return false;
+	}
+
+	Blueprint = Cast<UBlueprint>(ResolveAssetByPath(BlueprintObjectPath));
+	Test.TestNotNull(TEXT("Reparent coverage blueprint still exists after validate_only"), Blueprint);
+	if (!Blueprint || !Blueprint->ParentClass)
+	{
+		return false;
+	}
+
+	Test.TestEqual(
+		TEXT("Validate-only reparent leaves the parent class unchanged"),
+		Blueprint->ParentClass->GetPathName(),
+		OriginalParentClassPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintMembers(
+			BlueprintObjectPath,
+			TEXT("reparent"),
+			TEXT(R"json({"parentClassPath":"/Script/Engine.Pawn"})json"),
+			false),
+		TEXT("ModifyBlueprintMembers reparent to Pawn"));
+
+	Blueprint = Cast<UBlueprint>(ResolveAssetByPath(BlueprintObjectPath));
+	Test.TestNotNull(TEXT("Reparented blueprint exists"), Blueprint);
+	if (!Blueprint || !Blueprint->ParentClass)
+	{
+		return false;
+	}
+
+	Test.TestEqual(
+		TEXT("Reparent updates the Blueprint parent class"),
+		Blueprint->ParentClass->GetPathName(),
+		FString(TEXT("/Script/Engine.Pawn")));
+
+	const FString InvalidReparentJson = Subsystem->ModifyBlueprintMembers(
+		BlueprintObjectPath,
+		TEXT("reparent"),
+		TEXT(R"json({"parentClassPath":"/Script/UMG.UserWidget"})json"),
+		true);
+	ExpectFailureResult(
+		Test,
+		InvalidReparentJson,
+		TEXT("ModifyBlueprintMembers invalid reparent target"));
+	Test.TestTrue(
+		TEXT("Invalid reparent reports an actor compatibility error"),
+		InvalidReparentJson.Contains(TEXT("not compatible with Actor-based Blueprints")));
+
+	return true;
+}
+
 static bool RunCommonUIWidgetCoverage(FAutomationTestBase& Test)
 {
 	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
@@ -3088,6 +3457,12 @@ static bool RunCommonUIButtonStyleCoverage(FAutomationTestBase& Test)
 	if (!Subsystem)
 	{
 		return false;
+	}
+
+	if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
+	{
+		Test.AddInfo(TEXT("Skipping CommonUI button style visual coverage because rendering is unavailable. Run this test with -NoNullRHI."));
+		return true;
 	}
 
 	const FString StyleAssetPath = MakeUniqueAssetPath(TEXT("BP_CommonUIButtonStyle"));
@@ -3508,6 +3883,14 @@ void FBlueprintExtractorAutomationSpec::Define()
 		});
 	});
 
+	Describe(TEXT("ProjectControl"), [this]()
+	{
+		It(TEXT("PIEAndScreenshots"), [this]()
+		{
+			TestTrue(TEXT("PIE and screenshot coverage completes"), RunProjectControlCoverage(*this));
+		});
+	});
+
 	Describe(TEXT("Authoring"), [this]()
 	{
 		It(TEXT("ValidateOnly"), [this]()
@@ -3518,6 +3901,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("RoundTrip"), [this]()
 		{
 			TestTrue(TEXT("Round-trip coverage completes"), RunRoundTripCoverage(*this));
+		});
+
+		It(TEXT("DataAssetInlineInstancedGraph"), [this]()
+		{
+			TestTrue(TEXT("Inline instanced DataAsset coverage completes"), RunInlineInstancedDataAssetCoverage(*this));
 		});
 
 		It(TEXT("MaterialGraphRoundTrip"), [this]()
@@ -3608,6 +3996,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("BlueprintGraphAppendAndRollback"), [this]()
 		{
 			TestTrue(TEXT("Blueprint graph append and rollback coverage completes"), RunBlueprintGraphAppendAndRollbackCoverage(*this));
+		});
+
+		It(TEXT("BlueprintReparent"), [this]()
+		{
+			TestTrue(TEXT("Blueprint reparent coverage completes"), RunBlueprintReparentCoverage(*this));
 		});
 
 		It(TEXT("CommonUIWidgetRoundTrip"), [this]()

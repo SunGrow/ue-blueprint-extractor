@@ -1,5 +1,7 @@
 # Blueprint Extractor v2.0 — Hardening & New Extractors
 
+> Historical plan. Use `docs/CURRENT_STATUS.md` and `docs/plans/one-shot/` for the current contract and validation state.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Fix existing contract bugs, unify property serialization, and add 5 new extractor families (BehaviorTree, UserDefinedStruct/Enum, Curve, MaterialInstance, AnimAssets).
