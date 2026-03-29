@@ -1,5 +1,6 @@
 #include "BlueprintExtractorSubsystem.h"
 #include "BlueprintExtractorLibrary.h"
+#include "BlueprintExtractorModule.h"
 #include "BlueprintExtractorSettings.h"
 #include "Authoring/AssetMutationHelpers.h"
 #include "Authoring/AnimMontageAuthoring.h"
@@ -2874,16 +2875,29 @@ FString UBlueprintExtractorSubsystem::ListImportJobs(const bool bIncludeComplete
 FString UBlueprintExtractorSubsystem::GetProjectAutomationContext()
 {
 	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	const FBlueprintExtractorModule* Module = FModuleManager::GetModulePtr<FBlueprintExtractorModule>(TEXT("BlueprintExtractor"));
 	Result->SetBoolField(TEXT("success"), true);
 	Result->SetStringField(TEXT("operation"), TEXT("get_project_automation_context"));
+	if (Module)
+	{
+		Result->SetStringField(TEXT("instanceId"), Module->GetEditorInstanceId());
+	}
 	Result->SetStringField(TEXT("projectName"), FApp::GetProjectName());
 	Result->SetStringField(TEXT("projectFilePath"), FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()));
 	Result->SetStringField(TEXT("projectDir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
 
 	const FString EngineDir = FPaths::ConvertRelativePathToFull(FPaths::EngineDir());
 	Result->SetStringField(TEXT("engineDir"), EngineDir);
-	Result->SetStringField(TEXT("engineRoot"), FPaths::GetPath(FPaths::GetPath(EngineDir)));
-	Result->SetStringField(TEXT("editorTarget"), FString::Printf(TEXT("%sEditor"), FApp::GetProjectName()));
+	Result->SetStringField(TEXT("engineRoot"), Module ? Module->GetEngineRoot() : FPaths::GetPath(FPaths::GetPath(EngineDir)));
+	Result->SetStringField(TEXT("engineVersion"), Module ? Module->GetEngineVersion() : FEngineVersion::Current().ToString());
+	Result->SetStringField(TEXT("editorTarget"), Module ? Module->GetEditorTarget() : FString::Printf(TEXT("%sEditor"), FApp::GetProjectName()));
+	Result->SetNumberField(TEXT("processId"), Module ? Module->GetEditorProcessId() : static_cast<int32>(FPlatformProcess::GetCurrentProcessId()));
+	Result->SetStringField(TEXT("remoteControlHost"), Module ? Module->GetRemoteControlHost() : TEXT("127.0.0.1"));
+	Result->SetNumberField(TEXT("remoteControlPort"), Module ? Module->GetRemoteControlHttpPort() : 30010);
+	if (Module && !Module->GetLastRegistryHeartbeat().IsEmpty())
+	{
+		Result->SetStringField(TEXT("lastSeenAt"), Module->GetLastRegistryHeartbeat());
+	}
 	Result->SetStringField(TEXT("hostPlatform"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()));
 	Result->SetBoolField(TEXT("isPlayingInEditor"), GEditor && GEditor->PlayWorld != nullptr);
 

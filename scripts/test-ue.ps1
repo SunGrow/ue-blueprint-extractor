@@ -33,6 +33,31 @@ function Assert-PathExists {
     }
 }
 
+function Get-FreeTcpPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+function Set-RemoteControlPort {
+    param(
+        [string]$ConfigPath,
+        [int]$Port
+    )
+
+    $SectionHeader = '[/Script/RemoteControlCommon.RemoteControlSettings]'
+    $PortLine = "RemoteControlHttpServerPort=$Port"
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ConfigPath) | Out-Null
+    $Serialized = [string]::Join([Environment]::NewLine, @($SectionHeader, $PortLine, ''))
+    [System.IO.File]::WriteAllText($ConfigPath, $Serialized)
+}
+
 function ConvertTo-BPXArgumentString {
     param(
         [string[]]$Arguments
@@ -195,6 +220,13 @@ try {
     $ResolvedProjectPath = Join-Path $FixtureRoot (Split-Path -Leaf $ResolvedProjectPath)
     $PluginDestination = Join-Path $FixtureRoot 'Plugins\BlueprintExtractor'
     $AutomationReportPath = Join-Path $FixtureRoot 'Saved\AutomationReports'
+    $FixtureConfigPath = Join-Path $FixtureRoot 'Config\DefaultRemoteControl.ini'
+    $RemoteControlPort = if ([string]::IsNullOrWhiteSpace($env:UE_REMOTE_CONTROL_PORT)) {
+        Get-FreeTcpPort
+    } else {
+        [int]$env:UE_REMOTE_CONTROL_PORT
+    }
+    $env:UE_REMOTE_CONTROL_PORT = [string]$RemoteControlPort
     $ReuseStagedFixture = $false
 
     if ($SkipBuildProject.IsPresent -and (Test-Path -LiteralPath $StageRoot)) {
@@ -235,6 +267,9 @@ try {
                 '.vs'
             )
     }
+
+    Write-Host "==> Using staged Remote Control port $RemoteControlPort"
+    Set-RemoteControlPort -ConfigPath $FixtureConfigPath -Port $RemoteControlPort
 
     if ($BuildPlugin) {
         if (Test-Path -LiteralPath $BuildPluginOutput) {

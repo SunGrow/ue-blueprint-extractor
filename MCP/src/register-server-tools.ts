@@ -110,6 +110,7 @@ import { registerWidgetStructureTools } from './tools/widget-structure.js';
 import { registerWidgetVerificationTools } from './tools/widget-verification.js';
 import { registerWindowUiTools } from './tools/window-ui.js';
 import { UEClient } from './ue-client.js';
+import { ActiveEditorSession } from './active-editor-session.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -142,6 +143,7 @@ type RegisterServerToolsOptions = {
   rememberExternalBuild: (result: CompileProjectCodeResult) => void;
   getLastExternalBuildContext: () => Record<string, unknown> | null;
   clearProjectAutomationContext: () => void;
+  activeEditorSession?: ActiveEditorSession | null;
   getToolHelpEntry: (toolName: string) => ToolHelpEntry | undefined;
   toolHelpRegistry: Map<string, ToolHelpEntry>;
   editorPollIntervalMs: number;
@@ -167,6 +169,7 @@ export function registerServerTools({
   rememberExternalBuild,
   getLastExternalBuildContext,
   clearProjectAutomationContext,
+  activeEditorSession,
   getToolHelpEntry,
   toolHelpRegistry,
   editorPollIntervalMs,
@@ -214,6 +217,7 @@ export function registerServerTools({
     callSubsystemJson,
     automationController,
     resolveProjectInputs,
+    activeEditorSession,
     captureResultSchema: CaptureResultSchema,
     widgetAnimationCheckpointSchema,
     motionCaptureModeSchema,
@@ -269,6 +273,7 @@ export function registerServerTools({
     server,
     automationController,
     resolveProjectInputs,
+    activeEditorSession,
     automationRunSchema,
     automationRunListSchema: AutomationRunListSchema,
   });
@@ -283,6 +288,7 @@ export function registerServerTools({
     rememberExternalBuild,
     getLastExternalBuildContext,
     clearProjectAutomationContext,
+    activeEditorSession,
     buildPlatformSchema: BuildPlatformSchema,
     buildConfigurationSchema: BuildConfigurationSchema,
     editorPollIntervalMs,
@@ -294,6 +300,7 @@ export function registerServerTools({
     projectController,
     callSubsystemJson,
     resolveProjectInputs,
+    activeEditorSession,
     rememberExternalBuild,
     getLastExternalBuildContext,
     clearProjectAutomationContext,

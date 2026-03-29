@@ -44,8 +44,13 @@ import {
 import { EditorAdapter } from './execution/adapters/editor-adapter.js';
 import { ExecutionModeDetector } from './execution/execution-mode-detector.js';
 import { AdaptiveExecutor } from './execution/adaptive-executor.js';
+import { ActiveEditorSession } from './active-editor-session.js';
 
-export type UEClientLike = Pick<UEClient, 'callSubsystem'> & Partial<Pick<UEClient, 'checkConnection'>>;
+export type UEClientLike = Pick<UEClient, 'callSubsystem'>
+  & Partial<Pick<UEClient, 'checkConnection'>>
+  & {
+    editorModeAvailable?: (() => Promise<boolean>) | undefined;
+  };
 
 export type BlueprintExtractorServerResult = {
   server: McpServer;
@@ -54,7 +59,7 @@ export type BlueprintExtractorServerResult = {
 };
 
 export function createBlueprintExtractorServer(
-  client: UEClientLike = new UEClient(),
+  client?: UEClientLike,
   projectController: ProjectControllerLike = new ProjectController(),
   automationController: AutomationControllerLike = new AutomationController(),
 ): BlueprintExtractorServerResult {
@@ -62,6 +67,15 @@ export function createBlueprintExtractorServer(
   let lastExternalBuildContext: Record<string, unknown> | null = null;
   const toolHelpRegistry = new Map<string, ToolHelpEntry>();
   const registeredToolMap = new Map<string, RegisteredTool>();
+  const clearProjectAutomationContext = () => {
+    cachedProjectAutomationContext = null;
+  };
+  const activeEditorSession = client
+    ? null
+    : new ActiveEditorSession({
+      onSelectionChanged: clearProjectAutomationContext,
+    });
+  const effectiveClient = client ?? activeEditorSession!;
 
   const server = new McpServer({
     name: 'blueprint-extractor',
@@ -81,7 +95,7 @@ export function createBlueprintExtractorServer(
 
   // Dual-mode execution: create adapter + detector + executor BEFORE tool
   // registration so the executor is available for activeToolName tracking.
-  const editorAdapter = new EditorAdapter(client as UEClient);
+  const editorAdapter = new EditorAdapter(effectiveClient);
   const modeDetector = new ExecutionModeDetector(editorAdapter, null);
   const executor = new AdaptiveExecutor(editorAdapter, null, modeDetector);
 
@@ -102,7 +116,7 @@ export function createBlueprintExtractorServer(
 
   // Direct editor path — preserves callSubsystemJson error-checking layer
   const directCallSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
-    callSubsystemJsonWithClient(client, method, params, options)
+    callSubsystemJsonWithClient(effectiveClient, method, params, options)
   );
 
   // Executor-routed callSubsystemJson: when a tool handler is active, routes
@@ -139,6 +153,7 @@ export function createBlueprintExtractorServer(
       getProjectAutomationContext,
       firstDefinedString,
       env: process.env,
+      workspaceProjectPath: await activeEditorSession?.getWorkspaceProjectPath(),
     });
   }
 
@@ -150,7 +165,7 @@ export function createBlueprintExtractorServer(
 
   registerServerTools({
     server,
-    client,
+    client: effectiveClient,
     projectController,
     automationController,
     callSubsystemJson,
@@ -158,9 +173,8 @@ export function createBlueprintExtractorServer(
     getProjectAutomationContext,
     rememberExternalBuild,
     getLastExternalBuildContext: () => lastExternalBuildContext,
-    clearProjectAutomationContext: () => {
-      cachedProjectAutomationContext = null;
-    },
+    clearProjectAutomationContext,
+    activeEditorSession,
     getToolHelpEntry: (toolName) => toolHelpRegistry.get(toolName),
     toolHelpRegistry,
     editorPollIntervalMs: EDITOR_POLL_INTERVAL_MS,

@@ -1,5 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { ActiveEditorSession } from '../active-editor-session.js';
+import { assertRequestMatchesActiveEditor } from '../helpers/active-editor-utils.js';
 import {
   canFallbackFromLiveCoding,
   enrichLiveCodingResult,
@@ -89,6 +91,7 @@ type RegisterWindowUiToolsOptions = {
   rememberExternalBuild: (result: CompileProjectCodeResult) => void;
   getLastExternalBuildContext: () => Record<string, unknown> | null;
   clearProjectAutomationContext: () => void;
+  activeEditorSession?: ActiveEditorSession | null;
   applyWindowUiChangesResultSchema: z.ZodTypeAny;
   widgetSelectorFieldsSchema: z.AnyZodObject;
   fontImportItemSchema: z.ZodTypeAny;
@@ -174,6 +177,7 @@ export function registerWindowUiTools({
   rememberExternalBuild,
   getLastExternalBuildContext,
   clearProjectAutomationContext,
+  activeEditorSession,
   applyWindowUiChangesResultSchema,
   widgetSelectorFieldsSchema,
   fontImportItemSchema,
@@ -472,6 +476,11 @@ export function registerWindowUiTools({
         }
 
         if (sync_project_code) {
+          await assertRequestMatchesActiveEditor(activeEditorSession, {
+            engine_root: sync_project_code.engine_root,
+            project_path: sync_project_code.project_path,
+            target: sync_project_code.target,
+          });
           const syncPlan = projectController.classifyChangedPaths(
             sync_project_code.changed_paths,
             sync_project_code.force_rebuild ?? false,
@@ -482,6 +491,7 @@ export function registerWindowUiTools({
             target: sync_project_code.target,
           });
           let needsBuildRestart = syncPlan.strategy === 'build_and_restart' || !projectController.liveCodingSupported;
+          const activeEditorBeforeSync = activeEditorSession?.getBoundSnapshot();
 
           if (syncPlan.strategy === 'live_coding' && projectController.liveCodingSupported) {
             const liveCoding = enrichLiveCodingResult(await safeCall('TriggerLiveCoding', {
@@ -561,6 +571,17 @@ export function registerWindowUiTools({
                 projectPath: resolvedProjectInputs.projectPath,
               });
               clearProjectAutomationContext();
+              let reboundEditor: Record<string, unknown> | undefined;
+              if (activeEditorSession) {
+                const rebound = await activeEditorSession.bindLaunchedEditor({
+                  processId: editorLaunch.processId,
+                  projectPath: resolvedProjectInputs.projectPath ?? '',
+                  engineRoot: resolvedProjectInputs.engineRoot,
+                  target: resolvedProjectInputs.target,
+                  timeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
+                });
+                reboundEditor = rebound;
+              }
               const reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
                 disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
                 reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
@@ -570,6 +591,7 @@ export function registerWindowUiTools({
                 step: 'sync_project_code',
                 strategy: 'restart_first',
                 editorLaunch,
+                ...(reboundEditor ? { activeEditor: reboundEditor } : {}),
                 reconnect,
               });
               if (!editorLaunch.success || !reconnect.success) {
@@ -586,11 +608,20 @@ export function registerWindowUiTools({
                 disconnectTimeoutMs: (sync_project_code.disconnect_timeout_seconds ?? 60) * 1000,
                 reconnectTimeoutMs: (sync_project_code.reconnect_timeout_seconds ?? 180) * 1000,
               });
+              let refreshedEditor: Record<string, unknown> | undefined;
+              if (activeEditorSession && reconnect.success) {
+                refreshedEditor = await activeEditorSession.refreshActiveEditorAfterReconnect({
+                  projectPath: activeEditorBeforeSync?.projectFilePath ?? resolvedProjectInputs.projectPath,
+                  engineRoot: activeEditorBeforeSync?.engineRoot ?? resolvedProjectInputs.engineRoot,
+                  target: activeEditorBeforeSync?.editorTarget ?? resolvedProjectInputs.target,
+                });
+              }
               steps.push({
                 step: 'sync_project_code',
                 strategy: 'build_and_restart',
                 restartRequest,
                 saveDirtyAssetsAccepted: sync_project_code.save_dirty_assets ?? true,
+                ...(refreshedEditor ? { activeEditor: refreshedEditor } : {}),
                 reconnect,
               });
               if (restartRequest.success === false || !reconnect.success) {

@@ -154,10 +154,10 @@ describe('ProjectController', () => {
 
     expect(result.success).toBe(true);
     expect(result.command.executable).toBe(editorExecutable);
-    expect(result.command.args).toEqual([projectPath]);
+    expect(result.command.args).toEqual([projectPath, '-RCWebControlEnable', '-RCWebInterfaceEnable']);
     expect(spawnCalls).toEqual([{
       executable: editorExecutable,
-      args: [projectPath],
+      args: [projectPath, '-RCWebControlEnable', '-RCWebInterfaceEnable'],
       options: expect.objectContaining({
         cwd: root,
         detached: true,

@@ -24,6 +24,8 @@ export const serverInstructions = [
   'For high-fidelity menu design, first normalize text, image, Figma-export, or HTML/CSS inputs into a shared design_spec_json before authoring Unreal assets.',
   // Mutations and saving
   'Write tools mutate the running editor but do not save automatically. Call save_assets after successful mutations you want to persist.',
+  'Each MCP session owns one active editor selection. Use list_running_editors, get_active_editor, select_editor, clear_editor_selection, and launch_editor to control which Unreal Editor instance this session targets.',
+  'Multiple simultaneous Unreal Editors must expose distinct Remote Control ports. When the workspace project matches multiple running editors, the server will reject the ambiguity until select_editor chooses one explicitly.',
   'Use wait_for_editor after restart windows or transient Remote Control disconnects before retrying editor-backed tools.',
   'Prefer validate_only=true the first time you author a new asset family or payload shape.',
   // Input authoring
@@ -78,6 +80,11 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['extract_commonui_button_style', 'both'],
   ['find_and_extract', 'both'],
   ['get_tool_help', 'both'],
+  ['list_running_editors', 'both'],
+  ['get_active_editor', 'both'],
+  ['select_editor', 'both'],
+  ['clear_editor_selection', 'both'],
+  ['launch_editor', 'both'],
   ['get_project_automation_context', 'both'],
   ['get_import_job', 'both'],
   ['list_import_jobs', 'both'],
@@ -162,10 +169,10 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['modify_curve_table', 'editor_only'],
 
   // ── Project control (editor_only) ──
-  ['compile_project_code', 'editor_only'],
+  ['compile_project_code', 'both'],
   ['restart_editor', 'editor_only'],
   ['trigger_live_coding', 'editor_only'],
-  ['sync_project_code', 'editor_only'],
+  ['sync_project_code', 'both'],
   ['wait_for_editor', 'editor_only'],
   ['start_pie', 'editor_only'],
   ['stop_pie', 'editor_only'],
@@ -175,12 +182,12 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['import_assets', 'editor_only'],
 
   // ── Automation tests (editor_only) ──
-  ['run_automation_tests', 'editor_only'],
+  ['run_automation_tests', 'both'],
 
   // ── Verification / captures (editor_only) ──
   ['capture_widget_preview', 'editor_only'],
   ['capture_editor_screenshot', 'editor_only'],
-  ['capture_runtime_screenshot', 'editor_only'],
+  ['capture_runtime_screenshot', 'both'],
   ['capture_widget_motion_checkpoints', 'editor_only'],
   ['compare_capture_to_reference', 'editor_only'],
   ['compare_motion_capture_bundle', 'editor_only'],
@@ -242,6 +249,50 @@ export function classifyRecoverableToolFailure(toolName: string, message: string
       next_steps: [
         'Call wait_for_editor to wait for the UE editor and Remote Control to come back online.',
         `Retry ${toolName} after wait_for_editor returns connected=true.`,
+      ],
+    };
+  }
+
+  if (message.includes('No active editor is selected for this MCP session')) {
+    return {
+      code: 'no_active_editor',
+      recoverable: true,
+      next_steps: [
+        'Call list_running_editors to inspect the running Unreal Editor instances.',
+        'Call select_editor to bind this MCP session to the intended editor, or call launch_editor to start one.',
+      ],
+    };
+  }
+
+  if (message.includes('Multiple running editors match the workspace project')) {
+    return {
+      code: 'ambiguous_active_editor',
+      recoverable: true,
+      next_steps: [
+        'Call list_running_editors to inspect the matching editor instances.',
+        'Call select_editor with the intended instance_id to bind this session explicitly.',
+      ],
+    };
+  }
+
+  if (message.includes('Active editor mismatch')) {
+    return {
+      code: 'active_editor_mismatch',
+      recoverable: true,
+      next_steps: [
+        'Call get_active_editor to inspect the current session binding.',
+        'Call clear_editor_selection or select_editor before retrying with a different project or engine.',
+      ],
+    };
+  }
+
+  if (message.includes('previously selected active editor')) {
+    return {
+      code: 'active_editor_drift',
+      recoverable: true,
+      next_steps: [
+        'Call list_running_editors to inspect the currently reachable editor instances.',
+        'Call select_editor to rebind the session to the intended editor.',
       ],
     };
   }

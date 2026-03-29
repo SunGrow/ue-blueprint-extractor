@@ -33,6 +33,7 @@ The default MCP path covers:
 
 The checked-in fixture shell lives under `tests/fixtures/BlueprintExtractorFixture/` with the project file `BPXFixture.uproject`.
 The fixture intentionally does not commit a plugin copy; `scripts/test-ue.ps1` and `scripts/test-ue.sh` stage the fixture to a temp directory and sync the local `BlueprintExtractor/` plugin into `Plugins/BlueprintExtractor` there.
+Each staged UE automation run now allocates its own free Remote Control HTTP port and patches the staged `DefaultEngine.ini` before launch, so the fixture editor does not collide with a developer-owned editor already using `30010`.
 
 Windows:
 
@@ -58,9 +59,10 @@ The UE runner:
 
 1. stages the fixture project into a temp directory,
 2. syncs `BlueprintExtractor/` into the staged fixture,
-3. optionally runs `BuildPlugin`,
-4. builds `BPXFixtureEditor`,
-5. runs automation through `UnrealEditor-Cmd`.
+3. assigns a unique staged Remote Control HTTP port,
+4. optionally runs `BuildPlugin`,
+5. builds `BPXFixtureEditor`,
+6. runs automation through `UnrealEditor-Cmd`.
 
 ### Lane Split
 
@@ -121,6 +123,12 @@ Live smoke requires a running editor with the plugin loaded. Set:
 - `UE_REMOTE_CONTROL_PORT`
 - optionally `UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH`
 - optionally `UE_ENGINE_ROOT`, `UE_PROJECT_PATH`, and `UE_PROJECT_TARGET` / `UE_EDITOR_TARGET`
+
+Multi-editor note:
+
+- every simultaneously running Unreal Editor must expose a distinct Remote Control port
+- MCP sessions now bind to one active editor at a time; when the workspace project matches multiple editors, the session stays unbound until `select_editor`
+- launching the MCP session inside a project directory only auto-binds when exactly one running editor matches that `.uproject`
 
 The live suite covers real stdio startup, widget authoring, material authoring, import jobs, Enhanced Input round-trips, explicit save flows, and project-control round-trips.
 

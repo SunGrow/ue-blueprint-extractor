@@ -12,7 +12,8 @@ interface AssetResult {
 }
 
 function getPath(result: AssetResult): string {
-  return result.assetPath ?? result.asset_path ?? result.PackagePath ?? result.package_path ?? '';
+  const path = result.assetPath ?? result.asset_path ?? result.PackagePath ?? result.package_path ?? result.path;
+  return typeof path === 'string' ? path : '';
 }
 
 /**
@@ -50,7 +51,11 @@ export async function filterPhantomAssets<T extends AssetResult>(
         bRecursive: false,
         ClassFilter: '',
       });
-      const listedAssets = Array.isArray(listing.assets) ? listing.assets : [];
+      const listedAssets = Array.isArray(listing)
+        ? listing
+        : Array.isArray(listing.assets)
+          ? listing.assets
+          : [];
       for (const asset of listedAssets) {
         if (typeof asset === 'object' && asset !== null) {
           const path = getPath(asset as AssetResult);

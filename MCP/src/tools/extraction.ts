@@ -19,6 +19,7 @@ import {
   jsonToolError,
   jsonToolSuccess,
 } from '../helpers/subsystem.js';
+import { isPlainObject } from '../helpers/formatting.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -57,6 +58,56 @@ function readOnlyAnnotations(title: string) {
     idempotentHint: true,
     openWorldHint: false,
   };
+}
+
+function normalizeListedAsset(entry: Record<string, unknown>): Record<string, unknown> {
+  const assetPath = String(
+    entry.assetPath
+    ?? entry.asset_path
+    ?? entry.PackagePath
+    ?? entry.package_path
+    ?? entry.path
+    ?? '',
+  );
+  const assetName = String(
+    entry.assetName
+    ?? entry.asset_name
+    ?? entry.Name
+    ?? entry.name
+    ?? '',
+  );
+  const assetClass = String(
+    entry.assetClass
+    ?? entry.className
+    ?? entry.class_name
+    ?? entry.class
+    ?? '',
+  );
+
+  return {
+    ...entry,
+    ...(assetPath.length > 0 ? { assetPath } : {}),
+    ...(assetName.length > 0 ? { assetName } : {}),
+    ...(assetClass.length > 0 ? { assetClass } : {}),
+  };
+}
+
+function getListedAssets(parsed: unknown): Record<string, unknown>[] {
+  const rawAssets = Array.isArray(parsed)
+    ? parsed
+    : isPlainObject(parsed) && Array.isArray(parsed.assets)
+      ? parsed.assets
+      : [];
+
+  return rawAssets
+    .filter((entry): entry is Record<string, unknown> => isPlainObject(entry))
+    .map(normalizeListedAsset);
+}
+
+function toPackagePath(assetPath: string): string {
+  const dotIndex = assetPath.lastIndexOf('.');
+  const slashIndex = assetPath.lastIndexOf('/');
+  return dotIndex > slashIndex ? assetPath.slice(0, dotIndex) : assetPath;
 }
 
 export function registerExtractionTools({
@@ -432,7 +483,7 @@ export function registerExtractionTools({
           ClassFilter: class_filter,
         });
 
-        const rawAssets = Array.isArray(parsed.assets) ? parsed.assets as Record<string, unknown>[] : [];
+        const rawAssets = getListedAssets(parsed);
 
         // Sort results
         const sorted = [...rawAssets].sort((a, b) => {
@@ -447,8 +498,8 @@ export function registerExtractionTools({
               bVal = String(b.className ?? b.class_name ?? b.assetClass ?? '');
               break;
             default: // 'path'
-              aVal = String(a.assetPath ?? a.asset_path ?? a.PackagePath ?? '');
-              bVal = String(b.assetPath ?? b.asset_path ?? b.PackagePath ?? '');
+              aVal = String(a.assetPath ?? a.asset_path ?? a.PackagePath ?? a.package_path ?? a.path ?? '');
+              bVal = String(b.assetPath ?? b.asset_path ?? b.PackagePath ?? b.package_path ?? b.path ?? '');
               break;
           }
           return aVal.localeCompare(bVal);
@@ -498,17 +549,25 @@ export function registerExtractionTools({
           ClassFilter: '',
         });
 
-        const assets = Array.isArray(parsed.assets) ? parsed.assets as Record<string, unknown>[] : [];
+        const assets = getListedAssets(parsed);
         const match = assets.find((a) => {
-          const path = a.assetPath ?? a.asset_path ?? a.PackagePath ?? a.package_path ?? '';
-          return path === asset_path;
+          const path = String(a.assetPath ?? a.asset_path ?? a.PackagePath ?? a.package_path ?? a.path ?? '');
+          return path === asset_path || toPackagePath(path) === asset_path;
         });
 
         if (match) {
+          const resolvedAssetPath = String(
+            match.assetPath
+            ?? match.asset_path
+            ?? match.PackagePath
+            ?? match.package_path
+            ?? match.path
+            ?? asset_path,
+          );
           return jsonToolSuccess({
             exists: true,
-            asset_class: String(match.className ?? match.class_name ?? match.assetClass ?? null),
-            package_path: String(match.assetPath ?? match.asset_path ?? match.PackagePath ?? asset_path),
+            asset_class: String(match.className ?? match.class_name ?? match.assetClass ?? match.class ?? null),
+            package_path: toPackagePath(resolvedAssetPath),
           });
         }
 

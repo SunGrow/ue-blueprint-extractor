@@ -1,7 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import type { ActiveEditorSession } from '../active-editor-session.js';
 import type { AutomationControllerLike } from '../automation-controller.js';
+import { assertRequestMatchesActiveEditor } from '../helpers/active-editor-utils.js';
 import { buildResourceLinkContent, maybeBuildInlineImageContent } from '../helpers/capture.js';
 import { explainProjectResolutionFailure } from '../helpers/project-utils.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
@@ -20,6 +22,7 @@ type RegisterAutomationRunToolsOptions = {
   server: Pick<McpServer, 'registerTool'>;
   automationController: AutomationControllerLike;
   resolveProjectInputs: ResolveProjectInputs;
+  activeEditorSession?: ActiveEditorSession | null;
   automationRunSchema: z.ZodTypeAny;
   automationRunListSchema: z.ZodTypeAny;
 };
@@ -52,6 +55,7 @@ export function registerAutomationRunTools({
   server,
   automationController,
   resolveProjectInputs,
+  activeEditorSession,
   automationRunSchema,
   automationRunListSchema,
 }: RegisterAutomationRunToolsOptions): void {
@@ -97,6 +101,11 @@ export function registerAutomationRunTools({
     },
     async ({ automation_filter, engine_root, project_path, target, report_output_dir, timeout_seconds, null_rhi }) => {
       try {
+        await assertRequestMatchesActiveEditor(activeEditorSession, {
+          engine_root,
+          project_path,
+          target,
+        });
         const resolved = await resolveProjectInputs({ engine_root, project_path, target });
         if (!resolved.engineRoot || !resolved.projectPath) {
           throw explainProjectResolutionFailure(

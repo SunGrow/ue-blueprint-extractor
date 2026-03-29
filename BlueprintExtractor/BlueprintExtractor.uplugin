@@ -24,6 +24,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "RemoteControl",
+			"Enabled": true
+		},
+		{
 			"Name": "StateTree",
 			"Enabled": true
 		}

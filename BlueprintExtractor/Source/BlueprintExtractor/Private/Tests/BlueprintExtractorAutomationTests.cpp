@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "BlueprintExtractorSubsystem.h"
+#include "BlueprintExtractorModule.h"
 #include "Authoring/AssetMutationHelpers.h"
 
 #include "Dom/JsonObject.h"
@@ -702,9 +703,27 @@ static bool RunValidateOnlyCoverage(FAutomationTestBase& Test)
 		TEXT("GetProjectAutomationContext"));
 	if (ProjectContext.IsValid())
 	{
+		FString InstanceId;
+		double ProcessId = 0.0;
+		double RemoteControlPort = 0.0;
+		FString RemoteControlHost;
+		FString EngineVersion;
+		FString LastSeenAt;
+		Test.TestTrue(TEXT("Project automation context returns instanceId"), ProjectContext->TryGetStringField(TEXT("instanceId"), InstanceId) && !InstanceId.IsEmpty());
+		Test.TestTrue(TEXT("Project automation context returns processId"), ProjectContext->TryGetNumberField(TEXT("processId"), ProcessId) && ProcessId > 0.0);
+		Test.TestTrue(TEXT("Project automation context returns remoteControlHost"), ProjectContext->TryGetStringField(TEXT("remoteControlHost"), RemoteControlHost) && !RemoteControlHost.IsEmpty());
+		Test.TestTrue(TEXT("Project automation context returns remoteControlPort"), ProjectContext->TryGetNumberField(TEXT("remoteControlPort"), RemoteControlPort) && RemoteControlPort > 0.0);
+		Test.TestTrue(TEXT("Project automation context returns engineVersion"), ProjectContext->TryGetStringField(TEXT("engineVersion"), EngineVersion) && !EngineVersion.IsEmpty());
+		Test.TestTrue(TEXT("Project automation context returns lastSeenAt"), ProjectContext->TryGetStringField(TEXT("lastSeenAt"), LastSeenAt) && !LastSeenAt.IsEmpty());
 		Test.TestTrue(TEXT("Project automation context reports isPlayingInEditor"), ProjectContext->HasTypedField<EJson::Boolean>(TEXT("isPlayingInEditor")));
 		bool bIsPlayingInEditor = true;
 		Test.TestTrue(TEXT("Project automation context is not playing in editor during headless tests"), ProjectContext->TryGetBoolField(TEXT("isPlayingInEditor"), bIsPlayingInEditor) && !bIsPlayingInEditor);
+
+		if (const FBlueprintExtractorModule* Module = FModuleManager::GetModulePtr<FBlueprintExtractorModule>(TEXT("BlueprintExtractor")))
+		{
+			Test.TestTrue(TEXT("BlueprintExtractor module registry file exists"), FPaths::FileExists(Module->GetRegistryFilePath()));
+			Test.TestEqual(TEXT("Project automation context instanceId matches module"), InstanceId, Module->GetEditorInstanceId());
+		}
 	}
 
 	return true;

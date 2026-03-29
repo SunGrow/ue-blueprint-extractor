@@ -29,10 +29,37 @@ describe('stdio integration', () => {
 
     const remoteServer = await startMockRemoteControlServer({
       onCall: (request) => {
+        if (request.functionName === 'GetProjectAutomationContext') {
+          return {
+            body: {
+              ReturnValue: JSON.stringify({
+                success: true,
+                operation: 'get_project_automation_context',
+                instanceId: 'stdio-mock-editor',
+                projectName: 'MockProject',
+                projectFilePath: 'C:/Projects/MyGame/MyGame.uproject',
+                projectDir: 'C:/Projects/MyGame',
+                engineDir: 'C:/Epic/UE_5.7/Engine',
+                engineRoot: 'C:/Epic/UE_5.7',
+                engineVersion: '5.7.0-stdio',
+                editorTarget: 'MyGameEditor',
+                processId: 4242,
+                remoteControlHost: remoteServer.host,
+                remoteControlPort: remoteServer.port,
+                lastSeenAt: '2026-03-30T00:00:00.000Z',
+                hostPlatform: 'Windows',
+                isPlayingInEditor: false,
+              }),
+            },
+          };
+        }
+
         if (request.functionName === 'SearchAssets') {
           return {
             body: {
               ReturnValue: JSON.stringify({
+                success: true,
+                operation: 'search_assets',
                 results: [
                   {
                     path: '/Game/Test/BP_Player',
@@ -40,6 +67,11 @@ describe('stdio integration', () => {
                     class: 'Blueprint',
                   },
                 ],
+                page: 1,
+                per_page: 5,
+                total_count: 1,
+                total_pages: 1,
+                has_more: false,
               }),
             },
           };
@@ -526,16 +558,27 @@ describe('stdio integration', () => {
     expect(captureWidgetMotion.content?.some((entry) => entry.type === 'resource_link')).toBe(true);
     expect(captureResource.contents[0]?.mimeType).toBe('image/png');
     expect(captureResource.contents[0]?.blob).toBe(Buffer.from('capture-image').toString('base64'));
-    expect(remoteServer.requests).toHaveLength(process.platform === 'win32' ? 10 : 9);
-    expect(remoteServer.requests[0]?.objectPath).toBe('/Script/Test.OverrideSubsystem');
-    expect(remoteServer.requests[1]).toMatchObject({
+    expect(remoteServer.requests.length).toBeGreaterThanOrEqual(process.platform === 'win32' ? 11 : 10);
+    expect(remoteServer.requests.every((request) => request.objectPath === '/Script/Test.OverrideSubsystem')).toBe(true);
+    const getRequest = (functionName: string) => remoteServer.requests.find((request) => request.functionName === functionName);
+
+    expect(getRequest('SearchAssets')).toMatchObject({
+      objectPath: '/Script/Test.OverrideSubsystem',
+      functionName: 'SearchAssets',
+      parameters: {
+        Query: 'Player',
+        ClassFilter: 'Blueprint',
+        MaxResults: 5,
+      },
+    });
+    expect(getRequest('ListImportJobs')).toMatchObject({
       objectPath: '/Script/Test.OverrideSubsystem',
       functionName: 'ListImportJobs',
       parameters: {
         bIncludeCompleted: true,
       },
     });
-    expect(remoteServer.requests[2]).toMatchObject({
+    expect(getRequest('ExtractMaterial')).toMatchObject({
       objectPath: '/Script/Test.OverrideSubsystem',
       functionName: 'ExtractMaterial',
       parameters: {
@@ -543,7 +586,7 @@ describe('stdio integration', () => {
         bVerbose: false,
       },
     });
-    expect(remoteServer.requests[3]).toMatchObject({
+    expect(getRequest('ModifyMaterial')).toMatchObject({
       objectPath: '/Script/Test.OverrideSubsystem',
       functionName: 'ModifyMaterial',
       parameters: {
@@ -551,7 +594,7 @@ describe('stdio integration', () => {
         bValidateOnly: false,
       },
     });
-    expect(JSON.parse(String(remoteServer.requests[3]?.parameters?.PayloadJson))).toMatchObject({
+    expect(JSON.parse(String(getRequest('ModifyMaterial')?.parameters?.PayloadJson))).toMatchObject({
       operations: [
         {
           operation: 'add_expression',
@@ -561,7 +604,7 @@ describe('stdio integration', () => {
       ],
     });
     if (process.platform === 'win32') {
-      expect(remoteServer.requests[4]).toMatchObject({
+      expect(getRequest('TriggerLiveCoding')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'TriggerLiveCoding',
         parameters: {
@@ -569,7 +612,7 @@ describe('stdio integration', () => {
           bWaitForCompletion: true,
         },
       });
-      expect(remoteServer.requests[5]).toMatchObject({
+      expect(getRequest('CaptureWidgetPreview')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'CaptureWidgetPreview',
         parameters: {
@@ -578,7 +621,7 @@ describe('stdio integration', () => {
           Height: 256,
         },
       });
-      expect(remoteServer.requests[6]).toMatchObject({
+      expect(getRequest('ExtractWidgetAnimation')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'ExtractWidgetAnimation',
         parameters: {
@@ -586,21 +629,21 @@ describe('stdio integration', () => {
           AnimationName: 'OpenSequence',
         },
       });
-      expect(remoteServer.requests[7]).toMatchObject({
+      expect(getRequest('CaptureWidgetMotionCheckpoints')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'CaptureWidgetMotionCheckpoints',
         parameters: {
           AssetPath: '/Game/Test/WBP_Window',
         },
       });
-      expect(remoteServer.requests[8]).toMatchObject({
+      expect(getRequest('CompareCaptureToReference')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'CompareCaptureToReference',
         parameters: {
           Tolerance: 0.05,
         },
       });
-      expect(remoteServer.requests[9]).toMatchObject({
+      expect(getRequest('ListCaptures')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'ListCaptures',
         parameters: {
@@ -608,7 +651,7 @@ describe('stdio integration', () => {
         },
       });
     } else {
-      expect(remoteServer.requests[4]).toMatchObject({
+      expect(getRequest('CaptureWidgetPreview')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'CaptureWidgetPreview',
         parameters: {
@@ -617,7 +660,7 @@ describe('stdio integration', () => {
           Height: 256,
         },
       });
-      expect(remoteServer.requests[5]).toMatchObject({
+      expect(getRequest('ExtractWidgetAnimation')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'ExtractWidgetAnimation',
         parameters: {
@@ -625,21 +668,21 @@ describe('stdio integration', () => {
           AnimationName: 'OpenSequence',
         },
       });
-      expect(remoteServer.requests[6]).toMatchObject({
+      expect(getRequest('CaptureWidgetMotionCheckpoints')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'CaptureWidgetMotionCheckpoints',
         parameters: {
           AssetPath: '/Game/Test/WBP_Window',
         },
       });
-      expect(remoteServer.requests[7]).toMatchObject({
+      expect(getRequest('CompareCaptureToReference')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'CompareCaptureToReference',
         parameters: {
           Tolerance: 0.05,
         },
       });
-      expect(remoteServer.requests[8]).toMatchObject({
+      expect(getRequest('ListCaptures')).toMatchObject({
         objectPath: '/Script/Test.OverrideSubsystem',
         functionName: 'ListCaptures',
         parameters: {

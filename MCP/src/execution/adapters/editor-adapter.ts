@@ -3,14 +3,19 @@
  * This is a thin wrapper — all existing behavior is preserved.
  */
 
-import type { UEClient } from '../../ue-client.js';
 import type { ExecutionAdapter, ToolCapability } from '../execution-adapter.js';
 import { ALL_CAPABILITIES } from '../execution-adapter.js';
 
-export class EditorAdapter implements ExecutionAdapter {
-  private client: UEClient;
+type EditorClientLike = {
+  callSubsystem(method: string, params: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<string>;
+  checkConnection?(): Promise<boolean>;
+  editorModeAvailable?(): Promise<boolean>;
+};
 
-  constructor(client: UEClient) {
+export class EditorAdapter implements ExecutionAdapter {
+  private client: EditorClientLike;
+
+  constructor(client: EditorClientLike) {
     this.client = client;
   }
 
@@ -24,7 +29,13 @@ export class EditorAdapter implements ExecutionAdapter {
   }
 
   async isAvailable(): Promise<boolean> {
-    return this.client.checkConnection();
+    if (typeof this.client.editorModeAvailable === 'function') {
+      return this.client.editorModeAvailable();
+    }
+    if (typeof this.client.checkConnection === 'function') {
+      return this.client.checkConnection();
+    }
+    return false;
   }
 
   getMode(): 'editor' {

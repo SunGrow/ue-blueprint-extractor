@@ -271,9 +271,14 @@ describe('createBlueprintExtractorServer', () => {
     const modifyCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'modify_commonui_button_style');
     const applyCommonUIButtonStyle = tools.tools.find((tool) => tool.name === 'apply_commonui_button_style');
     const getToolHelp = tools.tools.find((tool) => tool.name === 'get_tool_help');
+    const listRunningEditors = tools.tools.find((tool) => tool.name === 'list_running_editors');
+    const getActiveEditor = tools.tools.find((tool) => tool.name === 'get_active_editor');
+    const selectEditor = tools.tools.find((tool) => tool.name === 'select_editor');
+    const clearEditorSelection = tools.tools.find((tool) => tool.name === 'clear_editor_selection');
+    const launchEditor = tools.tools.find((tool) => tool.name === 'launch_editor');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(95);
+    expect(tools.tools).toHaveLength(100);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -299,6 +304,11 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'extract_widget_animation')).toBe(true);
+    expect(listRunningEditors).toBeTruthy();
+    expect(getActiveEditor).toBeTruthy();
+    expect(selectEditor).toBeTruthy();
+    expect(clearEditorSelection).toBeTruthy();
+    expect(launchEditor).toBeTruthy();
     expect(tools.tools.some((tool) => tool.name === 'create_widget_animation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_animation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'list_import_jobs')).toBe(true);

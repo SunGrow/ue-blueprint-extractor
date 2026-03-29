@@ -11,6 +11,7 @@ const DEFAULT_BUILD_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_DISCONNECT_TIMEOUT_MS = 60 * 1000;
 const DEFAULT_RECONNECT_TIMEOUT_MS = 3 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
+const DEFAULT_EDITOR_LAUNCH_ARGS = ['-RCWebControlEnable', '-RCWebInterfaceEnable'];
 
 export interface CompileProjectCodeRequest {
   engineRoot?: string;
@@ -88,6 +89,7 @@ export interface LaunchEditorResult {
   engineRoot: string;
   projectPath: string;
   projectDir: string;
+  processId?: number;
   command: {
     executable: string;
     args: string[];
@@ -127,7 +129,7 @@ export interface ProjectControllerLike {
   readonly liveCodingSupported: boolean;
   classifyChangedPaths(changedPaths: string[], forceRebuild?: boolean): SyncStrategyPlan;
   compileProjectCode(request: CompileProjectCodeRequest): Promise<CompileProjectCodeResult>;
-  killEditorProcess(): Promise<{ killed: boolean; error?: string; diagnostics?: string[] }>;
+  killEditorProcess(options?: { processId?: number }): Promise<{ killed: boolean; error?: string; diagnostics?: string[] }>;
   launchEditor(request: LaunchEditorRequest): Promise<LaunchEditorResult>;
   waitForEditorRestart(
     probeConnection: ProbeConnection,
@@ -629,9 +631,21 @@ export class ProjectController implements ProjectControllerLike {
     return result;
   }
 
-  async killEditorProcess(): Promise<{ killed: boolean; error?: string; diagnostics?: string[] }> {
+  async killEditorProcess(options?: { processId?: number }): Promise<{ killed: boolean; error?: string; diagnostics?: string[] }> {
     const diagnostics: string[] = [];
+    const processId = options?.processId;
     try {
+      if (processId) {
+        if (this.platform === 'win32') {
+          execSync(`taskkill /F /PID ${processId}`, { timeout: 10000 });
+        } else {
+          execSync(`kill -9 ${processId}`, { timeout: 10000 });
+        }
+        if (this.editorPid === processId) {
+          this.editorPid = null;
+        }
+        return { killed: true };
+      }
       if (this.editorPid) {
         if (this.platform === 'win32') {
           execSync(`taskkill /F /PID ${this.editorPid}`, { timeout: 10000 });
@@ -667,7 +681,12 @@ export class ProjectController implements ProjectControllerLike {
     }
 
     const executable = await resolveEditorExecutable(engineRoot, this.platform, 'editor');
-    const args = [projectPath, ...(request.additionalArgs ?? [])];
+    const requestedArgs = request.additionalArgs ?? [];
+    const args = [
+      projectPath,
+      ...DEFAULT_EDITOR_LAUNCH_ARGS.filter((arg) => !requestedArgs.includes(arg)),
+      ...requestedArgs,
+    ];
     const invocation = resolveCommandInvocation(executable, args, this.platform, this.env);
     const child = this.spawnProcess(invocation.executable, invocation.args, {
       cwd: dirname(projectPath),
@@ -686,6 +705,7 @@ export class ProjectController implements ProjectControllerLike {
       engineRoot,
       projectPath,
       projectDir: dirname(projectPath),
+      processId: child.pid ?? undefined,
       command: {
         executable: invocation.executable,
         args: invocation.args,

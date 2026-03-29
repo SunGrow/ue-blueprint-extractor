@@ -239,6 +239,10 @@ describe('jsonToolError', () => {
     expect(result.content).toHaveLength(1);
     expect(result.content[0].type).toBe('text');
     expect(result.content[0].text).toBe('Error: boom');
+    expect(result.structuredContent).toMatchObject({
+      success: false,
+      message: 'boom',
+    });
   });
 
   it('formats string errors', () => {
@@ -256,9 +260,41 @@ describe('jsonToolError', () => {
   it('formats null/undefined values', () => {
     const nullResult = jsonToolError(null);
     expect(nullResult.content[0].text).toBe('Error: null');
+    expect(nullResult.structuredContent).toMatchObject({
+      success: false,
+      message: 'null',
+    });
 
     const undefinedResult = jsonToolError(undefined);
     expect(undefinedResult.content[0].text).toBe('Error: undefined');
+    expect(undefinedResult.structuredContent).toMatchObject({
+      success: false,
+      message: 'undefined',
+    });
+  });
+
+  it('preserves structured ueResponse payloads and lifts the first diagnostic code', () => {
+    const error = new Error('Generic DataAsset authoring does not support Enhanced Input assets.');
+    (error as Error & { ueResponse?: Record<string, unknown> }).ueResponse = {
+      success: false,
+      operation: 'create_data_asset',
+      diagnostics: [{
+        severity: 'error',
+        code: 'unsupported_asset_class',
+        message: 'Generic DataAsset authoring does not support Enhanced Input assets.',
+      }],
+    };
+
+    const result = jsonToolError(error);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('Error: Generic DataAsset authoring does not support Enhanced Input assets.');
+    expect(result.structuredContent).toMatchObject({
+      success: false,
+      operation: 'create_data_asset',
+      code: 'unsupported_asset_class',
+      message: 'Generic DataAsset authoring does not support Enhanced Input assets.',
+    });
   });
 });
 

@@ -153,8 +153,48 @@ export function normalizeUStructPaths(paths: string[]): { normalized: string[]; 
 }
 
 export function jsonToolError(e: unknown) {
+  const message = e instanceof Error ? e.message : String(e);
+  const ueResponse = (
+    e instanceof Error
+    && 'ueResponse' in e
+    && isPlainObject((e as Error & { ueResponse?: unknown }).ueResponse)
+  )
+    ? { ...((e as Error & { ueResponse: Record<string, unknown> }).ueResponse) }
+    : null;
+
+  if (ueResponse) {
+    const firstDiagnostic = Array.isArray(ueResponse.diagnostics)
+      ? ueResponse.diagnostics.find((entry): entry is Record<string, unknown> => (
+        isPlainObject(entry)
+        && typeof entry.code === 'string'
+        && entry.code.length > 0
+      ))
+      : undefined;
+    const structuredContent = {
+      ...ueResponse,
+      success: false,
+      message: typeof ueResponse.message === 'string' && ueResponse.message.length > 0
+        ? ueResponse.message
+        : message,
+      ...(typeof ueResponse.code === 'string'
+        ? {}
+        : typeof firstDiagnostic?.code === 'string'
+          ? { code: firstDiagnostic.code }
+          : {}),
+    };
+    return {
+      content: [{ type: 'text' as const, text: `Error: ${structuredContent.message}` }],
+      structuredContent,
+      isError: true,
+    };
+  }
+
   return {
-    content: [{ type: 'text' as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }],
+    content: [{ type: 'text' as const, text: `Error: ${message}` }],
+    structuredContent: {
+      success: false,
+      message,
+    },
     isError: true,
   };
 }

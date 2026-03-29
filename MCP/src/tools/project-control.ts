@@ -6,11 +6,15 @@ import {
   canFallbackFromLiveCoding,
   enrichLiveCodingResult,
 } from '../helpers/live-coding.js';
+import { assertRequestMatchesActiveEditor } from '../helpers/active-editor-utils.js';
 import {
   explainProjectResolutionFailure,
   supportsConnectionProbe,
 } from '../helpers/project-utils.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+import { filesystemPathsEqual } from '../helpers/workspace-project.js';
+import { ActiveEditorSession } from '../active-editor-session.js';
+import type { EditorInstanceSnapshot } from '../editor-instance-types.js';
 import type {
   BuildConfiguration,
   BuildPlatform,
@@ -53,6 +57,7 @@ type RegisterProjectControlToolsOptions = {
   rememberExternalBuild: (result: CompileProjectCodeResult) => void;
   getLastExternalBuildContext: () => Record<string, unknown> | null;
   clearProjectAutomationContext: () => void;
+  activeEditorSession?: ActiveEditorSession | null;
   buildPlatformSchema: z.ZodTypeAny;
   buildConfigurationSchema: z.ZodTypeAny;
   editorPollIntervalMs: number;
@@ -89,10 +94,321 @@ export function registerProjectControlTools({
   rememberExternalBuild,
   getLastExternalBuildContext,
   clearProjectAutomationContext,
+  activeEditorSession,
   buildPlatformSchema,
   buildConfigurationSchema,
   editorPollIntervalMs,
 }: RegisterProjectControlToolsOptions): void {
+  const buildRunningEditorLabel = (entry: {
+    projectName?: string;
+    projectFilePath: string;
+    engineVersion?: string;
+    processId?: number;
+    remoteControlHost: string;
+    remoteControlPort: number;
+  }) => [
+    entry.projectName ?? entry.projectFilePath,
+    entry.engineVersion ?? 'unknown-engine',
+    `pid ${entry.processId ?? 'unknown'}`,
+    `${entry.remoteControlHost}:${entry.remoteControlPort}`,
+  ].join(' | ');
+
+  const toLabeledActiveEditor = (snapshot: EditorInstanceSnapshot): Record<string, unknown> => ({
+    ...snapshot,
+    label: buildRunningEditorLabel(snapshot),
+  });
+
+  const resolveEditorIdentity = (
+    previousEditor: EditorInstanceSnapshot | undefined,
+    fallback: {
+      projectPath?: string;
+      engineRoot?: string;
+      target?: string;
+    },
+  ) => ({
+    projectPath: previousEditor?.projectFilePath ?? fallback.projectPath,
+    engineRoot: previousEditor?.engineRoot ?? fallback.engineRoot,
+    target: previousEditor?.editorTarget ?? fallback.target,
+  });
+
+  const recoverEditorViaHostRelaunch = async (request: {
+    previousEditor?: EditorInstanceSnapshot;
+    projectPath?: string;
+    engineRoot?: string;
+    target?: string;
+    reconnectTimeoutSeconds: number;
+    initialReconnect?: Awaited<ReturnType<ProjectControllerLike['waitForEditorRestart']>>;
+    initialError?: string;
+  }): Promise<{
+    success: boolean;
+    reconnect?: Awaited<ReturnType<ProjectControllerLike['waitForEditorRestart']>>;
+    activeEditor?: Record<string, unknown>;
+    recovery: Record<string, unknown>;
+  }> => {
+    const recovery: Record<string, unknown> = {
+      strategy: 'host_relaunch_after_failed_graceful_restart',
+      ...(request.initialReconnect ? { initialReconnect: request.initialReconnect } : {}),
+      ...(request.initialError ? { initialError: request.initialError } : {}),
+    };
+
+    if (!request.previousEditor?.processId) {
+      recovery.message = 'Automatic recovery requires a known active editor process id.';
+      return { success: false, recovery };
+    }
+
+    if (!request.projectPath || !request.engineRoot) {
+      recovery.message = 'Automatic recovery requires both project_path and engine_root.';
+      return { success: false, recovery };
+    }
+
+    const previousEditor = request.previousEditor;
+
+    try {
+      const kill = await projectController.killEditorProcess({ processId: previousEditor.processId });
+      recovery.kill = kill;
+      if (!kill.killed) {
+        recovery.message = kill.error ?? 'killEditorProcess returned killed=false';
+        return { success: false, recovery };
+      }
+
+      clearProjectAutomationContext();
+
+      const editorLaunch = await projectController.launchEditor({
+        engineRoot: request.engineRoot,
+        projectPath: request.projectPath,
+      });
+      recovery.editorLaunch = editorLaunch;
+      if (!editorLaunch.success) {
+        recovery.message = 'launchEditor returned success=false during recovery';
+        return { success: false, recovery };
+      }
+
+      let reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+        reconnectTimeoutMs: request.reconnectTimeoutSeconds * 1000,
+        waitForDisconnect: false,
+      });
+
+      let rebound: Record<string, unknown> | undefined;
+      if (activeEditorSession) {
+        const reboundSnapshot = await activeEditorSession.refreshActiveEditorAfterReconnect({
+          projectPath: request.projectPath,
+          engineRoot: request.engineRoot,
+          target: request.target,
+        });
+        if (reboundSnapshot) {
+          rebound = toLabeledActiveEditor(reboundSnapshot);
+          recovery.activeEditor = rebound;
+          if (!reconnect.success) {
+            reconnect = {
+              ...reconnect,
+              success: true,
+              reconnected: true,
+              diagnostics: [
+                ...reconnect.diagnostics,
+                'Recovered by rebinding the relaunched editor from the registry.',
+              ],
+            };
+          }
+        }
+      }
+
+      recovery.reconnect = reconnect;
+      recovery.success = reconnect.success;
+      return {
+        success: reconnect.success,
+        reconnect,
+        activeEditor: rebound,
+        recovery,
+      };
+    } catch (error) {
+      recovery.message = error instanceof Error ? error.message : String(error);
+      return { success: false, recovery };
+    }
+  };
+
+  server.registerTool(
+    'list_running_editors',
+    {
+      title: 'List Running Editors',
+      description: 'List the running Unreal Editor instances known to the session-scoped editor registry.',
+      inputSchema: {},
+      annotations: {
+        title: 'List Running Editors',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        if (!activeEditorSession) {
+          return jsonToolSuccess({
+            success: true,
+            operation: 'list_running_editors',
+            workspaceProjectPath: undefined,
+            activeEditorInstanceId: undefined,
+            editorCount: 0,
+            editors: [],
+            message: 'Session-bound editor selection is unavailable for this server instance.',
+          });
+        }
+
+        const [editors, workspaceProjectPath, activeEditor] = await Promise.all([
+          activeEditorSession.listRunningEditors(),
+          activeEditorSession.getWorkspaceProjectPath(),
+          activeEditorSession.getActiveEditorState({ autoBindIfNeeded: false }),
+        ]);
+
+        return jsonToolSuccess({
+          success: true,
+          operation: 'list_running_editors',
+          workspaceProjectPath,
+          activeEditorInstanceId: activeEditor.activeEditor?.instanceId,
+          editorCount: editors.length,
+          editors: editors.map((entry) => ({
+            ...entry,
+            label: buildRunningEditorLabel(entry),
+            matchesWorkspace: filesystemPathsEqual(entry.projectFilePath, workspaceProjectPath),
+            isActive: entry.instanceId === activeEditor.activeEditor?.instanceId,
+          })),
+        });
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_active_editor',
+    {
+      title: 'Get Active Editor',
+      description: 'Read the current session-bound active editor selection and its health state.',
+      inputSchema: {},
+      annotations: {
+        title: 'Get Active Editor',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        if (!activeEditorSession) {
+          return jsonToolSuccess({
+            success: true,
+            operation: 'get_active_editor',
+            active: false,
+            selectionSource: 'none',
+            healthy: false,
+            autoBindAllowed: false,
+            message: 'Session-bound editor selection is unavailable for this server instance.',
+          });
+        }
+
+        const state = await activeEditorSession.getActiveEditorState({ autoBindIfNeeded: true });
+        return jsonToolSuccess({
+          success: true,
+          operation: 'get_active_editor',
+          ...state,
+          activeEditorLabel: state.activeEditor ? buildRunningEditorLabel(state.activeEditor) : undefined,
+        });
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'select_editor',
+    {
+      title: 'Select Editor',
+      description: 'Set the active editor for this MCP session by instance_id or process_id.',
+      inputSchema: {
+        instance_id: z.string().optional().describe(
+          'Preferred canonical editor instance id returned by list_running_editors.',
+        ),
+        process_id: z.number().int().positive().optional().describe(
+          'Optional OS process id for selecting a running editor when instance_id is not available.',
+        ),
+      },
+      annotations: {
+        title: 'Select Editor',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ instance_id, process_id }) => {
+      try {
+        if (!activeEditorSession) {
+          return jsonToolError(new Error('Session-bound editor selection is unavailable for this server instance.'));
+        }
+        if (!instance_id && typeof process_id !== 'number') {
+          return jsonToolError(new Error('select_editor requires instance_id or process_id.'));
+        }
+
+        const selected = await activeEditorSession.selectEditor({
+          instanceId: instance_id,
+          processId: process_id,
+        });
+        clearProjectAutomationContext();
+        return jsonToolSuccess({
+          success: true,
+          operation: 'select_editor',
+          selectionSource: 'manual',
+          activeEditor: selected,
+          activeEditorLabel: buildRunningEditorLabel(selected),
+        });
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'clear_editor_selection',
+    {
+      title: 'Clear Editor Selection',
+      description: 'Clear the current session-bound active editor so editor-backed tools stay unbound until you select or launch another editor.',
+      inputSchema: {},
+      annotations: {
+        title: 'Clear Editor Selection',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        if (!activeEditorSession) {
+          return jsonToolSuccess({
+            success: true,
+            operation: 'clear_editor_selection',
+            active: false,
+            selectionSource: 'none',
+            healthy: false,
+            autoBindAllowed: false,
+            message: 'Session-bound editor selection is unavailable for this server instance.',
+          });
+        }
+
+        const result = activeEditorSession.clearSelection();
+        clearProjectAutomationContext();
+        return jsonToolSuccess({
+          success: true,
+          operation: 'clear_editor_selection',
+          ...result,
+        });
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
   server.registerTool(
     'get_project_automation_context',
     {
@@ -111,6 +427,72 @@ export function registerProjectControlTools({
       try {
         const parsed = await getProjectAutomationContext(true);
         return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'launch_editor',
+    {
+      title: 'Launch Editor',
+      description: 'Launch a new Unreal Editor process for the resolved project and bind it as the active editor for this MCP session.',
+      inputSchema: {
+        engine_root: z.string().optional().describe(
+          'Optional Unreal Engine root. Falls back to the workspace project association or UE_ENGINE_ROOT.',
+        ),
+        project_path: z.string().optional().describe(
+          'Optional .uproject path. Falls back to the workspace project or UE_PROJECT_PATH.',
+        ),
+        target: z.string().optional().describe(
+          'Optional editor target such as MyGameEditor.',
+        ),
+        reconnect_timeout_seconds: z.number().int().positive().default(180).describe(
+          'Maximum seconds to wait for the launched editor to register and become the active editor.',
+        ),
+      },
+      annotations: {
+        title: 'Launch Editor',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ engine_root, project_path, target, reconnect_timeout_seconds }) => {
+      try {
+        const resolved = await resolveProjectInputs({ engine_root, project_path, target });
+        if (!resolved.engineRoot || !resolved.projectPath) {
+          throw explainProjectResolutionFailure(
+            'launch_editor requires engine_root and project_path',
+            resolved,
+          );
+        }
+
+        const launched = await projectController.launchEditor({
+          engineRoot: resolved.engineRoot,
+          projectPath: resolved.projectPath,
+        });
+        clearProjectAutomationContext();
+
+        let activeEditor: Record<string, unknown> | undefined;
+        if (activeEditorSession) {
+          const bound = await activeEditorSession.bindLaunchedEditor({
+            processId: launched.processId,
+            projectPath: resolved.projectPath,
+            engineRoot: resolved.engineRoot,
+            target: resolved.target,
+            timeoutMs: reconnect_timeout_seconds * 1000,
+          });
+          activeEditor = toLabeledActiveEditor(bound);
+        }
+
+        return jsonToolSuccess({
+          ...launched,
+          inputResolution: buildInputResolution(resolved),
+          activeEditor,
+        });
       } catch (error) {
         return jsonToolError(error);
       }
@@ -220,6 +602,27 @@ export function registerProjectControlTools({
       },
     },
     async ({ timeout_seconds }) => {
+      if (activeEditorSession) {
+        const activeState = await activeEditorSession.getActiveEditorState({ autoBindIfNeeded: true });
+        if (!activeState.active) {
+          return jsonToolSuccess({
+            success: false,
+            operation: 'wait_for_editor',
+            connected: false,
+            elapsedMs: 0,
+            timeoutMs: timeout_seconds * 1_000,
+            attempts: 0,
+            code: 'no_active_editor',
+            recoverable: true,
+            message: activeState.message,
+            next_steps: [
+              'Call list_running_editors to inspect the available Unreal Editor instances.',
+              'Call select_editor to bind this MCP session to the intended editor, or call launch_editor to start one.',
+            ],
+          });
+        }
+      }
+
       const probe = supportsConnectionProbe(client);
       const timeoutMs = timeout_seconds * 1_000;
       if (!probe) {
@@ -247,6 +650,15 @@ export function registerProjectControlTools({
         const connected = await probe();
         const elapsedMs = Date.now() - startedAt;
         if (connected) {
+          let activeEditor: Record<string, unknown> | undefined;
+          const expectedActive = activeEditorSession?.getBoundSnapshot();
+          if (activeEditorSession && expectedActive) {
+            activeEditor = await activeEditorSession.refreshActiveEditorAfterReconnect({
+              projectPath: expectedActive.projectFilePath,
+              engineRoot: expectedActive.engineRoot,
+              target: expectedActive.editorTarget,
+            });
+          }
           return jsonToolSuccess({
             success: true,
             operation: 'wait_for_editor',
@@ -254,6 +666,7 @@ export function registerProjectControlTools({
             elapsedMs,
             timeoutMs,
             attempts,
+            ...(activeEditor ? { activeEditor } : {}),
           });
         }
 
@@ -322,6 +735,11 @@ export function registerProjectControlTools({
     },
     async ({ engine_root, project_path, target, platform, configuration, build_timeout_seconds, include_output, clear_uht_cache }) => {
       try {
+        await assertRequestMatchesActiveEditor(activeEditorSession, {
+          engine_root,
+          project_path,
+          target,
+        });
         const resolved = await resolveProjectInputs({ engine_root, project_path, target });
         const parsed = await projectController.compileProjectCode({
           engineRoot: resolved.engineRoot,
@@ -429,6 +847,8 @@ export function registerProjectControlTools({
     },
     async ({ save_dirty_assets, force_kill, wait_for_reconnect, disconnect_timeout_seconds, reconnect_timeout_seconds }) => {
       try {
+        const activeEditorBeforeRestart = activeEditorSession?.getBoundSnapshot();
+
         // Pre-flight: verify editor is connected before attempting restart
         const probe = supportsConnectionProbe(client);
         if (!force_kill && probe) {
@@ -457,8 +877,13 @@ export function registerProjectControlTools({
         let restartRequest: Record<string, unknown>;
 
         if (force_kill) {
-          // Force-kill path: terminate the editor process directly
-          const killResult = await projectController.killEditorProcess();
+          const killOptions = activeEditorBeforeRestart?.processId
+            ? { processId: activeEditorBeforeRestart.processId }
+            : undefined;
+
+          // Force-kill path: terminate the selected editor process directly. When the
+          // session is bound to a concrete editor identity, relaunch the same project.
+          const killResult = await projectController.killEditorProcess(killOptions);
           clearProjectAutomationContext();
           restartRequest = {
             success: killResult.killed,
@@ -466,6 +891,26 @@ export function registerProjectControlTools({
             strategy: 'force_kill',
             ...(killResult.error ? { error: killResult.error } : {}),
           };
+          if (
+            killResult.killed
+            && activeEditorBeforeRestart?.projectFilePath
+            && activeEditorBeforeRestart.engineRoot
+          ) {
+            const launched = await projectController.launchEditor({
+              engineRoot: activeEditorBeforeRestart.engineRoot,
+              projectPath: activeEditorBeforeRestart.projectFilePath,
+            });
+            restartRequest.editorLaunch = launched;
+            if (activeEditorSession && launched.success) {
+              restartRequest.activeEditor = await activeEditorSession.bindLaunchedEditor({
+                processId: launched.processId,
+                projectPath: activeEditorBeforeRestart.projectFilePath,
+                engineRoot: activeEditorBeforeRestart.engineRoot,
+                target: activeEditorBeforeRestart.editorTarget,
+                timeoutMs: reconnect_timeout_seconds * 1000,
+              });
+            }
+          }
         } else {
           // Graceful path: attempt restart with one retry on transient failure
           try {
@@ -501,16 +946,45 @@ export function registerProjectControlTools({
           });
         }
 
-        const reconnect = await projectController.waitForEditorRestart(probe, {
+        let reconnect = await projectController.waitForEditorRestart(probe, {
           disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
           reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
+          waitForDisconnect: !force_kill,
         });
+
+        let activeEditor: Record<string, unknown> | undefined;
+        let recovery: Record<string, unknown> | undefined;
+        if (!force_kill && !reconnect.success) {
+          const recovered = await recoverEditorViaHostRelaunch({
+            previousEditor: activeEditorBeforeRestart,
+            projectPath: activeEditorBeforeRestart?.projectFilePath,
+            engineRoot: activeEditorBeforeRestart?.engineRoot,
+            target: activeEditorBeforeRestart?.editorTarget,
+            reconnectTimeoutSeconds: reconnect_timeout_seconds,
+            initialReconnect: reconnect,
+          });
+          recovery = recovered.recovery;
+          if (recovered.success && recovered.reconnect) {
+            reconnect = recovered.reconnect;
+            activeEditor = recovered.activeEditor;
+          }
+        }
+
+        if (!activeEditor && activeEditorSession && reconnect.success && activeEditorBeforeRestart && !force_kill) {
+          activeEditor = await activeEditorSession.refreshActiveEditorAfterReconnect({
+            projectPath: activeEditorBeforeRestart.projectFilePath,
+            engineRoot: activeEditorBeforeRestart.engineRoot,
+            target: activeEditorBeforeRestart.editorTarget,
+          });
+        }
 
         return jsonToolSuccess({
           ...restartRequest,
           saveDirtyAssetsAccepted: save_dirty_assets,
           saveDirtyAssetsAppliedByEditor: save_dirty_assets,
           reconnect,
+          ...(recovery ? { recovery } : {}),
+          ...(activeEditor ? { activeEditor } : {}),
           success: restartRequest.success !== false && reconnect.success,
         });
       } catch (error) {
@@ -606,7 +1080,13 @@ export function registerProjectControlTools({
       const stepErrors: Record<string, string> = {};
       let currentStep = 'init';
       try {
+        await assertRequestMatchesActiveEditor(activeEditorSession, {
+          engine_root,
+          project_path,
+          target,
+        });
         const resolvedProjectInputs = await resolveProjectInputs({ engine_root, project_path, target });
+        const activeEditorBeforeSync = activeEditorSession?.getBoundSnapshot();
 
         // Normalize changed_paths to absolute paths
         const projectRoot = resolvedProjectInputs.projectPath
@@ -802,6 +1282,12 @@ export function registerProjectControlTools({
 
         currentStep = 'restart';
         let reconnect: Awaited<ReturnType<ProjectControllerLike['waitForEditorRestart']>> | undefined;
+        const connectionProbe = supportsConnectionProbe(client);
+        const expectedRestartIdentity = resolveEditorIdentity(activeEditorBeforeSync, {
+          projectPath: resolvedProjectInputs.projectPath,
+          engineRoot: resolvedProjectInputs.engineRoot,
+          target: resolvedProjectInputs.target,
+        });
         if (restart_first) {
           try {
             const launch = await projectController.launchEditor({
@@ -816,6 +1302,15 @@ export function registerProjectControlTools({
               if (Object.keys(stepErrors).length > 0) structuredResult.stepErrors = stepErrors;
               return jsonToolSuccess(structuredResult);
             }
+            if (activeEditorSession && launch.success && resolvedProjectInputs.projectPath) {
+              structuredResult.activeEditor = await activeEditorSession.bindLaunchedEditor({
+                processId: launch.processId,
+                projectPath: resolvedProjectInputs.projectPath,
+                engineRoot: resolvedProjectInputs.engineRoot,
+                target: resolvedProjectInputs.target,
+                timeoutMs: reconnect_timeout_seconds * 1000,
+              });
+            }
           } catch (launchError) {
             stepErrors.editorLaunch = launchError instanceof Error ? launchError.message : String(launchError);
             structuredResult.success = false;
@@ -826,11 +1321,19 @@ export function registerProjectControlTools({
 
           currentStep = 'reconnect';
           try {
-            reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+            reconnect = await projectController.waitForEditorRestart(connectionProbe, {
               disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
               reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
               waitForDisconnect: false,
             });
+            if (activeEditorSession && reconnect.success && !structuredResult.activeEditor && resolvedProjectInputs.projectPath) {
+              structuredResult.activeEditor = await activeEditorSession.bindLaunchedEditor({
+                projectPath: resolvedProjectInputs.projectPath,
+                engineRoot: resolvedProjectInputs.engineRoot,
+                target: resolvedProjectInputs.target,
+                timeoutMs: reconnect_timeout_seconds * 1000,
+              });
+            }
           } catch (reconnectError) {
             stepErrors.reconnect = reconnectError instanceof Error ? reconnectError.message : String(reconnectError);
           }
@@ -860,12 +1363,46 @@ export function registerProjectControlTools({
 
           currentStep = 'reconnect';
           try {
-            reconnect = await projectController.waitForEditorRestart(supportsConnectionProbe(client), {
+            reconnect = await projectController.waitForEditorRestart(connectionProbe, {
               disconnectTimeoutMs: disconnect_timeout_seconds * 1000,
               reconnectTimeoutMs: reconnect_timeout_seconds * 1000,
             });
+            if (!reconnect.success) {
+              const recovered = await recoverEditorViaHostRelaunch({
+                previousEditor: activeEditorBeforeSync,
+                ...expectedRestartIdentity,
+                reconnectTimeoutSeconds: reconnect_timeout_seconds,
+                initialReconnect: reconnect,
+              });
+              structuredResult.restartRecovery = recovered.recovery;
+              if (recovered.success && recovered.reconnect) {
+                reconnect = recovered.reconnect;
+                if (recovered.activeEditor) {
+                  structuredResult.activeEditor = recovered.activeEditor;
+                }
+              }
+            }
+            if (activeEditorSession && reconnect.success) {
+              structuredResult.activeEditor ??= await activeEditorSession.refreshActiveEditorAfterReconnect({
+                ...expectedRestartIdentity,
+              });
+            }
           } catch (reconnectError) {
-            stepErrors.reconnect = reconnectError instanceof Error ? reconnectError.message : String(reconnectError);
+            const recovered = await recoverEditorViaHostRelaunch({
+              previousEditor: activeEditorBeforeSync,
+              ...expectedRestartIdentity,
+              reconnectTimeoutSeconds: reconnect_timeout_seconds,
+              initialError: reconnectError instanceof Error ? reconnectError.message : String(reconnectError),
+            });
+            structuredResult.restartRecovery = recovered.recovery;
+            if (recovered.success && recovered.reconnect) {
+              reconnect = recovered.reconnect;
+              if (recovered.activeEditor) {
+                structuredResult.activeEditor = recovered.activeEditor;
+              }
+            } else {
+              stepErrors.reconnect = reconnectError instanceof Error ? reconnectError.message : String(reconnectError);
+            }
           }
         }
 

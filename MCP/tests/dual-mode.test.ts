@@ -331,7 +331,7 @@ describe('TOOL_MODE_ANNOTATIONS', () => {
     expect(executor.getToolMode('restart_editor')).toBe('editor_only');
     expect(executor.getToolMode('capture_widget_preview')).toBe('editor_only');
     expect(executor.getToolMode('start_pie')).toBe('editor_only');
-    expect(executor.getToolMode('capture_runtime_screenshot')).toBe('editor_only');
+    expect(executor.getToolMode('capture_runtime_screenshot')).toBe('both');
   });
 });
 

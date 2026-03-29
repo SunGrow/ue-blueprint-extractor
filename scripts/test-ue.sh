@@ -69,6 +69,76 @@ assert_path() {
   fi
 }
 
+get_python_bin() {
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' python3
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf '%s\n' python
+    return 0
+  fi
+  return 1
+}
+
+get_free_tcp_port() {
+  local py
+  py="$(get_python_bin)" || {
+    echo "python3 or python is required to allocate a free TCP port." >&2
+    exit 1
+  }
+
+  "$py" - <<'PY'
+import socket
+
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+set_remote_control_port() {
+  local config_path="$1"
+  local port="$2"
+  local py
+  py="$(get_python_bin)" || {
+    echo "python3 or python is required to patch the staged DefaultRemoteControl.ini." >&2
+    exit 1
+  }
+
+  "$py" - "$config_path" "$port" <<'PY'
+from pathlib import Path
+import sys
+
+config_path = Path(sys.argv[1])
+port_line = f"RemoteControlHttpServerPort={sys.argv[2]}"
+section_header = "[/Script/RemoteControlCommon.RemoteControlSettings]"
+
+lines = config_path.read_text(encoding="utf-8").splitlines() if config_path.exists() else []
+
+try:
+    section_index = lines.index(section_header)
+except ValueError:
+    if lines and lines[-1] != "":
+        lines.append("")
+    lines.extend([section_header, port_line])
+else:
+    insert_index = section_index + 1
+    port_updated = False
+    while insert_index < len(lines) and not lines[insert_index].startswith("["):
+        if lines[insert_index].startswith("RemoteControlHttpServerPort="):
+            lines[insert_index] = port_line
+            port_updated = True
+            break
+        insert_index += 1
+    if not port_updated:
+        lines.insert(insert_index, port_line)
+
+config_path.parent.mkdir(parents=True, exist_ok=True)
+config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
 run_step() {
   local label="$1"
   shift
@@ -195,6 +265,12 @@ fixture_root="$stage_root"
 project_path="$fixture_root/$(basename "$project_path")"
 plugin_destination="$fixture_root/Plugins/BlueprintExtractor"
 automation_report_path="$fixture_root/Saved/AutomationReports"
+fixture_config_path="$fixture_root/Config/DefaultRemoteControl.ini"
+remote_control_port="${UE_REMOTE_CONTROL_PORT:-}"
+if [[ -z "$remote_control_port" ]]; then
+  remote_control_port="$(get_free_tcp_port)"
+fi
+export UE_REMOTE_CONTROL_PORT="$remote_control_port"
 
 mkdir -p "$(dirname "$plugin_destination")"
 
@@ -212,6 +288,9 @@ else
   cp -R "$plugin_source/." "$plugin_destination/"
   rm -rf "$plugin_destination/Binaries" "$plugin_destination/Intermediate" "$plugin_destination/Saved" "$plugin_destination/.vs"
 fi
+
+echo "==> Using staged Remote Control port $remote_control_port"
+set_remote_control_port "$fixture_config_path" "$remote_control_port"
 
 if [[ "$build_plugin" -eq 1 ]]; then
   mkdir -p "$build_plugin_output"

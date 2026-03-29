@@ -1,8 +1,9 @@
 import { access } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import { resolve } from 'node:path';
+import path, { resolve } from 'node:path';
 import type { CompileProjectCodeResult } from '../project-controller.js';
 import type { ProjectAutomationContext, ResolvedProjectInputs } from '../tool-context.js';
+import { buildEngineAssociationCandidates, readProjectEngineAssociation } from './workspace-project.js';
 
 export type ProjectInputsRequest = {
   engine_root?: string;
@@ -21,6 +22,7 @@ type ResolveProjectInputsDeps = {
   getProjectAutomationContext(forceRefresh?: boolean): Promise<ProjectAutomationContext>;
   firstDefinedString(...values: Array<unknown>): string | undefined;
   env?: NodeJS.ProcessEnv;
+  workspaceProjectPath?: string;
 };
 
 export function rememberExternalBuild(result: CompileProjectCodeResult): Record<string, unknown> {
@@ -94,6 +96,19 @@ async function probeEngineRootHeuristic(): Promise<string | undefined> {
   return undefined;
 }
 
+async function probePreferredEngineRoot(candidates: string[]): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    try {
+      await access(resolve(candidate, ENGINE_MARKER), fsConstants.F_OK);
+      return candidate;
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return undefined;
+}
+
 export async function resolveProjectInputs(
   request: ProjectInputsRequest,
   deps: ResolveProjectInputsDeps,
@@ -102,6 +117,7 @@ export async function resolveProjectInputs(
     getProjectAutomationContext,
     firstDefinedString,
     env = process.env,
+    workspaceProjectPath,
   } = deps;
 
   let context: ProjectAutomationContext | null = null;
@@ -118,9 +134,17 @@ export async function resolveProjectInputs(
   const engineRootFromContext = firstDefinedString(context?.engineRoot);
   const projectPathFromContext = firstDefinedString(context?.projectFilePath);
   const targetFromContext = firstDefinedString(context?.editorTarget);
+  const projectPathFromWorkspace = firstDefinedString(workspaceProjectPath);
+  const targetFromWorkspace = projectPathFromWorkspace
+    ? `${path.basename(projectPathFromWorkspace, '.uproject')}Editor`
+    : undefined;
   const engineRootFromEnv = firstDefinedString(env.UE_ENGINE_ROOT);
   const projectPathFromEnv = firstDefinedString(env.UE_PROJECT_PATH);
   const targetFromEnv = firstDefinedString(env.UE_PROJECT_TARGET, env.UE_EDITOR_TARGET);
+  const projectPath = firstDefinedString(request.project_path, projectPathFromContext, projectPathFromWorkspace, projectPathFromEnv);
+  const target = firstDefinedString(request.target, targetFromContext, targetFromWorkspace, targetFromEnv);
+  const engineAssociation = projectPath ? await readProjectEngineAssociation(projectPath) : undefined;
+  const associationCandidates = buildEngineAssociationCandidates(engineAssociation);
 
   let engineRoot = firstDefinedString(request.engine_root, engineRootFromContext, engineRootFromEnv);
   let engineRootSource: 'explicit' | 'editor_context' | 'environment' | 'filesystem_heuristic' | 'missing';
@@ -132,8 +156,8 @@ export async function resolveProjectInputs(
   } else if (engineRootFromEnv) {
     engineRootSource = 'environment';
   } else {
-    // Filesystem heuristic: probe common UE installation paths
-    const heuristicRoot = await probeEngineRootHeuristic();
+    const preferredCandidate = await probePreferredEngineRoot(associationCandidates);
+    const heuristicRoot = preferredCandidate ?? await probeEngineRootHeuristic();
     if (heuristicRoot) {
       engineRoot = heuristicRoot;
       engineRootSource = 'filesystem_heuristic';
@@ -141,9 +165,6 @@ export async function resolveProjectInputs(
       engineRootSource = 'missing';
     }
   }
-
-  const projectPath = firstDefinedString(request.project_path, projectPathFromContext, projectPathFromEnv);
-  const target = firstDefinedString(request.target, targetFromContext, targetFromEnv);
 
   return {
     engineRoot,
@@ -153,8 +174,8 @@ export async function resolveProjectInputs(
     contextError,
     sources: {
       engineRoot: engineRootSource,
-      projectPath: request.project_path ? 'explicit' : projectPathFromContext ? 'editor_context' : projectPathFromEnv ? 'environment' : 'missing',
-      target: request.target ? 'explicit' : targetFromContext ? 'editor_context' : targetFromEnv ? 'environment' : 'missing',
+      projectPath: request.project_path ? 'explicit' : projectPathFromContext ? 'editor_context' : projectPathFromWorkspace ? 'workspace' : projectPathFromEnv ? 'environment' : 'missing',
+      target: request.target ? 'explicit' : targetFromContext ? 'editor_context' : targetFromWorkspace ? 'workspace' : targetFromEnv ? 'environment' : 'missing',
     },
   };
 }

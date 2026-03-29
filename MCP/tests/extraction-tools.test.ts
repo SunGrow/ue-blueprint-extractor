@@ -582,6 +582,39 @@ describe('registerExtractionTools', () => {
     });
   });
 
+  it('normalizes raw array responses from ListAssets into asset fields', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ([
+      { path: '/Game/Blueprints/BP_Player.BP_Player', name: 'BP_Player', class: 'Blueprint' },
+    ]));
+
+    registerExtractionTools({
+      server: registry.server,
+      callSubsystemJson,
+      scopeEnum,
+      extractAssetTypeSchema,
+      cascadeResultSchema,
+      toolHelpRegistry: registry.toolHelpRegistry,
+    });
+
+    const result = await registry.getTool('list_assets').handler({
+      package_path: '/Game/Blueprints',
+      recursive: false,
+      class_filter: '',
+    });
+
+    expect(parseDirectToolResult(result)).toMatchObject({
+      assets: [{
+        path: '/Game/Blueprints/BP_Player.BP_Player',
+        assetPath: '/Game/Blueprints/BP_Player.BP_Player',
+        name: 'BP_Player',
+        assetName: 'BP_Player',
+        class: 'Blueprint',
+        assetClass: 'Blueprint',
+      }],
+    });
+  });
+
   it('returns an error when list_assets fails', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => {

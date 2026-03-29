@@ -82,7 +82,306 @@ function createProjectController(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createActiveEditorSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    instanceId: 'editor-1',
+    projectName: 'Proj',
+    projectFilePath: 'C:/Proj/Proj.uproject',
+    projectDir: 'C:/Proj',
+    engineRoot: 'C:/UE',
+    engineVersion: '5.7.0',
+    editorTarget: 'ProjEditor',
+    processId: 4242,
+    remoteControlHost: '127.0.0.1',
+    remoteControlPort: 30010,
+    lastSeenAt: '2026-03-30T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function createActiveEditorSession(overrides: Record<string, unknown> = {}) {
+  const activeEditor = createActiveEditorSnapshot();
+  return {
+    listRunningEditors: vi.fn(async () => [activeEditor]),
+    getWorkspaceProjectPath: vi.fn(async () => 'C:\\Proj\\Proj.uproject'),
+    getActiveEditorState: vi.fn(async () => ({
+      active: true,
+      selectionSource: 'manual',
+      workspaceProjectPath: 'C:\\Proj\\Proj.uproject',
+      autoBindAllowed: false,
+      healthy: true,
+      activeEditor,
+    })),
+    selectEditor: vi.fn(async () => activeEditor),
+    clearSelection: vi.fn(() => ({
+      active: false,
+      selectionSource: 'none',
+      workspaceProjectPath: undefined,
+      autoBindAllowed: false,
+      healthy: false,
+      activeEditor,
+      message: 'The session is now unbound.',
+    })),
+    bindLaunchedEditor: vi.fn(async () => activeEditor),
+    refreshActiveEditorAfterReconnect: vi.fn(async () => activeEditor),
+    getBoundSnapshot: vi.fn(() => activeEditor),
+    ...overrides,
+  };
+}
+
 describe('registerProjectControlTools', () => {
+  it('lists running editors with workspace and active flags', async () => {
+    const registry = createToolRegistry();
+    const activeEditorSession = createActiveEditorSession({
+      listRunningEditors: vi.fn(async () => [
+        createActiveEditorSnapshot(),
+        createActiveEditorSnapshot({
+          instanceId: 'editor-2',
+          projectName: 'OtherProj',
+          projectFilePath: 'C:/Other/Other.uproject',
+          projectDir: 'C:/Other',
+          editorTarget: 'OtherEditor',
+          remoteControlPort: 30011,
+        }),
+      ]),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('list_running_editors').handler({});
+
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'list_running_editors',
+      workspaceProjectPath: 'C:\\Proj\\Proj.uproject',
+      activeEditorInstanceId: 'editor-1',
+      editorCount: 2,
+      editors: [
+        {
+          instanceId: 'editor-1',
+          matchesWorkspace: true,
+          isActive: true,
+        },
+        {
+          instanceId: 'editor-2',
+          matchesWorkspace: false,
+          isActive: false,
+        },
+      ],
+    });
+  });
+
+  it('selects and clears the active editor for the session', async () => {
+    const registry = createToolRegistry();
+    const clearProjectAutomationContext = vi.fn();
+    const activeEditorSession = createActiveEditorSession();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext,
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const selectResult = await registry.getTool('select_editor').handler({
+      instance_id: 'editor-1',
+    });
+    const clearResult = await registry.getTool('clear_editor_selection').handler({});
+
+    expect(activeEditorSession.selectEditor).toHaveBeenCalledWith({
+      instanceId: 'editor-1',
+      processId: undefined,
+    });
+    expect(activeEditorSession.clearSelection).toHaveBeenCalledTimes(1);
+    expect(clearProjectAutomationContext).toHaveBeenCalledTimes(2);
+    expect(parseDirectToolResult(selectResult)).toMatchObject({
+      success: true,
+      operation: 'select_editor',
+      selectionSource: 'manual',
+      activeEditor: {
+        instanceId: 'editor-1',
+      },
+    });
+    expect(parseDirectToolResult(clearResult)).toMatchObject({
+      success: true,
+      operation: 'clear_editor_selection',
+      active: false,
+      selectionSource: 'none',
+    });
+  });
+
+  it('reports the active editor state and blocks wait_for_editor when unbound', async () => {
+    const registry = createToolRegistry();
+    const activeEditorSession = createActiveEditorSession({
+      getActiveEditorState: vi.fn(async () => ({
+        active: false,
+        selectionSource: 'none',
+        workspaceProjectPath: 'C:/Proj/Proj.uproject',
+        autoBindAllowed: true,
+        healthy: false,
+        message: 'No active editor is selected for this MCP session.',
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {
+        checkConnection: vi.fn(async () => true),
+      },
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const activeResult = await registry.getTool('get_active_editor').handler({});
+    const waitResult = await registry.getTool('wait_for_editor').handler({
+      timeout_seconds: 1,
+    });
+
+    expect(parseDirectToolResult(activeResult)).toMatchObject({
+      success: true,
+      operation: 'get_active_editor',
+      active: false,
+      selectionSource: 'none',
+    });
+    expect(parseDirectToolResult(waitResult)).toMatchObject({
+      success: false,
+      operation: 'wait_for_editor',
+      code: 'no_active_editor',
+      recoverable: true,
+    });
+  });
+
+  it('binds the launched editor into the session', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const activeEditorSession = createActiveEditorSession();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController({
+        launchEditor: vi.fn(async () => ({
+          success: true,
+          operation: 'launch_editor',
+          engineRoot: 'C:/UE',
+          projectPath: 'C:/Proj/Proj.uproject',
+          projectDir: 'C:/Proj',
+          processId: 4242,
+          command: {
+            executable: 'UnrealEditor.exe',
+            args: [],
+          },
+          detached: true,
+          diagnostics: [],
+        })),
+      }),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('launch_editor').handler({
+      reconnect_timeout_seconds: 30,
+    });
+
+    expect(activeEditorSession.bindLaunchedEditor).toHaveBeenCalledWith({
+      processId: 4242,
+      projectPath: 'C:/Proj/Proj.uproject',
+      engineRoot: 'C:/UE',
+      target: 'ProjEditor',
+      timeoutMs: 30_000,
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'launch_editor',
+      activeEditor: {
+        instanceId: 'editor-1',
+      },
+    });
+  });
+
+  it('rejects compile_project_code when explicit inputs conflict with the bound editor', async () => {
+    const registry = createToolRegistry();
+    const projectController = createProjectController();
+    const activeEditorSession = createActiveEditorSession({
+      getBoundSnapshot: vi.fn(() => createActiveEditorSnapshot({
+        instanceId: 'editor-other',
+        projectName: 'OtherProj',
+        projectFilePath: 'C:/Other/Other.uproject',
+        projectDir: 'C:/Other',
+        engineRoot: 'C:/OtherUE',
+        editorTarget: 'OtherEditor',
+      })),
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController,
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs: vi.fn(async () => createResolvedProjectInputs()),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('compile_project_code').handler({
+      engine_root: 'C:/UE',
+      project_path: 'C:/Proj/Proj.uproject',
+      target: 'ProjEditor',
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(projectController.compileProjectCode).not.toHaveBeenCalled();
+    expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
+      'Active editor mismatch',
+    );
+  });
+
   it('starts PIE through the subsystem wrapper', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
@@ -908,6 +1207,90 @@ describe('registerProjectControlTools', () => {
     );
   });
 
+  it('restart_editor recovers from failed graceful reconnect by killing and relaunching the bound editor', async () => {
+    const registry = createToolRegistry();
+    const activeEditorSession = createActiveEditorSession();
+    const waitForEditorRestart = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        operation: 'restart_editor',
+        disconnected: true,
+        reconnected: false,
+        disconnectTimeoutMs: 2000,
+        reconnectTimeoutMs: 3000,
+        diagnostics: ['Editor did not reconnect before the timeout elapsed'],
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        operation: 'restart_editor',
+        disconnected: false,
+        reconnected: true,
+        disconnectTimeoutMs: 60000,
+        reconnectTimeoutMs: 3000,
+        diagnostics: [],
+      });
+    const killEditorProcess = vi.fn(async () => ({ killed: true }));
+    const launchEditor = vi.fn(async () => ({
+      success: true,
+      operation: 'launch_editor',
+      engineRoot: 'C:/UE',
+      projectPath: 'C:/Proj/Proj.uproject',
+      projectDir: 'C:/Proj',
+      processId: 5050,
+      command: {
+        executable: 'UnrealEditor.exe',
+        args: [],
+      },
+      detached: true,
+      diagnostics: [],
+    }));
+    const projectController = createProjectController({
+      waitForEditorRestart,
+      killEditorProcess,
+      launchEditor,
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async () => ({ success: true, operation: 'RestartEditor' })),
+      getProjectAutomationContext: vi.fn(async () => ({ isPlayingInEditor: false })),
+      resolveProjectInputs: vi.fn(),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('restart_editor').handler({
+      save_dirty_assets: false,
+      wait_for_reconnect: true,
+      disconnect_timeout_seconds: 2,
+      reconnect_timeout_seconds: 3,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(true);
+    expect(parsed.recovery).toMatchObject({
+      strategy: 'host_relaunch_after_failed_graceful_restart',
+    });
+    expect(parsed.reconnect).toMatchObject({
+      success: true,
+      reconnected: true,
+    });
+    expect(killEditorProcess).toHaveBeenCalledWith({ processId: 4242 });
+    expect(launchEditor).toHaveBeenCalledWith({
+      engineRoot: 'C:/UE',
+      projectPath: 'C:/Proj/Proj.uproject',
+    });
+    expect(waitForEditorRestart).toHaveBeenCalledTimes(2);
+    expect(activeEditorSession.refreshActiveEditorAfterReconnect).toHaveBeenCalledTimes(1);
+  });
+
   it('restart_editor retries on transient failure and succeeds on second attempt', async () => {
     const registry = createToolRegistry();
     let callCount = 0;
@@ -1267,6 +1650,105 @@ describe('registerProjectControlTools', () => {
     expect(parsed.success).toBe(false);
     expect(parsed.stepErrors).toBeDefined();
     expect((parsed.stepErrors as Record<string, string>).reconnect).toBe('reconnect timed out');
+  });
+
+  it('sync_project_code recovers from failed graceful reconnect by relaunching the bound editor', async () => {
+    const registry = createToolRegistry();
+    const activeEditorSession = createActiveEditorSession();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const waitForEditorRestart = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        operation: 'restart_editor',
+        disconnected: true,
+        reconnected: false,
+        disconnectTimeoutMs: 1000,
+        reconnectTimeoutMs: 1000,
+        diagnostics: ['Editor did not reconnect before the timeout elapsed'],
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        operation: 'restart_editor',
+        disconnected: false,
+        reconnected: true,
+        disconnectTimeoutMs: 60000,
+        reconnectTimeoutMs: 1000,
+        diagnostics: [],
+      });
+    const killEditorProcess = vi.fn(async () => ({ killed: true }));
+    const launchEditor = vi.fn(async () => ({
+      success: true,
+      operation: 'launch_editor',
+      engineRoot: 'C:/UE',
+      projectPath: 'C:/Proj/Proj.uproject',
+      projectDir: 'C:/Proj',
+      processId: 6060,
+      command: {
+        executable: 'UnrealEditor.exe',
+        args: [],
+      },
+      detached: true,
+      diagnostics: [],
+    }));
+    const projectController = createProjectController({
+      classifyChangedPaths: vi.fn(() => ({
+        strategy: 'build_and_restart',
+        restartRequired: true,
+        reasons: ['header_change'],
+      })),
+      waitForEditorRestart,
+      killEditorProcess,
+      launchEditor,
+    });
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: { checkConnection: vi.fn(async () => true) },
+      projectController,
+      callSubsystemJson: vi.fn(async (method) => {
+        if (method === 'RestartEditor') {
+          return { success: true, operation: 'RestartEditor' };
+        }
+        if (method === 'SaveAssets') {
+          return { success: true };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('sync_project_code').handler({
+      changed_paths: ['C:/Proj/Source/MyActor.h'],
+      save_asset_paths: ['/Game/Maps/MainLevel'],
+      save_dirty_assets: true,
+      disconnect_timeout_seconds: 1,
+      reconnect_timeout_seconds: 1,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    expect(parsed.success).toBe(true);
+    expect(parsed.restartRecovery).toMatchObject({
+      strategy: 'host_relaunch_after_failed_graceful_restart',
+    });
+    expect(parsed.reconnect).toMatchObject({
+      success: true,
+      reconnected: true,
+    });
+    expect(killEditorProcess).toHaveBeenCalledWith({ processId: 4242 });
+    expect(launchEditor).toHaveBeenCalledWith({
+      engineRoot: 'C:/UE',
+      projectPath: 'C:/Proj/Proj.uproject',
+    });
+    expect(waitForEditorRestart).toHaveBeenCalledTimes(2);
+    expect(activeEditorSession.refreshActiveEditorAfterReconnect).toHaveBeenCalledTimes(1);
   });
 
   it('includes stepErrors in success response when save throws but is non-critical', async () => {

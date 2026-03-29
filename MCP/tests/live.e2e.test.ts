@@ -857,7 +857,7 @@ describeLive('live UE e2e', () => {
     expect(meshTerminal.status).toBe('succeeded');
     expect(meshTerminal.importedObjects).toContain(meshObjectPath);
 
-    const listAssets = await callToolJson<{ data: Array<{ path: string; name: string; class: string }> }>(
+    const listAssets = await callToolJson<{ assets: Array<Record<string, unknown>> }>(
       client,
       'list_assets',
       {
@@ -866,9 +866,15 @@ describeLive('live UE e2e', () => {
       },
       'list_assets live imports',
     );
-    const listedAssets = listAssets.data;
-    expect(listedAssets.some((asset) => asset.path === textureObjectPath && asset.name === 'T_LiveTexture')).toBe(true);
-    expect(listedAssets.some((asset) => asset.path === meshObjectPath && asset.name === 'SM_LiveMesh')).toBe(true);
+    const listedAssets = listAssets.assets;
+    expect(listedAssets.some((asset) => (
+      (asset.assetPath ?? asset.path) === textureObjectPath
+      && (asset.name ?? asset.assetName) === 'T_LiveTexture'
+    ))).toBe(true);
+    expect(listedAssets.some((asset) => (
+      (asset.assetPath ?? asset.path) === meshObjectPath
+      && (asset.name ?? asset.assetName) === 'SM_LiveMesh'
+    ))).toBe(true);
 
     const saveAssets = await client.callTool({
       name: 'save_assets',
@@ -1013,6 +1019,7 @@ describeLive('live UE e2e', () => {
       'extract_material',
       {
         asset_path: materialObjectPath,
+        compact: false,
       },
       'extract_material live smoke',
     );

@@ -18,6 +18,7 @@ public class BlueprintExtractor : ModuleRules
 			"EditorSubsystem",
 			"Engine",
 			"DeveloperSettings",
+			"RemoteControlCommon",
 			"Slate",
 			"SlateCore",
 			"UnrealEd",
