@@ -468,6 +468,83 @@ static TSharedPtr<FJsonObject> FindWidgetNodeByPath(const TSharedPtr<FJsonObject
 	return nullptr;
 }
 
+static TSharedPtr<FJsonObject> FindStateTreeStateByPath(const TSharedPtr<FJsonObject>& StateObject,
+                                                        const FString& TargetPath)
+{
+	if (!StateObject.IsValid())
+	{
+		return nullptr;
+	}
+
+	FString StatePath;
+	if (StateObject->TryGetStringField(TEXT("statePath"), StatePath) && StatePath == TargetPath)
+	{
+		return StateObject;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+	if (!StateObject->TryGetArrayField(TEXT("children"), Children) || !Children)
+	{
+		return nullptr;
+	}
+
+	for (const TSharedPtr<FJsonValue>& ChildValue : *Children)
+	{
+		const TSharedPtr<FJsonObject> ChildObject = ChildValue.IsValid() ? ChildValue->AsObject() : nullptr;
+		if (const TSharedPtr<FJsonObject> Found = FindStateTreeStateByPath(ChildObject, TargetPath))
+		{
+			return Found;
+		}
+	}
+
+	return nullptr;
+}
+
+static TSharedPtr<FJsonObject> FindExtractedStateTreeStateByPath(const TSharedPtr<FJsonObject>& ExtractResult,
+                                                                 const FString& TargetPath)
+{
+	TSharedPtr<FJsonObject> StateTreeJson;
+	if (!TryGetObjectFieldCopy(ExtractResult, TEXT("stateTree"), StateTreeJson))
+	{
+		return nullptr;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* States = nullptr;
+	if (!StateTreeJson->TryGetArrayField(TEXT("states"), States) || !States)
+	{
+		return nullptr;
+	}
+
+	for (const TSharedPtr<FJsonValue>& StateValue : *States)
+	{
+		const TSharedPtr<FJsonObject> StateObject = StateValue.IsValid() ? StateValue->AsObject() : nullptr;
+		if (const TSharedPtr<FJsonObject> Found = FindStateTreeStateByPath(StateObject, TargetPath))
+		{
+			return Found;
+		}
+	}
+
+	return nullptr;
+}
+
+static TSharedPtr<FJsonObject> GetFirstTransitionTargetState(const TSharedPtr<FJsonObject>& StateObject)
+{
+	if (!StateObject.IsValid())
+	{
+		return nullptr;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Transitions = nullptr;
+	if (!StateObject->TryGetArrayField(TEXT("transitions"), Transitions) || !Transitions || Transitions->Num() == 0)
+	{
+		return nullptr;
+	}
+
+	const TSharedPtr<FJsonObject> TransitionObject = (*Transitions)[0].IsValid() ? (*Transitions)[0]->AsObject() : nullptr;
+	TSharedPtr<FJsonObject> TargetStateObject;
+	return TryGetObjectFieldCopy(TransitionObject, TEXT("targetState"), TargetStateObject) ? TargetStateObject : nullptr;
+}
+
 static UEdGraph* FindFunctionGraphByName(UBlueprint* Blueprint, const FName GraphName)
 {
 	if (!Blueprint)
@@ -1379,6 +1456,203 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 		TEXT("Duplicate CreateBlueprint"));
 	Test.TestTrue(TEXT("Duplicate CreateBlueprint is rejected"), IsFailureResult(DuplicateBlueprintResult));
 
+	return true;
+}
+
+static bool RunStateTreeTransitionTargetCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString StateTreeAssetPath = MakeUniqueAssetPath(TEXT("ST_TransitionTargets"));
+	const FString StateTreeObjectPath = MakeObjectPath(StateTreeAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateStateTree(
+			StateTreeAssetPath,
+			FString::Printf(TEXT(R"json({"schemaClassPath":"%s"})json"), StateTreeSchemaPath),
+			false),
+		TEXT("CreateStateTree transition target fixture"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyStateTree(
+			StateTreeObjectPath,
+			TEXT("replace_tree"),
+			FString::Printf(
+				TEXT(R"json({"schemaClassPath":"%s","states":[{"name":"Root","type":"State","children":[{"name":"TrainerAlert","type":"State"},{"name":"RallyActive","type":"State"}]}]})json"),
+				StateTreeSchemaPath),
+			false),
+		TEXT("ModifyStateTree replace_tree transition target fixture"));
+
+	const TSharedPtr<FJsonObject> InitialExtract = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractStateTree(StateTreeObjectPath),
+		TEXT("ExtractStateTree transition target fixture"));
+	if (!InitialExtract.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> TrainerAlertState = FindExtractedStateTreeStateByPath(InitialExtract, TEXT("Root/TrainerAlert"));
+	const TSharedPtr<FJsonObject> RallyActiveState = FindExtractedStateTreeStateByPath(InitialExtract, TEXT("Root/RallyActive"));
+	Test.TestNotNull(TEXT("ExtractStateTree returns TrainerAlert state"), TrainerAlertState.Get());
+	Test.TestNotNull(TEXT("ExtractStateTree returns RallyActive state"), RallyActiveState.Get());
+	if (!TrainerAlertState.IsValid() || !RallyActiveState.IsValid())
+	{
+		return false;
+	}
+
+	FString TrainerAlertId;
+	FString TrainerAlertPath;
+	FString RallyActiveId;
+	FString RallyActivePath;
+	Test.TestTrue(TEXT("TrainerAlert extract exposes id"), TrainerAlertState->TryGetStringField(TEXT("id"), TrainerAlertId) && !TrainerAlertId.IsEmpty());
+	Test.TestTrue(TEXT("TrainerAlert extract exposes statePath"), TrainerAlertState->TryGetStringField(TEXT("statePath"), TrainerAlertPath) && !TrainerAlertPath.IsEmpty());
+	Test.TestTrue(TEXT("RallyActive extract exposes id"), RallyActiveState->TryGetStringField(TEXT("id"), RallyActiveId) && !RallyActiveId.IsEmpty());
+	Test.TestTrue(TEXT("RallyActive extract exposes statePath"), RallyActiveState->TryGetStringField(TEXT("statePath"), RallyActivePath) && !RallyActivePath.IsEmpty());
+	if (TrainerAlertId.IsEmpty() || TrainerAlertPath.IsEmpty() || RallyActiveId.IsEmpty() || RallyActivePath.IsEmpty())
+	{
+		return false;
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyStateTree(
+			StateTreeObjectPath,
+			TEXT("patch_state"),
+			FString::Printf(
+				TEXT(R"json({"stateId":"%s","state":{"description":"Selector patched by extracted id"}})json"),
+				*TrainerAlertId),
+			false),
+		TEXT("ModifyStateTree patch_state selector by extracted stateId"));
+
+	const TSharedPtr<FJsonObject> AfterSelectorExtract = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractStateTree(StateTreeObjectPath),
+		TEXT("ExtractStateTree after patch_state selector by extracted stateId"));
+	const TSharedPtr<FJsonObject> AfterSelectorTrainer = FindExtractedStateTreeStateByPath(AfterSelectorExtract, TrainerAlertPath);
+	Test.TestNotNull(TEXT("ExtractStateTree still returns TrainerAlert after selector patch"), AfterSelectorTrainer.Get());
+	if (!AfterSelectorTrainer.IsValid())
+	{
+		return false;
+	}
+
+	FString SelectorDescription;
+	Test.TestTrue(
+		TEXT("patch_state selected TrainerAlert by extracted stateId"),
+		AfterSelectorTrainer->TryGetStringField(TEXT("description"), SelectorDescription)
+			&& SelectorDescription == TEXT("Selector patched by extracted id"));
+
+	const auto ExpectTransitionTarget = [&](const FString& PayloadJson, const FString& ContextLabel) -> bool
+	{
+		ExpectSuccessfulResult(
+			Test,
+			Subsystem->ModifyStateTree(
+				StateTreeObjectPath,
+				TEXT("patch_state"),
+				PayloadJson,
+				false),
+			ContextLabel);
+
+		const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
+			Test,
+			Subsystem->ExtractStateTree(StateTreeObjectPath),
+			ContextLabel + TEXT(" extract"));
+		const TSharedPtr<FJsonObject> PatchedTrainer = FindExtractedStateTreeStateByPath(ExtractResult, TrainerAlertPath);
+		Test.TestNotNull(*FString::Printf(TEXT("%s returns TrainerAlert after patch"), *ContextLabel), PatchedTrainer.Get());
+		if (!PatchedTrainer.IsValid())
+		{
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject> TargetState = GetFirstTransitionTargetState(PatchedTrainer);
+		Test.TestNotNull(*FString::Printf(TEXT("%s returns targetState"), *ContextLabel), TargetState.Get());
+		if (!TargetState.IsValid())
+		{
+			return false;
+		}
+
+		FString TargetStateId;
+		FString TargetStateName;
+		const bool bHasTargetStateId = TargetState->TryGetStringField(TEXT("stateId"), TargetStateId) && !TargetStateId.IsEmpty();
+		const bool bHasTargetStateName = TargetState->TryGetStringField(TEXT("stateName"), TargetStateName) && !TargetStateName.IsEmpty();
+		Test.TestTrue(*FString::Printf(TEXT("%s resolves extracted RallyActive id"), *ContextLabel), bHasTargetStateId && TargetStateId == RallyActiveId);
+		Test.TestTrue(*FString::Printf(TEXT("%s resolves RallyActive by name"), *ContextLabel), bHasTargetStateName && TargetStateName == TEXT("RallyActive"));
+		return bHasTargetStateId && bHasTargetStateName;
+	};
+
+	if (!ExpectTransitionTarget(
+			FString::Printf(
+				TEXT(R"json({"stateId":"%s","state":{"transitions":[{"trigger":"OnTick","targetState":{"stateId":"%s","linkType":"GotoState"}}]}})json"),
+				*TrainerAlertId,
+				*RallyActiveId),
+			TEXT("ModifyStateTree patch_state targetState by extracted stateId")))
+	{
+		return false;
+	}
+
+	if (!ExpectTransitionTarget(
+			FString::Printf(
+				TEXT(R"json({"stateId":"%s","state":{"transitions":[{"trigger":"OnTick","targetState":{"statePath":"%s","linkType":"GotoState"}}]}})json"),
+				*TrainerAlertId,
+				*RallyActivePath),
+			TEXT("ModifyStateTree patch_state targetState by extracted statePath")))
+	{
+		return false;
+	}
+
+	if (!ExpectTransitionTarget(
+			FString::Printf(
+				TEXT(R"json({"stateId":"%s","state":{"transitions":[{"trigger":"OnTick","targetState":{"stateName":"RallyActive","linkType":"GotoState"}}]}})json"),
+				*TrainerAlertId),
+			TEXT("ModifyStateTree patch_state targetState by unique stateName")))
+	{
+		return false;
+	}
+
+	const FString AmbiguousStateTreeAssetPath = MakeUniqueAssetPath(TEXT("ST_TransitionTargetsAmbiguous"));
+	const FString AmbiguousStateTreeObjectPath = MakeObjectPath(AmbiguousStateTreeAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateStateTree(
+			AmbiguousStateTreeAssetPath,
+			FString::Printf(TEXT(R"json({"schemaClassPath":"%s"})json"), StateTreeSchemaPath),
+			false),
+		TEXT("CreateStateTree ambiguous transition target fixture"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyStateTree(
+			AmbiguousStateTreeObjectPath,
+			TEXT("replace_tree"),
+			FString::Printf(
+				TEXT(R"json({"schemaClassPath":"%s","states":[{"name":"Root","type":"State","children":[{"name":"SourceState","type":"State"},{"name":"BranchA","type":"State","children":[{"name":"SharedTarget","type":"State"}]},{"name":"BranchB","type":"State","children":[{"name":"SharedTarget","type":"State"}]}]}]})json"),
+				StateTreeSchemaPath),
+			false),
+		TEXT("ModifyStateTree replace_tree ambiguous transition target fixture"));
+
+	const TSharedPtr<FJsonObject> AmbiguousFailure = ExpectFailureResult(
+		Test,
+		Subsystem->ModifyStateTree(
+			AmbiguousStateTreeObjectPath,
+			TEXT("patch_state"),
+			TEXT(R"json({"statePath":"Root/SourceState","state":{"transitions":[{"trigger":"OnTick","targetState":{"stateName":"SharedTarget","linkType":"GotoState"}}]}})json"),
+			false),
+		TEXT("ModifyStateTree patch_state ambiguous targetState.stateName"));
+	if (!AmbiguousFailure.IsValid())
+	{
+		return false;
+	}
+
+	const FString FailurePayloadText = SerializeJsonObjectForSearch(AmbiguousFailure);
+	Test.TestTrue(TEXT("Ambiguous stateName surfaces a validation error"), FailurePayloadText.Contains(TEXT("stateName 'SharedTarget' is ambiguous")));
+	Test.TestFalse(TEXT("Ambiguous stateName does not fall through to None compile error"), FailurePayloadText.Contains(TEXT("Failed to resolve transition to state 'None'")));
 	return true;
 }
 
@@ -4170,6 +4444,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("RoundTrip"), [this]()
 		{
 			TestTrue(TEXT("Round-trip coverage completes"), RunRoundTripCoverage(*this));
+		});
+
+		It(TEXT("StateTreeTransitionTargets"), [this]()
+		{
+			TestTrue(TEXT("StateTree transition target coverage completes"), RunStateTreeTransitionTargetCoverage(*this));
 		});
 
 		It(TEXT("DataAssetInlineInstancedGraph"), [this]()

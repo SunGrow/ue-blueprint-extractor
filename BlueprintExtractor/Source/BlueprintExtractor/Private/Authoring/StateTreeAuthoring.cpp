@@ -48,8 +48,22 @@ struct FTransitionSelector
 struct FStateIndex
 {
 	TMap<FGuid, UStateTreeState*> ById;
-	TMultiMap<FString, UStateTreeState*> ByPath;
+	TMultiMap<FString, UStateTreeState*> ByExactPath;
+	TMultiMap<FString, UStateTreeState*> ByNormalizedPath;
 	TMultiMap<FString, UStateTreeState*> ByName;
+};
+
+struct FStateSelectorFieldSet
+{
+	const TCHAR* PrimaryIdField = nullptr;
+	const TCHAR* SecondaryIdField = nullptr;
+	const TCHAR* TertiaryIdField = nullptr;
+	const TCHAR* PrimaryPathField = nullptr;
+	const TCHAR* SecondaryPathField = nullptr;
+	const TCHAR* TertiaryPathField = nullptr;
+	const TCHAR* PrimaryNameField = nullptr;
+	const TCHAR* SecondaryNameField = nullptr;
+	const TCHAR* TertiaryNameField = nullptr;
 };
 
 struct FDeferredStateLink
@@ -158,10 +172,57 @@ static bool ParseGuidString(const FString& GuidString, FGuid& OutGuid)
 	return OutGuid.IsValid();
 }
 
-static bool ParseStateSelector(const TSharedPtr<FJsonObject>& Payload,
-                               FStateSelector& OutSelector,
-                               FString& OutError)
+static FString NormalizeStatePathForLookup(FString StatePath)
 {
+	StatePath.TrimStartAndEndInline();
+	StatePath.ReplaceInline(TEXT("\\"), TEXT("/"));
+	StatePath.ReplaceInline(TEXT("."), TEXT("/"));
+	while (StatePath.Contains(TEXT("//")))
+	{
+		StatePath.ReplaceInline(TEXT("//"), TEXT("/"));
+	}
+	return StatePath;
+}
+
+static bool TryGetAnyNonEmptyStringField(const TSharedPtr<FJsonObject>& Payload,
+                                         FString& OutValue,
+                                         const TCHAR*& OutMatchedField,
+                                         const TCHAR* PrimaryField,
+                                         const TCHAR* SecondaryField = nullptr,
+                                         const TCHAR* TertiaryField = nullptr)
+{
+	OutValue.Reset();
+	OutMatchedField = nullptr;
+	if (!Payload.IsValid())
+	{
+		return false;
+	}
+
+	const auto TryField = [&](const TCHAR* FieldName) -> bool
+	{
+		FString Candidate;
+		if (FieldName && Payload->TryGetStringField(FieldName, Candidate) && !Candidate.IsEmpty())
+		{
+			OutValue = Candidate;
+			OutMatchedField = FieldName;
+			return true;
+		}
+
+		return false;
+	};
+
+	return TryField(PrimaryField)
+		|| TryField(SecondaryField)
+		|| TryField(TertiaryField);
+}
+
+static bool ParseStateSelectorWithFields(const TSharedPtr<FJsonObject>& Payload,
+                                         const FStateSelectorFieldSet& FieldSet,
+                                         FStateSelector& OutSelector,
+                                         FString& OutError,
+                                         const FString& MissingSelectorError)
+{
+	OutSelector = FStateSelector();
 	if (!Payload.IsValid())
 	{
 		OutError = TEXT("State selector payload must be an object.");
@@ -169,34 +230,95 @@ static bool ParseStateSelector(const TSharedPtr<FJsonObject>& Payload,
 	}
 
 	FString GuidString;
-	if ((Payload->TryGetStringField(TEXT("stateId"), GuidString)
-		 || Payload->TryGetStringField(TEXT("id"), GuidString))
-		&& !GuidString.IsEmpty())
+	const TCHAR* MatchedField = nullptr;
+	if (TryGetAnyNonEmptyStringField(
+			Payload,
+			GuidString,
+			MatchedField,
+			FieldSet.PrimaryIdField,
+			FieldSet.SecondaryIdField,
+			FieldSet.TertiaryIdField))
 	{
 		if (!ParseGuidString(GuidString, OutSelector.StateId))
 		{
-			OutError = FString::Printf(TEXT("Invalid stateId '%s'."), *GuidString);
+			const FString FieldLabel = MatchedField ? FString(MatchedField) : FString(TEXT("stateId"));
+			OutError = FString::Printf(TEXT("Invalid %s '%s'."), *FieldLabel, *GuidString);
 			return false;
 		}
+
 		return true;
 	}
 
-	if ((Payload->TryGetStringField(TEXT("statePath"), OutSelector.StatePath)
-		 || Payload->TryGetStringField(TEXT("path"), OutSelector.StatePath))
-		&& !OutSelector.StatePath.IsEmpty())
+	if (TryGetAnyNonEmptyStringField(
+			Payload,
+			OutSelector.StatePath,
+			MatchedField,
+			FieldSet.PrimaryPathField,
+			FieldSet.SecondaryPathField,
+			FieldSet.TertiaryPathField))
 	{
 		return true;
 	}
 
-	if ((Payload->TryGetStringField(TEXT("stateName"), OutSelector.StateName)
-		 || Payload->TryGetStringField(TEXT("name"), OutSelector.StateName))
-		&& !OutSelector.StateName.IsEmpty())
+	if (TryGetAnyNonEmptyStringField(
+			Payload,
+			OutSelector.StateName,
+			MatchedField,
+			FieldSet.PrimaryNameField,
+			FieldSet.SecondaryNameField,
+			FieldSet.TertiaryNameField))
 	{
 		return true;
 	}
 
-	OutError = TEXT("State selector requires stateId or statePath.");
+	OutError = MissingSelectorError;
 	return false;
+}
+
+static bool ParseStateSelector(const TSharedPtr<FJsonObject>& Payload,
+                               FStateSelector& OutSelector,
+                               FString& OutError)
+{
+	const FStateSelectorFieldSet FieldSet {
+		TEXT("stateId"),
+		TEXT("id"),
+		nullptr,
+		TEXT("statePath"),
+		TEXT("path"),
+		nullptr,
+		TEXT("stateName"),
+		TEXT("name"),
+		nullptr,
+	};
+	return ParseStateSelectorWithFields(
+		Payload,
+		FieldSet,
+		OutSelector,
+		OutError,
+		TEXT("State selector requires stateId, statePath, or stateName."));
+}
+
+static bool ParseLinkedStateSelector(const TSharedPtr<FJsonObject>& Payload,
+                                     FStateSelector& OutSelector,
+                                     FString& OutError)
+{
+	const FStateSelectorFieldSet FieldSet {
+		TEXT("linkedStateId"),
+		TEXT("stateId"),
+		TEXT("id"),
+		TEXT("linkedStatePath"),
+		TEXT("statePath"),
+		TEXT("path"),
+		TEXT("linkedStateName"),
+		TEXT("stateName"),
+		TEXT("name"),
+	};
+	return ParseStateSelectorWithFields(
+		Payload,
+		FieldSet,
+		OutSelector,
+		OutError,
+		TEXT("linkedSubtree requires linkedStateId, linkedStatePath, linkedStateName, or their stateId/statePath/stateName aliases."));
 }
 
 static bool ParseEditorNodeSelector(const TSharedPtr<FJsonObject>& Payload,
@@ -923,7 +1045,26 @@ static bool BuildStateIndexRecursive(UStateTreeState* State,
 		}
 	}
 
-	OutIndex.ByPath.Add(State->GetPath(), State);
+	const auto AddUniquePathEntry = [](TMultiMap<FString, UStateTreeState*>& IndexMap,
+	                                   const FString& PathKey,
+	                                   UStateTreeState* InState)
+	{
+		if (!InState || PathKey.IsEmpty())
+		{
+			return;
+		}
+
+		TArray<UStateTreeState*> ExistingStates;
+		IndexMap.MultiFind(PathKey, ExistingStates);
+		if (!ExistingStates.Contains(InState))
+		{
+			IndexMap.Add(PathKey, InState);
+		}
+	};
+
+	const FString ExactPath = State->GetPath();
+	AddUniquePathEntry(OutIndex.ByExactPath, ExactPath, State);
+	AddUniquePathEntry(OutIndex.ByNormalizedPath, NormalizeStatePathForLookup(ExactPath), State);
 	OutIndex.ByName.Add(State->Name.ToString(), State);
 
 	for (UStateTreeState* Child : State->Children)
@@ -954,13 +1095,31 @@ static FStateIndex BuildStateIndex(UStateTreeEditorData* EditorData,
 static UStateTreeState* ResolveIndexedState(const FStateIndex& Index,
                                             const FStateSelector& Selector,
                                             TArray<FString>& OutErrors,
-                                            const FString& ContextPath)
+                                            const FString& ContextPath,
+                                            const FStateIndex* SourceIndex = nullptr)
 {
 	if (Selector.StateId.IsValid())
 	{
 		if (UStateTreeState* const* FoundState = Index.ById.Find(Selector.StateId))
 		{
 			return *FoundState;
+		}
+
+		if (SourceIndex)
+		{
+			if (UStateTreeState* const* SourceState = SourceIndex->ById.Find(Selector.StateId))
+			{
+				const FString CanonicalSourcePath = NormalizeStatePathForLookup((*SourceState)->GetPath());
+				if (!CanonicalSourcePath.IsEmpty())
+				{
+					TArray<UStateTreeState*> RemappedMatches;
+					Index.ByNormalizedPath.MultiFind(CanonicalSourcePath, RemappedMatches);
+					if (RemappedMatches.Num() == 1)
+					{
+						return RemappedMatches[0];
+					}
+				}
+			}
 		}
 
 		OutErrors.Add(FString::Printf(TEXT("%s: stateId '%s' was not found."), *ContextPath, *Selector.StateId.ToString()));
@@ -970,7 +1129,11 @@ static UStateTreeState* ResolveIndexedState(const FStateIndex& Index,
 	if (!Selector.StatePath.IsEmpty())
 	{
 		TArray<UStateTreeState*> Matches;
-		Index.ByPath.MultiFind(Selector.StatePath, Matches);
+		Index.ByExactPath.MultiFind(Selector.StatePath, Matches);
+		if (Matches.Num() == 0)
+		{
+			Index.ByNormalizedPath.MultiFind(NormalizeStatePathForLookup(Selector.StatePath), Matches);
+		}
 		if (Matches.Num() == 1)
 		{
 			return Matches[0];
@@ -1144,19 +1307,10 @@ static bool QueueLinkedStateSelector(const TSharedPtr<FJsonObject>& StateObject,
 	}
 
 	FStateSelector Selector;
-	FString GuidString;
-	if ((*LinkObject)->TryGetStringField(TEXT("linkedStateId"), GuidString) && ParseGuidString(GuidString, Selector.StateId))
+	FString SelectorError;
+	if (!ParseLinkedStateSelector(*LinkObject, Selector, SelectorError))
 	{
-	}
-	else if ((*LinkObject)->TryGetStringField(TEXT("linkedStatePath"), Selector.StatePath) && !Selector.StatePath.IsEmpty())
-	{
-	}
-	else if ((*LinkObject)->TryGetStringField(TEXT("linkedStateName"), Selector.StateName) && !Selector.StateName.IsEmpty())
-	{
-	}
-	else
-	{
-		OutErrors.Add(FString::Printf(TEXT("%s.linkedSubtree requires linkedStateId or linkedStatePath."), *Path));
+		OutErrors.Add(FString::Printf(TEXT("%s.linkedSubtree: %s"), *Path, *SelectorError));
 		return false;
 	}
 
@@ -1196,19 +1350,10 @@ static bool ApplyTransitionTarget(const TSharedPtr<FJsonObject>& TransitionObjec
 	}
 
 	FStateSelector Selector;
-	FString GuidString;
-	if ((*TargetObject)->TryGetStringField(TEXT("stateId"), GuidString) && ParseGuidString(GuidString, Selector.StateId))
+	FString SelectorError;
+	if (!ParseStateSelector(*TargetObject, Selector, SelectorError))
 	{
-	}
-	else if ((*TargetObject)->TryGetStringField(TEXT("statePath"), Selector.StatePath) && !Selector.StatePath.IsEmpty())
-	{
-	}
-	else if ((*TargetObject)->TryGetStringField(TEXT("stateName"), Selector.StateName) && !Selector.StateName.IsEmpty())
-	{
-	}
-	else
-	{
-		OutErrors.Add(FString::Printf(TEXT("%s.targetState requires stateId or statePath."), *Path));
+		OutErrors.Add(FString::Printf(TEXT("%s.targetState: %s"), *Path, *SelectorError));
 		return false;
 	}
 
@@ -1513,7 +1658,8 @@ static bool BuildStateRecursive(UObject* Owner,
 
 static bool ResolveDeferredLinks(UStateTreeEditorData* EditorData,
                                  FTreeMutationScratch& Scratch,
-                                 TArray<FString>& OutErrors)
+                                 TArray<FString>& OutErrors,
+                                 const FStateIndex* SourceIndex = nullptr)
 {
 	TArray<FString> IndexErrors;
 	const FStateIndex StateIndex = BuildStateIndex(EditorData, IndexErrors);
@@ -1526,7 +1672,7 @@ static bool ResolveDeferredLinks(UStateTreeEditorData* EditorData,
 			continue;
 		}
 
-		UStateTreeState* TargetState = ResolveIndexedState(StateIndex, DeferredLink.Selector, OutErrors, DeferredLink.Path);
+		UStateTreeState* TargetState = ResolveIndexedState(StateIndex, DeferredLink.Selector, OutErrors, DeferredLink.Path, SourceIndex);
 		if (!TargetState)
 		{
 			continue;
@@ -1627,7 +1773,9 @@ static bool ReplaceTree(UStateTree* StateTree,
 static bool PatchState(UStateTree* StateTree,
                        const TSharedPtr<FJsonObject>& Payload,
                        TArray<FString>& OutErrors,
-                       const bool bValidationOnly)
+                       const bool bValidationOnly,
+                       const FStateIndex* CurrentIndex = nullptr,
+                       const FStateIndex* SourceIndex = nullptr)
 {
 	UStateTreeEditorData* EditorData = GetExistingEditorData(StateTree, OutErrors);
 	if (!EditorData)
@@ -1656,9 +1804,15 @@ static bool PatchState(UStateTree* StateTree,
 	}
 
 	TArray<FString> IndexErrors;
-	const FStateIndex StateIndex = BuildStateIndex(EditorData, IndexErrors);
+	FStateIndex BuiltIndex;
+	const FStateIndex* EffectiveIndex = CurrentIndex;
+	if (!EffectiveIndex)
+	{
+		BuiltIndex = BuildStateIndex(EditorData, IndexErrors);
+		EffectiveIndex = &BuiltIndex;
+	}
 	OutErrors.Append(IndexErrors);
-	UStateTreeState* TargetState = ResolveIndexedState(StateIndex, Selector, OutErrors, TEXT("patch_state"));
+	UStateTreeState* TargetState = ResolveIndexedState(*EffectiveIndex, Selector, OutErrors, TEXT("patch_state"), SourceIndex);
 	if (!TargetState)
 	{
 		return false;
@@ -1666,7 +1820,7 @@ static bool PatchState(UStateTree* StateTree,
 
 	FTreeMutationScratch Scratch;
 	ApplyStatePayload(TargetState, EffectivePayload, Scratch, OutErrors, TargetState->GetPath(), bValidationOnly, true);
-	ResolveDeferredLinks(EditorData, Scratch, OutErrors);
+	ResolveDeferredLinks(EditorData, Scratch, OutErrors, SourceIndex);
 	return OutErrors.Num() == 0;
 }
 
@@ -1792,7 +1946,8 @@ static bool PatchEditorNode(UStateTree* StateTree,
 static bool PatchTransition(UStateTree* StateTree,
                             const TSharedPtr<FJsonObject>& Payload,
                             TArray<FString>& OutErrors,
-                            const bool bValidationOnly)
+                            const bool bValidationOnly,
+                            const FStateIndex* SourceIndex = nullptr)
 {
 	UStateTreeEditorData* EditorData = GetExistingEditorData(StateTree, OutErrors);
 	if (!EditorData)
@@ -1879,7 +2034,7 @@ static bool PatchTransition(UStateTree* StateTree,
 	{
 		FTreeMutationScratch Scratch;
 		ApplyTransitionTarget(EffectivePayload, *ExistingHandle->Transition, Scratch.DeferredLinks, OutErrors, ExistingHandle->Path);
-		ResolveDeferredLinks(EditorData, Scratch, OutErrors);
+		ResolveDeferredLinks(EditorData, Scratch, OutErrors, SourceIndex);
 	}
 
 	return OutErrors.Num() == 0;
@@ -2154,7 +2309,9 @@ static bool ApplyOperation(UStateTree* StateTree,
                            const FString& Operation,
                            const TSharedPtr<FJsonObject>& Payload,
                            TArray<FString>& OutErrors,
-                           const bool bValidationOnly)
+                           const bool bValidationOnly,
+                           const FStateIndex* CurrentIndex = nullptr,
+                           const FStateIndex* SourceIndex = nullptr)
 {
 	if (Operation == TEXT("replace_tree"))
 	{
@@ -2162,7 +2319,7 @@ static bool ApplyOperation(UStateTree* StateTree,
 	}
 	if (Operation == TEXT("patch_state"))
 	{
-		return PatchState(StateTree, Payload, OutErrors, bValidationOnly);
+		return PatchState(StateTree, Payload, OutErrors, bValidationOnly, CurrentIndex, SourceIndex);
 	}
 	if (Operation == TEXT("patch_editor_node"))
 	{
@@ -2170,7 +2327,7 @@ static bool ApplyOperation(UStateTree* StateTree,
 	}
 	if (Operation == TEXT("patch_transition"))
 	{
-		return PatchTransition(StateTree, Payload, OutErrors, bValidationOnly);
+		return PatchTransition(StateTree, Payload, OutErrors, bValidationOnly, SourceIndex);
 	}
 	if (Operation == TEXT("set_schema"))
 	{
@@ -2339,6 +2496,27 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Modify(UStateTree* StateTree,
 	}
 
 	const TSharedPtr<FJsonObject> Payload = NormalizePayload(PayloadJson);
+	const bool bNeedsStateSelectorRemap = Operation == TEXT("patch_state") || Operation == TEXT("patch_transition");
+
+	FStateIndex SourceStateIndex;
+	const FStateIndex* SourceStateIndexPtr = nullptr;
+	if (bNeedsStateSelectorRemap)
+	{
+		TArray<FString> SourceIndexErrors;
+		if (UStateTreeEditorData* SourceEditorData = GetExistingEditorData(StateTree, SourceIndexErrors))
+		{
+			SourceStateIndex = BuildStateIndex(SourceEditorData, SourceIndexErrors);
+		}
+		for (const FString& Error : SourceIndexErrors)
+		{
+			Context.AddError(TEXT("source_state_index_error"), Error, AssetPath);
+		}
+		if (SourceIndexErrors.Num() > 0)
+		{
+			return Context.BuildResult(false);
+		}
+		SourceStateIndexPtr = &SourceStateIndex;
+	}
 
 	UStateTree* WorkingTree = DuplicateObject<UStateTree>(StateTree, GetTransientPackage());
 	if (!WorkingTree)
@@ -2348,7 +2526,29 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Modify(UStateTree* StateTree,
 	}
 
 	TArray<FString> ValidationErrors;
-	ApplyOperation(WorkingTree, Operation, Payload, ValidationErrors, true);
+	FStateIndex PreviewStateIndex;
+	const FStateIndex* PreviewStateIndexPtr = nullptr;
+	if (bNeedsStateSelectorRemap)
+	{
+		TArray<FString> PreviewIndexErrors;
+		if (UStateTreeEditorData* PreviewEditorData = GetExistingEditorData(WorkingTree, PreviewIndexErrors))
+		{
+			PreviewStateIndex = BuildStateIndex(PreviewEditorData, PreviewIndexErrors);
+		}
+		ValidationErrors.Append(PreviewIndexErrors);
+		if (ValidationErrors.Num() > 0)
+		{
+			Context.SetValidationSummary(false, TEXT("StateTree payload failed validation."), ValidationErrors);
+			for (const FString& Error : ValidationErrors)
+			{
+				Context.AddError(TEXT("validation_error"), Error, AssetPath);
+			}
+			return Context.BuildResult(false);
+		}
+		PreviewStateIndexPtr = &PreviewStateIndex;
+	}
+
+	ApplyOperation(WorkingTree, Operation, Payload, ValidationErrors, true, PreviewStateIndexPtr, SourceStateIndexPtr);
 	if (ValidationErrors.Num() > 0)
 	{
 		Context.SetValidationSummary(false, TEXT("StateTree payload failed validation."), ValidationErrors);
@@ -2377,7 +2577,28 @@ TSharedPtr<FJsonObject> FStateTreeAuthoring::Modify(UStateTree* StateTree,
 	}
 
 	ValidationErrors.Reset();
-	ApplyOperation(StateTree, Operation, Payload, ValidationErrors, false);
+	FStateIndex CurrentStateIndex;
+	const FStateIndex* CurrentStateIndexPtr = nullptr;
+	if (bNeedsStateSelectorRemap)
+	{
+		TArray<FString> CurrentIndexErrors;
+		if (UStateTreeEditorData* CurrentEditorData = GetExistingEditorData(StateTree, CurrentIndexErrors))
+		{
+			CurrentStateIndex = BuildStateIndex(CurrentEditorData, CurrentIndexErrors);
+		}
+		ValidationErrors.Append(CurrentIndexErrors);
+		if (ValidationErrors.Num() > 0)
+		{
+			for (const FString& Error : ValidationErrors)
+			{
+				Context.AddError(TEXT("apply_error"), Error, AssetPath);
+			}
+			return Context.BuildResult(false);
+		}
+		CurrentStateIndexPtr = &CurrentStateIndex;
+	}
+
+	ApplyOperation(StateTree, Operation, Payload, ValidationErrors, false, CurrentStateIndexPtr, SourceStateIndexPtr);
 	if (ValidationErrors.Num() > 0)
 	{
 		for (const FString& Error : ValidationErrors)

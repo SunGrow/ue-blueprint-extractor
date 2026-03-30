@@ -741,6 +741,7 @@ export function registerSchemaAndAiAuthoringTools({
     {
       title: 'Modify StateTree',
       description: 'Modify a UE5 StateTree with declarative operations: replace_tree, patch_state, patch_editor_node, patch_transition, set_schema, set_bindings (replace all property bindings), add_binding (append bindings), remove_binding (remove by targetPath).\n\n'
+        + 'State selectors and transition targets accept stateId/id, statePath/path, and unique stateName/name. Paths extracted by extract_asset use slash syntax (for example "Root/Combat") and are the canonical round-trip format; dotted paths remain accepted for compatibility.\n\n'
         + 'Example (add_binding):\n'
         + '  {\n'
         + '    "asset_path": "/Game/AI/ST_Character",\n'
@@ -785,7 +786,7 @@ export function registerSchemaAndAiAuthoringTools({
             'Target property path for add_binding/remove_binding operations.',
           ),
         }).passthrough().default({}).describe(
-          'Operation payload. Selectors support stateId/statePath, editorNodeId, and transitionId. Binding operations accept propertyBindings array, or sourcePath/targetPath for single bindings.',
+          'Operation payload. State selectors and targetState references support stateId/statePath/stateName (slash statePath from extract_asset is canonical; dotted paths remain supported). Editor-node and transition selectors use editorNodeId and transitionId. Binding operations accept propertyBindings array, or sourcePath/targetPath for single bindings.',
         ),
         validate_only: z.boolean().default(false).describe(
           'Validate and compile without changing the asset.',
