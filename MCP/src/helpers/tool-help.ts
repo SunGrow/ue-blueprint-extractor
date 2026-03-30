@@ -247,6 +247,20 @@ export function collectRelatedResources(toolName: string): string[] {
   ) {
     resources.add('blueprint://project-automation');
   }
+  if (toolName === 'review_blueprint' || toolName === 'audit_project_assets') {
+    resources.add('blueprint://analysis-workflows');
+  }
+  if (
+    toolName === 'refresh_project_index'
+    || toolName === 'get_project_index_status'
+    || toolName === 'search_project_context'
+    || toolName === 'get_editor_context'
+  ) {
+    resources.add('blueprint://project-intelligence-workflows');
+  }
+  if (toolName === 'get_editor_context') {
+    resources.add('blueprint://project-automation');
+  }
   if (
     toolName.includes('animation')
     || toolName.includes('motion')

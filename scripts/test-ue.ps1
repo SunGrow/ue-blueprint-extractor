@@ -7,7 +7,8 @@ param(
     [switch]$BuildPlugin,
     [switch]$SkipBuildProject,
     [switch]$AllowSoftwareRendering,
-    [switch]$NoNullRHI
+    [switch]$NoNullRHI,
+    [switch]$FailOnWarnings
 )
 
 $ErrorActionPreference = 'Stop'
@@ -341,6 +342,21 @@ try {
         -Label 'Run BlueprintExtractor automation tests' `
         -FilePath $EditorCmd `
         -Arguments $AutomationArgs
+
+    $AutomationSummary = Get-UEAutomationReportSummary -ReportPath $AutomationReportPath
+    if ($FailOnWarnings.IsPresent) {
+        if (-not $AutomationSummary.ReportAvailable) {
+            throw "Automation report directory was not created at $AutomationReportPath for filter $AutomationFilter"
+        }
+
+        if ($null -eq $AutomationSummary.WarningCount) {
+            throw "Automation report summary did not include a warning count for filter $AutomationFilter. Checked $($AutomationSummary.MatchedFile ?? $AutomationSummary.ReportPath)"
+        }
+
+        if ($AutomationSummary.WarningCount -gt 0) {
+            throw "Automation report for filter $AutomationFilter contains warning summary $($AutomationSummary.WarningCount). See $($AutomationSummary.MatchedFile)"
+        }
+    }
 }
 finally {
     Stop-BPXFixtureProcesses -MatchPatterns @($ResolvedProjectPath, $ProjectPath, $StageRoot, $EngineRoot, $BuildPluginOutput, 'BPXFixture', 'BlueprintExtractorFixture', 'UnrealBuildTool', 'Uba')

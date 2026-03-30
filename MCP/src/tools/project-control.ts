@@ -11,6 +11,7 @@ import {
   explainProjectResolutionFailure,
   supportsConnectionProbe,
 } from '../helpers/project-utils.js';
+import { EditorContextResultSchema } from '../schemas/tool-results.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
 import { filesystemPathsEqual } from '../helpers/workspace-project.js';
 import { ActiveEditorSession } from '../active-editor-session.js';
@@ -22,6 +23,7 @@ import type {
   ProjectControllerLike,
 } from '../project-controller.js';
 import type {
+  EditorContextSnapshot,
   ProjectAutomationContext,
   ResolvedProjectInputs,
 } from '../tool-context.js';
@@ -78,6 +80,16 @@ function buildInputResolution(resolved: ResolvedProjectInputs): Record<string, u
     target: resolved.sources.target,
     contextError: resolved.contextError,
   };
+}
+
+export async function getEditorContext(
+  activeEditorSession: ActiveEditorSession | null | undefined,
+): Promise<EditorContextSnapshot> {
+  if (!activeEditorSession) {
+    throw new Error('Session-bound editor selection is unavailable for this server instance.');
+  }
+
+  return await activeEditorSession.getEditorContext();
 }
 
 function isAbsoluteFilesystemPath(candidate: string): boolean {
@@ -426,6 +438,31 @@ export function registerProjectControlTools({
     async () => {
       try {
         const parsed = await getProjectAutomationContext(true);
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_editor_context',
+    {
+      title: 'Get Editor Context',
+      description: 'Read bounded selected-asset, selected-actor, active-level, open-editor, and PIE context from the active editor session.',
+      inputSchema: {},
+      outputSchema: EditorContextResultSchema,
+      annotations: {
+        title: 'Get Editor Context',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        const parsed = await getEditorContext(activeEditorSession);
         return jsonToolSuccess(parsed);
       } catch (error) {
         return jsonToolError(error);

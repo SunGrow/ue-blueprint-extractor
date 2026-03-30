@@ -213,7 +213,7 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
       'Use get_tool_help for detailed usage of newly available tools.',
     ],
     on_error: [
-      'Check available scope names: widget_authoring, material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification.',
+      'Check available scope names: widget_authoring, material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification, analysis, project_intelligence.',
     ],
   }],
 

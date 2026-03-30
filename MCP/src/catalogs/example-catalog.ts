@@ -682,4 +682,48 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
       },
     ],
   },
+  blueprint_review: {
+    summary: 'Run deterministic review first, then inspect the cited graph/variable evidence before planning any fix.',
+    recommended_flow: [
+      'review_blueprint',
+      'extract_blueprint',
+    ],
+    examples: [
+      {
+        title: 'review_gameplay_blueprint',
+        tool: 'review_blueprint',
+        arguments: {
+          asset_path: '/Game/Blueprints/BP_PlayerCharacter',
+        },
+      },
+    ],
+  },
+  project_intelligence: {
+    summary: 'Warm the project index, search published context and asset metadata, snapshot bounded editor state when needed, then audit the relevant package scope.',
+    recommended_flow: [
+      'refresh_project_index',
+      'get_project_index_status',
+      'search_project_context',
+      'get_editor_context',
+      'audit_project_assets',
+    ],
+    examples: [
+      {
+        title: 'search_replication_context',
+        tool: 'search_project_context',
+        arguments: {
+          query: 'replication authority review',
+          page: 1,
+          per_page: 5,
+        },
+      },
+      {
+        title: 'audit_ui_assets',
+        tool: 'audit_project_assets',
+        arguments: {
+          package_path: '/Game/UI',
+        },
+      },
+    ],
+  },
 };

@@ -46,3 +46,44 @@ Describe 'Get-UEFixtureBuildPlan' {
         }
     }
 }
+
+Describe 'Get-UEAutomationReportSummary' {
+    It 'returns the highest warning summary found in nested automation report JSON' {
+        $reportRoot = Join-Path $env:TEMP ("bpx-report-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path (Join-Path $reportRoot 'Nested') | Out-Null
+
+        try {
+            Set-Content -LiteralPath (Join-Path $reportRoot 'index.json') -Value (@'
+{
+  "summary": {
+    "warningCount": 0
+  }
+}
+'@)
+            Set-Content -LiteralPath (Join-Path $reportRoot 'Nested\detail.json') -Value (@'
+{
+  "run": {
+    "succeededWithWarnings": 3
+  }
+}
+'@)
+
+            $summary = Get-UEAutomationReportSummary -ReportPath $reportRoot
+
+            $summary.ReportAvailable | Should Be $true
+            $summary.WarningCount | Should Be 3
+            $summary.MatchedFile | Should Match 'detail\.json$'
+        }
+        finally {
+            Remove-Item -LiteralPath $reportRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'marks a missing report path as unavailable' {
+        $summary = Get-UEAutomationReportSummary -ReportPath (Join-Path $env:TEMP ("missing-report-" + [guid]::NewGuid().ToString('N')))
+
+        $summary.ReportAvailable | Should Be $false
+        $summary.WarningCount | Should Be $null
+        $summary.MatchedFile | Should Be $null
+    }
+}

@@ -23,9 +23,10 @@ Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotoc
  AI Assistant         stdio           MCP Server         HTTP :30010        Unreal Editor
  ─────────────  ◄────────────►  ─────────────────  ◄──────────────────►  ─────────────────
   Claude Code                     Node.js process                         Remote Control API
-  Codex                           95 tools                                BlueprintExtractor
-  ...                             4 resource templates                    plugin
-                                  8 prompts
+  Codex                           106 tools                               BlueprintExtractor
+  ...                             38 resources                            plugin
+                                  4 resource templates
+                                  12 prompts
 ```
 
 **What the assistant can do through this server:**
@@ -69,7 +70,7 @@ Connects to the editor at `127.0.0.1:30010` by default.
 ```bash
 claude mcp add -s user -t stdio blueprint-extractor \
   -e UE_REMOTE_CONTROL_PORT=30010 \
-  -- npx -y blueprint-extractor-mcp@6.0.6
+  -- npx -y blueprint-extractor-mcp@6.1.0
 ```
 
 </td></tr>
@@ -78,7 +79,7 @@ claude mcp add -s user -t stdio blueprint-extractor \
 
 ```bash
 codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
-  blueprint-extractor -- npx -y blueprint-extractor-mcp@6.0.6
+  blueprint-extractor -- npx -y blueprint-extractor-mcp@6.1.0
 ```
 
 </td></tr>
@@ -90,20 +91,25 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
 
 ## Tool Surface
 
-Only **~13 core tools** are visible by default to keep the context window lean. Specialized families are loaded on demand via `activate_workflow_scope`.
+Only the compact core surface is visible by default to keep the context window lean. Specialized families are loaded on demand via `activate_workflow_scope`.
 
-| Scope | Tools | What It Unlocks |
-|:------|------:|:----------------|
-| **Core** *(always on)* | ~13 | `extract_asset` `search_assets` `save_assets` `get_tool_help` `find_and_extract` |
-| `widget_authoring` | 25 | Widget tree ops, compile, CommonUI button styles, widget animations, visual captures |
-| `material_authoring` | 5 | `create_material` `modify_material` `material_graph_operation` + instances |
-| `blueprint_authoring` | 4 | Blueprint members, graphs, `trigger_live_coding` |
-| `schema_ai_authoring` | 11 | Structs, enums, Blackboards, Behavior Trees, State Trees |
-| `animation_authoring` | 7 | Anim sequences, montages, blend spaces, widget motion |
-| `data_tables` | 7 | Data assets, data tables, curves, Enhanced Input actions & mappings |
-| `import` | 3 | `import_assets` with texture/mesh options, job polling |
-| `automation_testing` | 7 | `run_automation_tests`, run inspection, project automation context, PIE lifecycle control |
-| `verification` | 9 | Widget captures, editor/runtime screenshots, motion checkpoint bundles, reference comparisons |
+| Scope | What It Unlocks |
+|:------|:----------------|
+| **Core** *(always on)* | Search, extraction, list/save/help, editor-session binding, and project-control entry points such as `extract_asset`, `search_assets`, `save_assets`, `get_tool_help`, and `activate_workflow_scope` |
+| `widget_authoring` | Parent scope that loads `widget_authoring_structure`, `widget_authoring_visual`, and `widget_verification` together |
+| `widget_authoring_structure` | Widget tree structure, hierarchy edits, wrapping, moving, replacement, and batch operations |
+| `widget_authoring_visual` | Widget compile flows, CommonUI styles, widget animations, and widget preview capture |
+| `widget_verification` | Widget capture, checkpoint bundles, capture listing, cleanup, and reference comparison |
+| `material_authoring` | Material creation, `material_graph_operation`, compile, and material-instance edits |
+| `blueprint_authoring` | Blueprint creation, member edits, graph edits, and Live Coding trigger |
+| `schema_ai_authoring` | Structs, enums, Blackboards, Behavior Trees, and State Trees |
+| `animation_authoring` | Anim sequences, montages, blend spaces, and widget motion authoring |
+| `data_tables` | Data assets, data tables, curves, Input Actions, and Input Mapping Contexts |
+| `import` | Async asset import and import-job polling |
+| `automation_testing` | Host-side automation runs, coarse project automation context, and PIE lifecycle control |
+| `analysis` | Deterministic Blueprint review and low-noise project asset audits |
+| `project_intelligence` | Bounded editor context, project indexing, freshness status, and snippet-first context search |
+| `verification` | Editor/runtime screenshots, capture comparison, motion verification, and artifact inspection |
 
 ### Contract Design
 
@@ -133,7 +139,9 @@ See [../docs/CURRENT_STATUS.md](../docs/CURRENT_STATUS.md) for the current valid
 | `UE_BUILD_PLATFORM` | &mdash; | e.g. `Win64` |
 | `UE_BUILD_CONFIGURATION` | &mdash; | e.g. `Development` |
 
-`get_project_automation_context` surfaces the editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state that project-control and verification flows use for fallback or guard logic.
+`get_project_automation_context` surfaces the coarse editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state that project-control and verification flows use for fallback or guard logic.
+
+`get_editor_context` is the separate read-only editor-state snapshot for selection, open asset editors, active level, and PIE summary. It stays session-bound and intentionally does not open assets, change focus, or switch viewports.
 
 <br>
 
@@ -162,6 +170,10 @@ blueprint://test-runs/{run_id}/{artifact}  Automation test artifacts
 | `plan_widget_motion_verification` | Keyframe-bundle verification planning |
 | `wire_hud_widget_classes` | Class-default wiring for HUD assets |
 | `debug_widget_compile_errors` | Diagnosing and recovering from compile failures |
+| `understand_blueprint_project` | Building a project-understanding pass over indexed assets, docs, prompts, and resources |
+| `review_blueprint_asset` | Running a deterministic read-only Blueprint review flow |
+| `snapshot_editor_context` | Inspecting bounded editor state without changing editor focus |
+| `audit_blueprint_project` | Running a low-noise project asset audit |
 
 <br>
 

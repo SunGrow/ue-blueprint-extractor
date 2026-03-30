@@ -1,7 +1,7 @@
 import { execSync, spawn } from 'node:child_process';
 import { access, readdir, unlink } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, win32 as win32Path } from 'node:path';
 
 export type BuildPlatform = 'Win64' | 'Mac' | 'Linux';
 export type BuildConfiguration = 'Debug' | 'DebugGame' | 'Development' | 'Shipping' | 'Test';
@@ -354,6 +354,10 @@ function fileName(path: string): string {
   return lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
 }
 
+function normalizeFilesystemPathForCommand(path: string, platform: NodeJS.Platform): string {
+  return platform === 'win32' ? win32Path.normalize(path) : path;
+}
+
 export function classifyChangedPaths(changedPaths: string[], forceRebuild = false): SyncStrategyPlan {
   const reasons = new Set<string>();
 
@@ -585,6 +589,7 @@ export class ProjectController implements ProjectControllerLike {
     }
 
     const buildScript = await resolveBuildScript(engineRoot, this.platform);
+    const commandProjectPath = normalizeFilesystemPathForCommand(projectPath, this.platform);
 
     let uhtCacheFilesDeleted: string[] | undefined;
     if (request.clearUhtCache) {
@@ -595,7 +600,7 @@ export class ProjectController implements ProjectControllerLike {
       target,
       platform,
       configuration,
-      `-Project=${projectPath}`,
+      `-Project=${commandProjectPath}`,
       '-WaitMutex',
       '-NoHotReloadFromIDE',
     ];

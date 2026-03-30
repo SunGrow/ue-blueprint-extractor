@@ -80,6 +80,7 @@ Task-aware families currently include:
 ## Project-Code Notes
 
 - `get_project_automation_context` surfaces the editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state used by project-control fallbacks and PIE guards.
+- `get_editor_context` is the separate read-only editor-state snapshot for selected assets, selected actors, open asset editors, active level, and PIE summary. It remains session-bound, bounded, and explicitly query-only.
 - `start_pie`, `stop_pie`, and `relaunch_pie` are the explicit PIE lifecycle controls. Use them for live editor state, not as a replacement for automation-backed runtime verification.
 - `wait_for_editor` polls Remote Control once per second and returns `connected`, `elapsedMs`, `timeoutMs`, and `attempts`, with `editor_unavailable` when the timeout elapses.
 - `trigger_live_coding` returns `fallbackRecommended` and a normalized `reason` when editor-side Live Coding cannot apply the requested change. If a recent external build exists, it is surfaced as `lastExternalBuild`.
@@ -87,6 +88,29 @@ Task-aware families currently include:
 - `run_automation_tests` and `get_automation_test_run` now surface `verificationArtifacts` for image-based automation report outputs, normalized to the same verification-artifact contract used by widget captures.
 - `capture_editor_screenshot` returns a shared verification artifact for the active editor viewport with surface `editor_tool_viewport`.
 - `capture_runtime_screenshot` runs an automation scenario, then returns the first normalized runtime artifact with surface `pie_runtime`.
+
+## Analysis And Project-Intelligence Result Families
+
+- `review_blueprint` returns:
+  - `review`: `analysis_summary`
+  - `findings`: `analysis_finding[]`
+- `analysis_finding` uses stable severities `low | medium | high` and stable categories:
+  - `logic_flow`
+  - `null_validity_ordering`
+  - `reference_hygiene`
+  - `naming_convention`
+  - `replication_authority`
+- `search_project_context` returns `context_search_result[]`, each carrying one or more `context_snippet` entries with provenance and staleness.
+- `audit_project_assets` returns:
+  - `audit`: `audit_summary`
+  - `findings`: `audit_finding[]`
+- `audit_finding` uses stable categories:
+  - `naming`
+  - `package_hygiene`
+  - `asset_family_coverage`
+  - `content_budget`
+  - `orphan_detection`
+- `get_editor_context` returns bounded read-only editor-state sections. Unavailable sections stay explicit through partial results instead of silently widening scope.
 
 ## CommonUI Button Style Workflow
 
@@ -180,6 +204,28 @@ Use the explicit screenshot tools when you need rendered editor or runtime evide
 5. `compare_capture_to_reference` when reference images exist
 
 Both screenshot tools reuse the shared verification-artifact contract. Screenshots support verification, but they do not replace semantic checks for authored data or gameplay assertions for runtime behavior.
+
+### Blueprint Review And Asset Audits
+
+Use the read-only `analysis` scope for deterministic Blueprint review and low-noise asset audits:
+
+1. `activate_workflow_scope` with `analysis`
+2. `review_blueprint` for graph and variable findings, or `audit_project_assets` for package-scope metadata checks
+3. `extract_blueprint`, `extract_asset`, or `find_and_extract` only when a finding needs deeper follow-up evidence
+
+Review and audit output stays findings-first. These tools do not mutate assets, do not score with opaque heuristics, and do not imply autofix support.
+
+### Project Intelligence And Editor Context
+
+Use the `project_intelligence` scope when the job is understanding project context before mutating anything:
+
+1. `activate_workflow_scope` with `project_intelligence`
+2. `refresh_project_index`
+3. `get_project_index_status`
+4. `search_project_context`
+5. `get_editor_context` when live editor state matters
+
+The v1 project index covers asset metadata plus published docs, prompts, and resources. It does not index arbitrary source code. Search results stay snippet-first and mark stale index state explicitly.
 
 ### Material Authoring
 

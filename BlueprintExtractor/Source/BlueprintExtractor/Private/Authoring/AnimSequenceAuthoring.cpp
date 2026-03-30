@@ -18,6 +18,7 @@
 #include "Factories/AnimSequenceFactory.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
+#include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace AnimSequenceAuthoringInternal
@@ -1077,6 +1078,24 @@ static UAnimSequence* CreateSequenceAsset(UObject* Outer,
 		GWarn));
 }
 
+static void ClearTransientImportData(UAnimSequence* AnimSequence)
+{
+	if (!AnimSequence || AnimSequence->GetOutermost() != GetTransientPackage())
+	{
+		return;
+	}
+
+	if (FObjectPropertyBase* ImportDataProperty = FindFProperty<FObjectPropertyBase>(AnimSequence->GetClass(), TEXT("AssetImportData")))
+	{
+		if (UObject* ImportData = ImportDataProperty->GetObjectPropertyValue_InContainer(AnimSequence))
+		{
+			ImportData->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors);
+		}
+
+		ImportDataProperty->SetObjectPropertyValue_InContainer(AnimSequence, nullptr);
+	}
+}
+
 } // namespace AnimSequenceAuthoringInternal
 
 TSharedPtr<FJsonObject> FAnimSequenceAuthoring::Create(const FString& AssetPath,
@@ -1189,20 +1208,30 @@ TSharedPtr<FJsonObject> FAnimSequenceAuthoring::Modify(UAnimSequence* AnimSequen
 		return Context.BuildResult(false);
 	}
 
-	UAnimSequence* PreviewSequence = Cast<UAnimSequence>(StaticDuplicateObject(AnimSequence, GetTransientPackage()));
 	TArray<FString> ValidationErrors;
-	if (!PreviewSequence)
+	const bool bSkipPreviewValidation = Operation.Equals(TEXT("replace_notifies"), ESearchCase::IgnoreCase)
+		&& GetArrayField(Payload, TEXT("notifies")).Num() == 0;
+	if (bSkipPreviewValidation)
 	{
-		ValidationErrors.Add(TEXT("Failed to duplicate AnimSequence for validation preview."));
+		Context.SetValidationSummary(true, TEXT("AnimSequence payload validated."));
 	}
 	else
 	{
-		ApplyModifyOperation(PreviewSequence, Operation, Payload, ValidationErrors);
-	}
+		UAnimSequence* PreviewSequence = Cast<UAnimSequence>(StaticDuplicateObject(AnimSequence, GetTransientPackage()));
+		if (!PreviewSequence)
+		{
+			ValidationErrors.Add(TEXT("Failed to duplicate AnimSequence for validation preview."));
+		}
+		else
+		{
+			ClearTransientImportData(PreviewSequence);
+			ApplyModifyOperation(PreviewSequence, Operation, Payload, ValidationErrors);
+		}
 
-	if (!AppendValidationSummary(Context, ValidationErrors, TEXT("AnimSequence payload validated.")))
-	{
-		return Context.BuildResult(false);
+		if (!AppendValidationSummary(Context, ValidationErrors, TEXT("AnimSequence payload validated.")))
+		{
+			return Context.BuildResult(false);
+		}
 	}
 
 	if (bValidateOnly)

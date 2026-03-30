@@ -12,7 +12,9 @@ export type WorkflowScopeId =
   | 'data_tables'
   | 'import'
   | 'automation_testing'
-  | 'verification';
+  | 'verification'
+  | 'analysis'
+  | 'project_intelligence';
 
 export interface WorkflowScope {
   id: WorkflowScopeId;
@@ -34,6 +36,8 @@ export const WORKFLOW_SCOPE_IDS: readonly WorkflowScopeId[] = [
   'import',
   'automation_testing',
   'verification',
+  'analysis',
+  'project_intelligence',
 ] as const;
 
 export const CORE_TOOLS: ReadonlySet<string> = new Set([
@@ -196,6 +200,32 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
       'capture_widget_preview', 'capture_widget_motion_checkpoints',
       'compare_capture_to_reference', 'list_captures', 'cleanup_captures',
       'compare_motion_capture_bundle',
+    ],
+  },
+  analysis: {
+    id: 'analysis',
+    description: 'Read-only Blueprint review and asset-audit tools',
+    prompts: [
+      'review_blueprint_asset',
+      'audit_blueprint_project',
+    ],
+    tools: [
+      'review_blueprint',
+      'audit_project_assets',
+    ],
+  },
+  project_intelligence: {
+    id: 'project_intelligence',
+    description: 'Read-only editor context and project intelligence tools',
+    prompts: [
+      'understand_blueprint_project',
+      'snapshot_editor_context',
+    ],
+    tools: [
+      'get_editor_context',
+      'refresh_project_index',
+      'get_project_index_status',
+      'search_project_context',
     ],
   },
 };

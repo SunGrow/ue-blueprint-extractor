@@ -179,7 +179,7 @@ UObject* ResolveAssetByPath(const FString& AssetPath)
 		}
 	}
 
-	return StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPath);
+	return nullptr;
 }
 
 bool DoesAssetExist(const FString& AssetPath)

@@ -103,7 +103,7 @@ Rendered verification is where screenshot and diff assertions belong. Headless c
 
 ## Validation Status
 
-Validated in-repo on `2026-03-28`:
+Validated in-repo on `2026-03-30`:
 
 - MCP unit, stdio, pack-smoke, and publish-gate paths passed.
 - UE 5.6 headless `BlueprintExtractor` pass succeeded with `failed=0`.
@@ -113,10 +113,6 @@ Validated in-repo on `2026-03-28`:
   - `BlueprintExtractor.Authoring.WidgetCaptureVerification`
   - `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
 - UE 5.7 rendered targeted filters succeeded for the same three filters.
-
-Known rendered-lane noise:
-
-- `WidgetCaptureVerification` and `CommonUIButtonStyleRoundTrip` can emit warning-only `LogUObjectGlobals` class lookup messages on this machine while the automation result still returns `Success`.
 
 ## Known Limits
 

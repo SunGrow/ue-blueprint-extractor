@@ -81,6 +81,10 @@ const ALL_TEST_TOOLS = [
   // automation
   'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
   'start_pie', 'stop_pie', 'relaunch_pie',
+  // analysis
+  'review_blueprint', 'audit_project_assets',
+  // project intelligence
+  'get_editor_context', 'refresh_project_index', 'get_project_index_status', 'search_project_context',
 ];
 
 describe('ToolSurfaceManager', () => {
@@ -273,6 +277,26 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('cleanup_captures')).toBe(true);
     });
 
+    it('analysis loads review and audit tools plus core', () => {
+      manager.activateScope('analysis');
+      const active = manager.getActiveTools();
+
+      expect(active.has('review_blueprint')).toBe(true);
+      expect(active.has('audit_project_assets')).toBe(true);
+      expect(active.has('create_material')).toBe(false);
+    });
+
+    it('project_intelligence loads editor-context and indexing tools plus core', () => {
+      manager.activateScope('project_intelligence');
+      const active = manager.getActiveTools();
+
+      expect(active.has('get_editor_context')).toBe(true);
+      expect(active.has('refresh_project_index')).toBe(true);
+      expect(active.has('get_project_index_status')).toBe(true);
+      expect(active.has('search_project_context')).toBe(true);
+      expect(active.has('import_assets')).toBe(false);
+    });
+
     it('sets the active scope', () => {
       manager.activateScope('material_authoring');
       expect(manager.getActiveScope()).toBe('material_authoring');
@@ -383,6 +407,7 @@ describe('ToolSurfaceManager', () => {
         'material_authoring', 'blueprint_authoring',
         'schema_ai_authoring', 'animation_authoring', 'data_tables',
         'import', 'automation_testing', 'verification',
+        'analysis', 'project_intelligence',
       ];
       expect(WORKFLOW_SCOPE_IDS).toEqual(expected);
     });

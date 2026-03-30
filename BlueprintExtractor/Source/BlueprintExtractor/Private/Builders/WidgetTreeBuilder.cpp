@@ -27,14 +27,15 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "EdGraphSchema_K2.h"
 #include "BlueprintCompilationManager.h"
+#include "KismetCompilerModule.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/Kismet2NameValidators.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "Modules/ModuleManager.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "WidgetBlueprintEditor.h"
 #include "WidgetBlueprintEditorUtils.h"
-#include "WidgetBlueprintFactory.h"
 #include "Logging/TokenizedMessage.h"
 
 #include "CoreGlobals.h"
@@ -523,14 +524,45 @@ static UClass* ResolveWidgetClassByName(const FString& ClassName)
 
 		return InputPath;
 	};
-
-	UClass* Resolved = FAuthoringHelpers::ResolveClass(ClassName, UWidget::StaticClass());
-	if (IsSupportedWidgetClass(Resolved))
+	auto NormalizeScriptClassName = [](const FString& InputName) -> FString
 	{
-		return Resolved;
+		if (InputName.Len() > 1 && InputName[0] == TCHAR('U') && FChar::IsUpper(InputName[1]))
+		{
+			return InputName.RightChop(1);
+		}
+
+		return InputName;
+	};
+	auto TryResolveScriptWidgetClass = [&IsSupportedWidgetClass](const FString& ModuleName, const FString& ScriptClassName) -> UClass*
+	{
+		if (ModuleName.IsEmpty() || ScriptClassName.IsEmpty())
+		{
+			return nullptr;
+		}
+
+		const FString ScriptPath = FString::Printf(TEXT("/Script/%s.%s"), *ModuleName, *ScriptClassName);
+		if (UClass* ExistingClass = FindObject<UClass>(static_cast<UObject*>(nullptr), *ScriptPath))
+		{
+			return IsSupportedWidgetClass(ExistingClass) ? ExistingClass : nullptr;
+		}
+
+		UClass* LoadedClass = StaticLoadClass(UWidget::StaticClass(), nullptr, *ScriptPath);
+		return IsSupportedWidgetClass(LoadedClass) ? LoadedClass : nullptr;
+	};
+	UClass* Resolved = nullptr;
+
+	const bool bLooksLikeObjectPath = ClassName.StartsWith(TEXT("/"));
+	const bool bLooksLikeQualifiedPath = ClassName.Contains(TEXT("."));
+	if (bLooksLikeQualifiedPath)
+	{
+		UClass* ResolvedFromPath = FAuthoringHelpers::ResolveClass(ClassName, UWidget::StaticClass());
+		if (IsSupportedWidgetClass(ResolvedFromPath))
+		{
+			return ResolvedFromPath;
+		}
 	}
 
-	if (ClassName.StartsWith(TEXT("/")))
+	if (bLooksLikeObjectPath)
 	{
 		const FString BlueprintLookupPath = NormalizeWidgetBlueprintLookupPath(ClassName);
 		const FString WidgetBlueprintObjectPath = NormalizeAssetObjectPath(BlueprintLookupPath);
@@ -569,29 +601,17 @@ static UClass* ResolveWidgetClassByName(const FString& ClassName)
 		}
 	}
 
-	const FString UPrefixedName = TEXT("U") + ClassName;
+	const FString ScriptClassName = NormalizeScriptClassName(ClassName);
+	const FString UPrefixedName = TEXT("U") + ScriptClassName;
 	Resolved = FindObject<UClass>(static_cast<UObject*>(nullptr), *UPrefixedName);
 	if (!Resolved)
 	{
 		Resolved = FindObject<UClass>(static_cast<UObject*>(nullptr), *ClassName);
 	}
-	if (!Resolved)
+	if (!Resolved && ScriptClassName != ClassName)
 	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/UMG.U") + ClassName));
+		Resolved = FindObject<UClass>(static_cast<UObject*>(nullptr), *ScriptClassName);
 	}
-	if (!Resolved)
-	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/CommonUI.U") + ClassName));
-	}
-	if (!Resolved)
-	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/UMG.") + ClassName));
-	}
-	if (!Resolved)
-	{
-		Resolved = StaticLoadClass(UWidget::StaticClass(), nullptr, *(TEXT("/Script/CommonUI.") + ClassName));
-	}
-
 	if (!Resolved)
 	{
 		const FString BlueprintGeneratedName = ClassName.EndsWith(TEXT("_C")) ? ClassName : ClassName + TEXT("_C");
@@ -613,6 +633,19 @@ static UClass* ResolveWidgetClassByName(const FString& ClassName)
 				break;
 			}
 		}
+	}
+
+	const bool bLooksLikeCommonUIClass = ScriptClassName.StartsWith(TEXT("Common"), ESearchCase::IgnoreCase)
+		|| ClassName.StartsWith(TEXT("Common"), ESearchCase::IgnoreCase);
+	if (!Resolved)
+	{
+		Resolved = bLooksLikeCommonUIClass
+			? TryResolveScriptWidgetClass(TEXT("CommonUI"), ScriptClassName)
+			: TryResolveScriptWidgetClass(TEXT("UMG"), ScriptClassName);
+	}
+	if (!Resolved && !bLooksLikeCommonUIClass)
+	{
+		Resolved = TryResolveScriptWidgetClass(TEXT("CommonUI"), ScriptClassName);
 	}
 
 	if (!IsSupportedWidgetClass(Resolved))
@@ -1827,28 +1860,37 @@ TSharedPtr<FJsonObject> FWidgetTreeBuilder::CreateWidgetBlueprint(const FString&
 		return Context.BuildResult(false);
 	}
 
-	// Create the widget blueprint via factory
-	UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
-	if (!ensureMsgf(Factory, TEXT("WidgetTreeBuilder: Failed to create UWidgetBlueprintFactory")))
+	const FName AssetName = FPackageName::GetShortFName(PackageAssetPath);
+	const IKismetCompilerInterface& KismetCompilerModule =
+		FModuleManager::LoadModuleChecked<IKismetCompilerInterface>(KISMET_COMPILER_MODULENAME);
+	UClass* BlueprintClassType = nullptr;
+	UClass* BlueprintGeneratedClassType = nullptr;
+	KismetCompilerModule.GetBlueprintTypesForClass(
+		ParentClass,
+		BlueprintClassType,
+		BlueprintGeneratedClassType);
+	if (!BlueprintClassType
+		|| !BlueprintGeneratedClassType
+		|| !BlueprintClassType->IsChildOf(UWidgetBlueprint::StaticClass()))
 	{
-		Context.AddError(TEXT("factory_create_failed"), TEXT("Failed to create WidgetBlueprintFactory"));
+		Context.AddError(TEXT("invalid_widget_blueprint_type"),
+		                 FString::Printf(TEXT("Parent class '%s' does not resolve to a WidgetBlueprint type"), *ParentClass->GetPathName()),
+		                 PackageAssetPath);
 		return Context.BuildResult(false);
 	}
-	Factory->ParentClass = ParentClass;
 
-	const FName AssetName = FPackageName::GetShortFName(PackageAssetPath);
-	UObject* CreatedAsset = Factory->FactoryCreateNew(
-		UWidgetBlueprint::StaticClass(),
+	UWidgetBlueprint* CreatedAsset = Cast<UWidgetBlueprint>(FKismetEditorUtilities::CreateBlueprint(
+		ParentClass,
 		Package,
 		AssetName,
-		RF_Public | RF_Standalone,
-		nullptr,
-		GWarn);
+		BPTYPE_Normal,
+		BlueprintClassType,
+		BlueprintGeneratedClassType));
 
 	if (!CreatedAsset)
 	{
-		Context.AddError(TEXT("factory_create_new_failed"),
-		                 FString::Printf(TEXT("FactoryCreateNew failed for: %s"), *PackageAssetPath),
+		Context.AddError(TEXT("asset_create_failed"),
+		                 FString::Printf(TEXT("CreateBlueprint failed for: %s"), *PackageAssetPath),
 		                 PackageAssetPath);
 		return Context.BuildResult(false);
 	}

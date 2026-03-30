@@ -47,13 +47,19 @@
 #include "StructUtils/UserDefinedStruct.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "ContentBrowserModule.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Engine/Selection.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GameFramework/Actor.h"
+#include "IContentBrowserSingleton.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonReader.h"
 #include "Builders/WidgetTreeBuilder.h"
 #include "PlayInEditorDataTypes.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "WidgetBlueprint.h"
 #include "Containers/Ticker.h"
@@ -91,6 +97,167 @@ static FString SerializeJsonObject(const TSharedPtr<FJsonObject>& JsonObject)
 	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
 	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	return OutString;
+}
+
+static void SetSharedEditorContextFields(const TSharedPtr<FJsonObject>& Result, const FBlueprintExtractorModule* Module)
+{
+	if (!Result.IsValid())
+	{
+		return;
+	}
+
+	Result->SetBoolField(TEXT("success"), true);
+	Result->SetStringField(TEXT("projectName"), FApp::GetProjectName());
+	Result->SetStringField(TEXT("projectFilePath"), FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()));
+	Result->SetStringField(TEXT("projectDir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
+
+	if (Module)
+	{
+		Result->SetStringField(TEXT("instanceId"), Module->GetEditorInstanceId());
+		Result->SetStringField(TEXT("engineRoot"), Module->GetEngineRoot());
+		Result->SetStringField(TEXT("editorTarget"), Module->GetEditorTarget());
+		Result->SetNumberField(TEXT("processId"), Module->GetEditorProcessId());
+		Result->SetStringField(TEXT("remoteControlHost"), Module->GetRemoteControlHost());
+		Result->SetNumberField(TEXT("remoteControlPort"), Module->GetRemoteControlHttpPort());
+		if (!Module->GetLastRegistryHeartbeat().IsEmpty())
+		{
+			Result->SetStringField(TEXT("lastSeenAt"), Module->GetLastRegistryHeartbeat());
+		}
+	}
+	else
+	{
+		const FString EngineDir = FPaths::ConvertRelativePathToFull(FPaths::EngineDir());
+		Result->SetStringField(TEXT("engineRoot"), FPaths::GetPath(FPaths::GetPath(EngineDir)));
+		Result->SetStringField(TEXT("editorTarget"), FString::Printf(TEXT("%sEditor"), FApp::GetProjectName()));
+		Result->SetNumberField(TEXT("processId"), static_cast<int32>(FPlatformProcess::GetCurrentProcessId()));
+		Result->SetStringField(TEXT("remoteControlHost"), TEXT("127.0.0.1"));
+		Result->SetNumberField(TEXT("remoteControlPort"), 30010);
+	}
+}
+
+static TArray<TSharedPtr<FJsonValue>> ToJsonStringArray(const TArray<FString>& Values)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(Values.Num());
+	for (const FString& Value : Values)
+	{
+		if (!Value.IsEmpty())
+		{
+			Result.Add(MakeShared<FJsonValueString>(Value));
+		}
+	}
+	return Result;
+}
+
+static bool CanQueryInteractiveEditorState()
+{
+	return FApp::CanEverRender() && FSlateApplication::IsInitialized();
+}
+
+static void AddUnsupportedSection(TArray<FString>& UnsupportedSections, const TCHAR* SectionName)
+{
+	UnsupportedSections.AddUnique(SectionName);
+}
+
+static void CollectSelectedAssetPaths(TArray<FString>& OutAssetPaths)
+{
+	if (!CanQueryInteractiveEditorState())
+	{
+		return;
+	}
+
+	FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+	IContentBrowserSingleton& ContentBrowser = ContentBrowserModule.Get();
+	TArray<FAssetData> SelectedAssets;
+	ContentBrowser.GetSelectedAssets(SelectedAssets);
+
+	for (const FAssetData& AssetData : SelectedAssets)
+	{
+		const FString PackagePath = AssetData.PackageName.ToString();
+		if (!PackagePath.IsEmpty())
+		{
+			OutAssetPaths.AddUnique(PackagePath);
+		}
+	}
+}
+
+static void CollectSelectedActorNames(TArray<FString>& OutActorNames)
+{
+	if (!CanQueryInteractiveEditorState() || !GEditor)
+	{
+		return;
+	}
+
+	USelection* SelectedActors = GEditor->GetSelectedActors();
+	if (!SelectedActors)
+	{
+		return;
+	}
+
+	for (FSelectionIterator It(*SelectedActors); It; ++It)
+	{
+		if (const AActor* Actor = Cast<AActor>(*It))
+		{
+			OutActorNames.AddUnique(Actor->GetActorNameOrLabel());
+		}
+	}
+}
+
+static void CollectOpenAssetEditors(TArray<FString>& OutOpenAssetEditors)
+{
+	if (!CanQueryInteractiveEditorState() || !GEditor)
+	{
+		return;
+	}
+
+	if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+	{
+		for (UObject* EditedAsset : AssetEditorSubsystem->GetAllEditedAssets())
+		{
+			if (EditedAsset)
+			{
+				OutOpenAssetEditors.AddUnique(EditedAsset->GetPathName());
+			}
+		}
+	}
+}
+
+static FString GetActiveLevelPath()
+{
+	if (!GEditor)
+	{
+		return FString();
+	}
+
+	if (UWorld* EditorWorld = GEditor->GetEditorWorldContext().World())
+	{
+		if (UPackage* WorldPackage = EditorWorld->GetOutermost())
+		{
+			return WorldPackage->GetName();
+		}
+	}
+
+	return FString();
+}
+
+static TSharedPtr<FJsonObject> BuildPieSummaryJson()
+{
+	const TSharedPtr<FJsonObject> PieSummary = MakeShared<FJsonObject>();
+	const bool bIsPlayingInEditor = GEditor && GEditor->PlayWorld != nullptr;
+	const bool bIsSimulatingInEditor = GEditor && GEditor->bIsSimulatingInEditor;
+	PieSummary->SetBoolField(TEXT("isPlayingInEditor"), bIsPlayingInEditor);
+	PieSummary->SetBoolField(TEXT("isSimulatingInEditor"), bIsSimulatingInEditor);
+
+	if (bIsPlayingInEditor && GEditor->PlayWorld)
+	{
+		PieSummary->SetStringField(TEXT("worldName"), GEditor->PlayWorld->GetName());
+		if (UPackage* WorldPackage = GEditor->PlayWorld->GetOutermost())
+		{
+			PieSummary->SetStringField(TEXT("worldPath"), WorldPackage->GetName());
+		}
+	}
+
+	return PieSummary;
 }
 
 static FBlueprintExtractorImportJobManager& GetImportJobManager(FBlueprintExtractorImportJobManager*& Manager)
@@ -2876,15 +3043,8 @@ FString UBlueprintExtractorSubsystem::GetProjectAutomationContext()
 {
 	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 	const FBlueprintExtractorModule* Module = FModuleManager::GetModulePtr<FBlueprintExtractorModule>(TEXT("BlueprintExtractor"));
-	Result->SetBoolField(TEXT("success"), true);
 	Result->SetStringField(TEXT("operation"), TEXT("get_project_automation_context"));
-	if (Module)
-	{
-		Result->SetStringField(TEXT("instanceId"), Module->GetEditorInstanceId());
-	}
-	Result->SetStringField(TEXT("projectName"), FApp::GetProjectName());
-	Result->SetStringField(TEXT("projectFilePath"), FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()));
-	Result->SetStringField(TEXT("projectDir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
+	SetSharedEditorContextFields(Result, Module);
 
 	const FString EngineDir = FPaths::ConvertRelativePathToFull(FPaths::EngineDir());
 	Result->SetStringField(TEXT("engineDir"), EngineDir);
@@ -2933,6 +3093,44 @@ FString UBlueprintExtractorSubsystem::GetProjectAutomationContext()
 		Result->SetStringField(TEXT("liveCodingError"), LiveCodingError);
 	}
 
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::GetEditorContext()
+{
+	const TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	const FBlueprintExtractorModule* Module = FModuleManager::GetModulePtr<FBlueprintExtractorModule>(TEXT("BlueprintExtractor"));
+	Result->SetStringField(TEXT("operation"), TEXT("get_editor_context"));
+	SetSharedEditorContextFields(Result, Module);
+
+	TArray<FString> UnsupportedSections;
+	if (!CanQueryInteractiveEditorState())
+	{
+		AddUnsupportedSection(UnsupportedSections, TEXT("selected_asset_paths"));
+		AddUnsupportedSection(UnsupportedSections, TEXT("selected_actor_names"));
+		AddUnsupportedSection(UnsupportedSections, TEXT("open_asset_editors"));
+	}
+
+	TArray<FString> SelectedAssetPaths;
+	CollectSelectedAssetPaths(SelectedAssetPaths);
+	Result->SetArrayField(TEXT("selectedAssetPaths"), ToJsonStringArray(SelectedAssetPaths));
+
+	TArray<FString> SelectedActorNames;
+	CollectSelectedActorNames(SelectedActorNames);
+	Result->SetArrayField(TEXT("selectedActorNames"), ToJsonStringArray(SelectedActorNames));
+
+	TArray<FString> OpenAssetEditors;
+	CollectOpenAssetEditors(OpenAssetEditors);
+	Result->SetArrayField(TEXT("openAssetEditors"), ToJsonStringArray(OpenAssetEditors));
+
+	const FString ActiveLevel = GetActiveLevelPath();
+	if (!ActiveLevel.IsEmpty())
+	{
+		Result->SetStringField(TEXT("activeLevel"), ActiveLevel);
+	}
+	Result->SetObjectField(TEXT("pieSummary"), BuildPieSummaryJson());
+	Result->SetBoolField(TEXT("partial"), UnsupportedSections.Num() > 0);
+	Result->SetArrayField(TEXT("unsupportedSections"), ToJsonStringArray(UnsupportedSections));
 	return SerializeJsonObject(Result);
 }
 

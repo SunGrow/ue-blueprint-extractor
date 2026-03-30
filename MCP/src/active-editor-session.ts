@@ -11,6 +11,7 @@ import {
   findNearestWorkspaceProject,
   type WorkspaceProjectResolution,
 } from './helpers/workspace-project.js';
+import type { EditorContextSnapshot } from './tool-context.js';
 import { UEClient } from './ue-client.js';
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -69,6 +70,14 @@ function buildActiveEditorDriftMessage(snapshot: EditorInstanceSnapshot): string
   return `The previously selected active editor "${snapshot.instanceId}" no longer matches the editor now responding on `
     + `${snapshot.remoteControlHost}:${snapshot.remoteControlPort}. The session has been returned to an unbound state. `
     + 'Call list_running_editors and select_editor to continue.';
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
 }
 
 export class ActiveEditorSession {
@@ -300,6 +309,53 @@ export class ActiveEditorSession {
   async getWorkspaceProjectPath(): Promise<string | undefined> {
     const resolution = await this.workspaceProjectPromise;
     return resolution.projectPath;
+  }
+
+  async getEditorContext(): Promise<EditorContextSnapshot> {
+    const raw = await this.callSubsystem('GetEditorContext', {});
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    if (typeof parsed.error === 'string' && parsed.error.length > 0) {
+      throw new Error(parsed.error);
+    }
+
+    const instanceId = typeof parsed.instanceId === 'string' ? parsed.instanceId : undefined;
+    const projectFilePath = typeof parsed.projectFilePath === 'string' ? parsed.projectFilePath : undefined;
+    if (!instanceId || !projectFilePath) {
+      throw new Error('GetEditorContext did not return instanceId and projectFilePath.');
+    }
+
+    const pieSummary = typeof parsed.pieSummary === 'object' && parsed.pieSummary !== null
+      ? parsed.pieSummary as Record<string, unknown>
+      : undefined;
+
+    return {
+      success: typeof parsed.success === 'boolean' ? parsed.success : true,
+      operation: typeof parsed.operation === 'string' ? parsed.operation : 'get_editor_context',
+      instanceId,
+      projectName: typeof parsed.projectName === 'string' ? parsed.projectName : undefined,
+      projectFilePath,
+      projectDir: typeof parsed.projectDir === 'string' ? parsed.projectDir : undefined,
+      engineRoot: typeof parsed.engineRoot === 'string' ? parsed.engineRoot : undefined,
+      editorTarget: typeof parsed.editorTarget === 'string' ? parsed.editorTarget : undefined,
+      remoteControlHost: typeof parsed.remoteControlHost === 'string' ? parsed.remoteControlHost : this.activeEditorSnapshot?.remoteControlHost ?? '127.0.0.1',
+      remoteControlPort: typeof parsed.remoteControlPort === 'number'
+        ? parsed.remoteControlPort
+        : this.activeEditorSnapshot?.remoteControlPort ?? 30010,
+      lastSeenAt: typeof parsed.lastSeenAt === 'string' ? parsed.lastSeenAt : undefined,
+      selectedAssetPaths: toStringArray(parsed.selectedAssetPaths),
+      selectedActorNames: toStringArray(parsed.selectedActorNames),
+      openAssetEditors: toStringArray(parsed.openAssetEditors),
+      activeLevel: typeof parsed.activeLevel === 'string' ? parsed.activeLevel : undefined,
+      pieSummary: pieSummary ? {
+        isPlayingInEditor: typeof pieSummary.isPlayingInEditor === 'boolean' ? pieSummary.isPlayingInEditor : undefined,
+        isSimulatingInEditor: typeof pieSummary.isSimulatingInEditor === 'boolean' ? pieSummary.isSimulatingInEditor : undefined,
+        worldName: typeof pieSummary.worldName === 'string' ? pieSummary.worldName : undefined,
+        worldPath: typeof pieSummary.worldPath === 'string' ? pieSummary.worldPath : undefined,
+      } : undefined,
+      partial: typeof parsed.partial === 'boolean' ? parsed.partial : undefined,
+      unsupportedSections: toStringArray(parsed.unsupportedSections),
+    };
   }
 
   private async ensureActiveEditor(): Promise<EditorInstanceSnapshot> {

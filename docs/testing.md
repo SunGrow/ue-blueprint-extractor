@@ -33,7 +33,7 @@ The default MCP path covers:
 
 The checked-in fixture shell lives under `tests/fixtures/BlueprintExtractorFixture/` with the project file `BPXFixture.uproject`.
 The fixture intentionally does not commit a plugin copy; `scripts/test-ue.ps1` and `scripts/test-ue.sh` stage the fixture to a temp directory and sync the local `BlueprintExtractor/` plugin into `Plugins/BlueprintExtractor` there.
-Each staged UE automation run now allocates its own free Remote Control HTTP port and patches the staged `DefaultEngine.ini` before launch, so the fixture editor does not collide with a developer-owned editor already using `30010`.
+Each staged UE automation run allocates its own free Remote Control HTTP port and patches the staged `DefaultEngine.ini` before launch, so the fixture editor does not collide with a developer-owned editor already using `30010`.
 
 Windows:
 
@@ -54,6 +54,7 @@ Useful options:
 - `-AutomationFilter` / `--automation-filter`: override the default filter. The validated default is `BlueprintExtractor`.
 - `-NoNullRHI` / `--no-null-rhi`: enable rendered verification lanes.
 - `-AllowSoftwareRendering`: Windows-only helper for rendered lanes on machines where software rendering is needed.
+- `-FailOnWarnings`: fail the automation lane when the report summary contains warnings.
 
 The UE runner:
 
@@ -84,7 +85,7 @@ Screenshot assertions and rendered comparison work belong in the rendered lane, 
 Headless full pass:
 
 ```powershell
-pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.7"
+pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.7" -FailOnWarnings
 ```
 
 Rendered PIE/editor/runtime screenshot lane:
@@ -94,7 +95,8 @@ pwsh ./scripts/test-ue.ps1 `
   -EngineRoot "C:\Program Files\Epic Games\UE_5.7" `
   -AutomationFilter "BlueprintExtractor.ProjectControl.PIEAndScreenshots" `
   -NoNullRHI `
-  -AllowSoftwareRendering
+  -AllowSoftwareRendering `
+  -FailOnWarnings
 ```
 
 Rendered widget capture lane:
@@ -104,7 +106,8 @@ pwsh ./scripts/test-ue.ps1 `
   -EngineRoot "C:\Program Files\Epic Games\UE_5.7" `
   -AutomationFilter "BlueprintExtractor.Authoring.WidgetCaptureVerification" `
   -NoNullRHI `
-  -AllowSoftwareRendering
+  -AllowSoftwareRendering `
+  -FailOnWarnings
 ```
 
 ## Live MCP Smoke
@@ -134,7 +137,7 @@ The live suite covers real stdio startup, widget authoring, material authoring, 
 
 ## Validation Snapshot
 
-Validated on `2026-03-28`:
+Validated on `2026-03-30`:
 
 - MCP:
   - `cd MCP && npm test`
@@ -142,23 +145,20 @@ Validated on `2026-03-28`:
   - `cd MCP && npm run test:publish-gate`
 - UE 5.6 headless:
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.6"`
-  - result: `succeeded=9`, `succeededWithWarnings=17`, `failed=0`
+  - result: `succeeded=9`, `failed=0`
 - UE 5.7 headless:
   - `pwsh ./scripts/test-ue.ps1 -EngineRoot "C:\Program Files\Epic Games\UE_5.7"`
-  - result: `succeeded=9`, `succeededWithWarnings=17`, `failed=0`
+  - result: `succeeded=9`, `failed=0`
 - UE 5.6 rendered targeted:
   - `BlueprintExtractor.ProjectControl.PIEAndScreenshots`
   - `BlueprintExtractor.Authoring.WidgetCaptureVerification`
   - `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
-  - all passed with `-NoNullRHI -AllowSoftwareRendering`
+  - passed
 - UE 5.7 rendered targeted:
-  - `BlueprintExtractor.ProjectControl.PIEAndScreenshots` passed with `succeeded=1`, `failed=0`
-  - `BlueprintExtractor.Authoring.WidgetCaptureVerification` passed as `Success` with warning-only report output
-  - `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip` passed as `Success` with warning-only report output
-
-Known rendered-lane warnings:
-
-- `WidgetCaptureVerification` and `CommonUIButtonStyleRoundTrip` can emit non-fatal `LogUObjectGlobals` class lookup warnings on this machine while still returning successful automation results.
+  - `BlueprintExtractor.ProjectControl.PIEAndScreenshots`
+  - `BlueprintExtractor.Authoring.WidgetCaptureVerification`
+  - `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
+  - passed
 
 ## CI Shape
 
@@ -166,13 +166,13 @@ Recommended split:
 
 - PR gate:
   - `pwsh ./scripts/test-mcp.ps1 -PackSmoke -PublishDryRun`
-  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT>`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -FailOnWarnings`
 - Rendered validation:
-  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.ProjectControl.PIEAndScreenshots" -NoNullRHI`
-  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.Authoring.WidgetCaptureVerification" -NoNullRHI`
-  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip" -NoNullRHI`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.ProjectControl.PIEAndScreenshots" -NoNullRHI -AllowSoftwareRendering -FailOnWarnings`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.Authoring.WidgetCaptureVerification" -NoNullRHI -AllowSoftwareRendering -FailOnWarnings`
+  - `pwsh ./scripts/test-ue.ps1 -EngineRoot <UE_5_6_ROOT> -AutomationFilter "BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip" -NoNullRHI -AllowSoftwareRendering -FailOnWarnings`
 - Nightly or release:
-  - repeat the same split on UE 5.6 and UE 5.7
-  - add the gated live MCP smoke path
+  - repeat the headless and rendered split on UE 5.6 and UE 5.7
+  - add the gated live MCP smoke path after the contract suite
 
 Do not run `install-mcp.*`, `install-codex-mcp.*`, `claude mcp add`, or `codex mcp add` in shared CI. Those commands mutate user-global client configuration.

@@ -12,6 +12,10 @@ Blueprint Extractor v2 ships prompt entries for repeatable MCP workflows. Prompt
 | `author_material_button_style` | `asset_path`, `visual_goal`, `design_spec_json` | Planning a button material pass with the composable v2 material tools and optional design tokens |
 | `wire_hud_widget_classes` | `hud_asset_path`, `widget_class_path`, `class_default_property` | Wiring widget classes into HUD or controller class defaults |
 | `debug_widget_compile_errors` | `widget_asset_path`, `compile_summary_json` | Turning widget compile output into a focused recovery plan |
+| `understand_blueprint_project` | `package_path`, `question` | Understanding a project with indexed asset metadata plus published docs, prompts, and MCP resources |
+| `review_blueprint_asset` | `asset_path`, `review_goal` | Running a deterministic read-only Blueprint review before widening into deeper extraction |
+| `snapshot_editor_context` | `intent` | Inspecting bounded editor state without changing focus, selection, or viewport |
+| `audit_blueprint_project` | `package_path`, `class_filter` | Running a low-noise project asset audit grouped by check family |
 
 ## Prompt Intent
 
@@ -80,3 +84,27 @@ Blueprint Extractor v2 ships prompt entries for repeatable MCP workflows. Prompt
 - Redirects CommonUI button-style failures away from raw `UButton` background/style fields and toward `extract_commonui_button_style`, `create_commonui_button_style`, `modify_commonui_button_style`, and `apply_commonui_button_style`.
 - Reminds the caller to verify paired `bOverride_*` flags when override-coupled widget properties appear to ignore a patch.
 - Keeps the flow open until a successful compile is followed by `capture_widget_preview` or explicit `partial verification`.
+
+### `understand_blueprint_project`
+
+- Starts from the published project-intelligence surface instead of ad hoc search or memory.
+- Prefers `refresh_project_index`, `get_project_index_status`, and `search_project_context` before narrowing into one asset.
+- Encourages a second step into `extract_asset`, `extract_blueprint`, or `extract_widget_blueprint` when the answer depends on one concrete asset instead of broad project context.
+
+### `review_blueprint_asset`
+
+- Starts with `review_blueprint` so the model sees a deterministic findings-first report before it inspects raw graph payloads.
+- Limits the workflow to issues supported by extracted evidence such as logic flow, null/validity ordering, reference hygiene, naming, and replication/authority hazards.
+- Keeps the output read-only and rejects unsupported autofix suggestions.
+
+### `snapshot_editor_context`
+
+- Uses `get_active_editor` only to confirm session binding and then narrows to `get_editor_context`.
+- Treats the result as bounded and partial in headless, unbound, or non-rendered cases.
+- Explicitly disallows focus changes, asset opening, or viewport switching because the tool is query-only.
+
+### `audit_blueprint_project`
+
+- Starts with `audit_project_assets` for low-noise metadata checks instead of widening immediately into heuristics-heavy project scans.
+- Groups findings by check family with counts first, then the actionable findings.
+- Uses extraction only as a follow-up step after the audit surfaces a concrete asset-level issue.

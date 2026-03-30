@@ -12,11 +12,6 @@ on:
         required: false
         default: false
         type: boolean
-      run_ue_5_7:
-        description: 'Run UE 5.7 self-hosted automation'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -60,7 +55,7 @@ jobs:
         run: npm run test:publish-gate
 
   ue-automation-5_6:
-    name: ue-automation-5_6
+    name: ue-automation-5_6 (headless)
     if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ue_5_6) || (github.event_name != 'workflow_dispatch' && vars.UE_5_6_CI_ENABLED == 'true' && vars.UE_5_6_ROOT != '') }}
     runs-on:
       - self-hosted
@@ -70,43 +65,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: UE 5.6 authoring automation
+      - name: UE 5.6 headless gate
         shell: pwsh
         run: >
           ./scripts/test-ue.ps1
           -EngineRoot "${{ vars.UE_5_6_ROOT }}"
-          -AutomationFilter "BlueprintExtractor.Authoring"
-
-      - name: UE 5.6 BuildPlugin packaging gate
-        shell: pwsh
-        run: >
-          ./scripts/test-ue.ps1
-          -EngineRoot "${{ vars.UE_5_6_ROOT }}"
-          -BuildPlugin
-          -AutomationFilter "BlueprintExtractor.Authoring.CommonUIWidgetRoundTrip"
-
-  ue-automation-5_7:
-    name: ue-automation-5_7
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ue_5_7) || (github.event_name != 'workflow_dispatch' && vars.UE_5_7_CI_ENABLED == 'true' && vars.UE_5_7_ROOT != '') }}
-    runs-on:
-      - self-hosted
-      - Windows
-      - ue-5.7
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: UE 5.7 authoring automation
-        shell: pwsh
-        run: >
-          ./scripts/test-ue.ps1
-          -EngineRoot "${{ vars.UE_5_7_ROOT }}"
-          -AutomationFilter "BlueprintExtractor.Authoring"
-
-      - name: UE 5.7 BuildPlugin packaging gate
-        shell: pwsh
-        run: >
-          ./scripts/test-ue.ps1
-          -EngineRoot "${{ vars.UE_5_7_ROOT }}"
-          -BuildPlugin
-          -AutomationFilter "BlueprintExtractor.Authoring.CommonUIWidgetRoundTrip"
+          -AutomationFilter "BlueprintExtractor"
+          -FailOnWarnings

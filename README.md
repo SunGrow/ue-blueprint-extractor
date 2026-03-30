@@ -13,10 +13,10 @@ Blueprint Extractor connects a running Unreal Editor to MCP clients such as [Cla
 
 | Capability | Current contract |
 |---|---|
-| Tools | 95 |
-| Resources | 16 |
+| Tools | 106 |
+| Resources | 38 |
 | Resource templates | 4 |
-| Prompts | 8 |
+| Prompts | 12 |
 | Transport | MCP over stdio + Unreal Remote Control over HTTP |
 | Save model | Explicit save via `save_assets` |
 
@@ -39,6 +39,10 @@ Supported families include Blueprint, WidgetBlueprint, StateTree, BehaviorTree, 
 | Workflow | Typical tools |
 |---|---|
 | Find and inspect assets | `search_assets`, `find_and_extract`, `extract_asset`, `extract_blueprint`, `extract_material` |
+| Review Blueprint logic | `activate_workflow_scope`, `review_blueprint` |
+| Snapshot editor state | `activate_workflow_scope`, `get_editor_context` |
+| Search project context | `activate_workflow_scope`, `refresh_project_index`, `search_project_context`, `get_project_index_status` |
+| Audit asset hygiene | `activate_workflow_scope`, `audit_project_assets` |
 | Build gameplay or UI assets | `create_*`, `modify_*`, `patch_widget`, `batch_widget_operations`, `modify_blueprint_members` |
 | Work on materials | `create_material`, `modify_material`, `material_graph_operation`, `modify_material_instance` |
 | Author data and AI assets | `create_data_table`, `modify_curve`, `create_state_tree`, `modify_behavior_tree`, `modify_blackboard` |
@@ -75,12 +79,12 @@ Manual registration is also supported:
 
 ```bash
 # Claude Code
-claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@6.0.6
-claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@6.0.6
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@6.1.0
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@6.1.0
 
 # Codex
-codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@6.0.6
-codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@6.0.6
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@6.1.0
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@6.1.0
 ```
 
 ### 3. Verify the connection
@@ -126,6 +130,8 @@ The server exposes a compact default surface and expands into specialized famili
 | `data_tables` | Data assets, tables, curves, input actions, mapping contexts |
 | `import` | Import jobs and import status |
 | `automation_testing` | Host-side automation runs, project automation context, and PIE lifecycle control |
+| `analysis` | Blueprint review and project asset audits |
+| `project_intelligence` | Editor context, project indexing, ranked snippet search |
 | `verification` | Widget captures, editor/runtime screenshots, comparisons, list/cleanup, and motion verification |
 
 ## Resources And Prompts
@@ -137,6 +143,8 @@ The server is more than a tool list. It also publishes reusable guidance and str
 - `blueprint://scopes`
 - `blueprint://verification-workflows`
 - `blueprint://project-automation`
+- `blueprint://analysis-workflows`
+- `blueprint://project-intelligence-workflows`
 - `blueprint://material-graph-guidance`
 - `blueprint://font-roles`
 
@@ -153,6 +161,14 @@ The server is more than a tool list. It also publishes reusable guidance and str
 - `design_menu_from_design_spec`
 - `author_widget_motion_from_design_spec`
 - `plan_widget_motion_verification`
+- `design_menu_screen`
+- `author_material_button_style`
+- `wire_hud_widget_classes`
+- `debug_widget_compile_errors`
+- `understand_blueprint_project`
+- `review_blueprint_asset`
+- `snapshot_editor_context`
+- `audit_blueprint_project`
 
 ## Requirements
 

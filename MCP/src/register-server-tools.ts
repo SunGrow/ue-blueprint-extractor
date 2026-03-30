@@ -91,6 +91,7 @@ import type {
   ResolvedProjectInputs,
 } from './tool-context.js';
 import { registerAnimationAuthoringTools } from './tools/animation-authoring.js';
+import { registerAnalysisTools } from './tools/analysis-tools.js';
 import { registerAutomationRunTools } from './tools/automation-runs.js';
 import { registerBlueprintAuthoringTools } from './tools/blueprint-authoring.js';
 import { registerCompositeTools } from './tools/composite-tools.js';
@@ -100,6 +101,7 @@ import { registerExtractionTools } from './tools/extraction.js';
 import { registerImportJobTools } from './tools/import-jobs.js';
 import { registerMaterialAuthoringTools } from './tools/material-authoring.js';
 import { registerMaterialInstanceTools } from './tools/material-instance.js';
+import { registerProjectIntelligenceTools } from './tools/project-intelligence.js';
 import { registerProjectControlTools } from './tools/project-control.js';
 import { registerSchemaAndAiAuthoringTools } from './tools/schema-and-ai-authoring.js';
 import { registerTablesAndCurvesTools } from './tools/tables-and-curves.js';
@@ -278,6 +280,11 @@ export function registerServerTools({
     automationRunListSchema: AutomationRunListSchema,
   });
 
+  registerAnalysisTools({
+    server,
+    callSubsystemJson,
+  });
+
   registerProjectControlTools({
     server,
     client,
@@ -292,6 +299,11 @@ export function registerServerTools({
     buildPlatformSchema: BuildPlatformSchema,
     buildConfigurationSchema: BuildConfigurationSchema,
     editorPollIntervalMs,
+  });
+
+  registerProjectIntelligenceTools({
+    server,
+    callSubsystemJson,
   });
 
   registerWindowUiTools({

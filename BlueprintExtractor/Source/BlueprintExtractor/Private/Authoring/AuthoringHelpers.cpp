@@ -3,14 +3,17 @@
 #include "Authoring/AssetMutationHelpers.h"
 #include "PropertySerializer.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "BlueprintCompilationManager.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Logging/TokenizedMessage.h"
+#include "Misc/PackageName.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
 namespace AuthoringHelpersInternal
@@ -169,15 +172,44 @@ UObject* FAuthoringHelpers::ResolveObject(const FString& ObjectPath, UClass* Req
 		return nullptr;
 	}
 
+	const FString NormalizedObjectPath = NormalizeAssetObjectPath(ObjectPath);
 	UClass* SearchClass = RequiredClass ? RequiredClass : UObject::StaticClass();
-	if (UObject* LoadedObject = StaticLoadObject(SearchClass, nullptr, *ObjectPath))
+	if (UObject* FoundObject = FindObject<UObject>(nullptr, *NormalizedObjectPath))
+	{
+		return !RequiredClass || FoundObject->IsA(RequiredClass) ? FoundObject : nullptr;
+	}
+
+	if (NormalizedObjectPath != ObjectPath)
+	{
+		if (UObject* FoundObject = FindObject<UObject>(nullptr, *ObjectPath))
+		{
+			return !RequiredClass || FoundObject->IsA(RequiredClass) ? FoundObject : nullptr;
+		}
+	}
+
+	if (UObject* ResolvedAsset = ResolveAssetByPath(NormalizedObjectPath))
+	{
+		return !RequiredClass || ResolvedAsset->IsA(RequiredClass) ? ResolvedAsset : nullptr;
+	}
+
+	if (NormalizedObjectPath.StartsWith(TEXT("/"))
+		&& !NormalizedObjectPath.StartsWith(TEXT("/Script/"))
+		&& !DoesAssetExist(NormalizedObjectPath))
+	{
+		return nullptr;
+	}
+
+	if (UObject* LoadedObject = StaticLoadObject(SearchClass, nullptr, *NormalizedObjectPath))
 	{
 		return LoadedObject;
 	}
 
-	if (UObject* FoundObject = FindObject<UObject>(nullptr, *ObjectPath))
+	if (NormalizedObjectPath != ObjectPath)
 	{
-		return !RequiredClass || FoundObject->IsA(RequiredClass) ? FoundObject : nullptr;
+		if (UObject* LoadedObject = StaticLoadObject(SearchClass, nullptr, *ObjectPath))
+		{
+			return LoadedObject;
+		}
 	}
 
 	return nullptr;
@@ -190,10 +222,27 @@ UClass* FAuthoringHelpers::ResolveClass(const FString& ClassPath, UClass* Requir
 		return nullptr;
 	}
 
-	UClass* SearchBase = RequiredBaseClass ? RequiredBaseClass : UObject::StaticClass();
-	if (UClass* LoadedClass = StaticLoadClass(SearchBase, nullptr, *ClassPath))
+	if (UClass* FoundClass = FindObject<UClass>(nullptr, *ClassPath))
 	{
-		return LoadedClass;
+		return !RequiredBaseClass || FoundClass->IsChildOf(RequiredBaseClass) ? FoundClass : nullptr;
+	}
+
+	UClass* SearchBase = RequiredBaseClass ? RequiredBaseClass : UObject::StaticClass();
+	const bool bLooksLikeQualifiedPath = ClassPath.StartsWith(TEXT("/"))
+		|| ClassPath.Contains(TEXT("."))
+		|| ClassPath.EndsWith(TEXT("_C"));
+	if (bLooksLikeQualifiedPath)
+	{
+		const FString NormalizedClassPath = NormalizeAssetObjectPath(ClassPath);
+		if (NormalizedClassPath.StartsWith(TEXT("/")) && !NormalizedClassPath.StartsWith(TEXT("/Script/")) && !DoesAssetExist(NormalizedClassPath))
+		{
+			return nullptr;
+		}
+
+		if (UClass* LoadedClass = StaticLoadClass(SearchBase, nullptr, *NormalizedClassPath))
+		{
+			return LoadedClass;
+		}
 	}
 
 	if (UObject* LoadedObject = ResolveObject(ClassPath, UClass::StaticClass()))

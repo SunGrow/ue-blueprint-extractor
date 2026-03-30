@@ -486,6 +486,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString GetProjectAutomationContext();
 
+	/** Returns a bounded read-only snapshot of the current editor context for MCP inspection. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString GetEditorContext();
+
 	/** Requests a Play-In-Editor or Simulate-In-Editor session. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString StartPIE(const bool bSimulateInEditor = false);

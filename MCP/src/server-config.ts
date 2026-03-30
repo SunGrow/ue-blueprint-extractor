@@ -6,11 +6,11 @@ export const EDITOR_POLL_INTERVAL_MS = 1_000;
 export const serverInstructions = [
   'Blueprint Extractor MCP uses a v2 public contract with workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
   // Tool discovery
-  'Only ~13 core tools are visible by default. Use activate_workflow_scope to load specialized tool families: widget_authoring (or sub-scopes: widget_authoring_structure, widget_authoring_visual, widget_verification), material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification.',
+  'Only ~13 core tools are visible by default. Use activate_workflow_scope to load specialized tool families: widget_authoring (or sub-scopes: widget_authoring_structure, widget_authoring_visual, widget_verification), material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification, analysis, and project_intelligence.',
   'Use find_and_extract for search+extract in one call (activate any authoring scope to access it). Use search_assets when you only need to locate assets.',
   'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance. This may also auto-activate the relevant workflow scope.',
   // Deferred tool directory (tools available via activate_workflow_scope)
-  'Deferred tool families — widget_authoring_structure: create/replace/patch/insert/remove/move/wrap widgets. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create/modify material, material_graph_operation, material instances. blueprint_authoring: create/modify blueprint members and graphs, trigger_live_coding. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. automation_testing: run/get/list automation tests, project automation context, and PIE lifecycle control. verification: widget captures, editor screenshots, runtime screenshots, and comparisons.',
+  'Deferred tool families — widget_authoring_structure: create/replace/patch/insert/remove/move/wrap widgets. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create/modify material, material_graph_operation, material instances. blueprint_authoring: create/modify blueprint members and graphs, trigger_live_coding. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. automation_testing: run/get/list automation tests, project automation context, and PIE lifecycle control. verification: widget captures, editor screenshots, runtime screenshots, and comparisons. analysis: deterministic Blueprint review and asset audits. project_intelligence: editor context, project indexing, and metadata-first context search.',
   // Extraction
   'All extract_* tools default to compact: true. Pass compact: false for verbose output.',
   // Search
@@ -85,12 +85,18 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['select_editor', 'both'],
   ['clear_editor_selection', 'both'],
   ['launch_editor', 'both'],
+  ['review_blueprint', 'both'],
+  ['refresh_project_index', 'both'],
+  ['get_project_index_status', 'both'],
+  ['search_project_context', 'both'],
+  ['audit_project_assets', 'both'],
   ['get_project_automation_context', 'both'],
   ['get_import_job', 'both'],
   ['list_import_jobs', 'both'],
   ['get_automation_test_run', 'both'],
   ['list_automation_test_runs', 'both'],
   ['list_captures', 'both'],
+  ['get_editor_context', 'editor_only'],
 
   // ── Simple writes that work in both modes ──
   ['save_assets', 'both'],

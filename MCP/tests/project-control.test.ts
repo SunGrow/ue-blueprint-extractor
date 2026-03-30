@@ -5,6 +5,7 @@ import { registerProjectControlTools } from '../src/tools/project-control.js';
 import { createToolResultNormalizers } from '../src/helpers/tool-results.js';
 import { extractToolPayload } from '../src/helpers/formatting.js';
 import { classifyRecoverableToolFailure, taskAwareTools } from '../src/server-config.js';
+import { getEditorContext } from '../src/tools/project-control.js';
 import { createToolRegistry, parseDirectToolResult } from './tool-module-test-helpers.js';
 import { getTextContent } from './test-helpers.js';
 
@@ -125,6 +126,26 @@ function createActiveEditorSession(overrides: Record<string, unknown> = {}) {
     bindLaunchedEditor: vi.fn(async () => activeEditor),
     refreshActiveEditorAfterReconnect: vi.fn(async () => activeEditor),
     getBoundSnapshot: vi.fn(() => activeEditor),
+    getEditorContext: vi.fn(async () => ({
+      success: true,
+      operation: 'get_editor_context',
+      instanceId: activeEditor.instanceId,
+      projectName: activeEditor.projectName,
+      projectFilePath: activeEditor.projectFilePath,
+      projectDir: activeEditor.projectDir,
+      engineRoot: activeEditor.engineRoot,
+      editorTarget: activeEditor.editorTarget,
+      remoteControlHost: activeEditor.remoteControlHost,
+      remoteControlPort: activeEditor.remoteControlPort,
+      selectedAssetPaths: ['/Game/Blueprints/BP_PlayerCharacter'],
+      selectedActorNames: ['BP_PlayerCharacter_C_0'],
+      openAssetEditors: ['/Game/UI/WBP_MainMenu'],
+      activeLevel: '/Game/Maps/MainLevel',
+      pieSummary: {
+        isPlayingInEditor: false,
+        isSimulatingInEditor: false,
+      },
+    })),
     ...overrides,
   };
 }
@@ -1925,6 +1946,43 @@ describe('registerProjectControlTools', () => {
     });
   });
 
+  it('returns bounded editor context from the active editor session', async () => {
+    const registry = createToolRegistry();
+    const activeEditorSession = createActiveEditorSession();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(async () => ({
+        engineRoot: 'C:/UE',
+        projectFilePath: 'C:/Proj/Proj.uproject',
+      })),
+      resolveProjectInputs: vi.fn(async () => createResolvedProjectInputs()),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('get_editor_context').handler({});
+
+    expect(activeEditorSession.getEditorContext).toHaveBeenCalledTimes(1);
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'get_editor_context',
+      instanceId: 'editor-1',
+      selectedAssetPaths: ['/Game/Blueprints/BP_PlayerCharacter'],
+      selectedActorNames: ['BP_PlayerCharacter_C_0'],
+      openAssetEditors: ['/Game/UI/WBP_MainMenu'],
+      activeLevel: '/Game/Maps/MainLevel',
+    });
+  });
+
   it('returns an error when get_project_automation_context fails', async () => {
     const registry = createToolRegistry();
     const getProjectAutomationContext = vi.fn(async () => {
@@ -1952,6 +2010,27 @@ describe('registerProjectControlTools', () => {
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
       'editor not connected',
     );
+  });
+
+  it('reads the bounded editor context without touching project automation context', async () => {
+    const editorContext = {
+      instanceId: 'editor-1',
+      projectFilePath: 'C:/Proj/Proj.uproject',
+      selectedAssetPaths: ['/Game/UI/WBP_Menu'],
+      selectedActorNames: ['PlayerStart'],
+      openAssetEditors: ['/Game/UI/WBP_Menu.WBP_Menu'],
+      activeLevel: '/Game/Maps/Entry',
+      pieSummary: {
+        isPlayingInEditor: false,
+        isSimulatingInEditor: false,
+      },
+    };
+    const activeEditorSession = {
+      getEditorContext: vi.fn(async () => editorContext),
+    } as any;
+
+    await expect(getEditorContext(activeEditorSession)).resolves.toEqual(editorContext);
+    expect(activeEditorSession.getEditorContext).toHaveBeenCalledTimes(1);
   });
 
   // --- Phase 5: critical coverage gaps ---

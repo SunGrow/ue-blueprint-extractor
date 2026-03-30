@@ -4,6 +4,8 @@
 #include "BlueprintExtractorModule.h"
 #include "Authoring/AssetMutationHelpers.h"
 
+#include "AssetRegistry/AssetData.h"
+#include "ContentBrowserModule.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "EdGraph/EdGraph.h"
@@ -14,6 +16,7 @@
 #include "EditorFramework/AssetImportData.h"
 #include "Engine/Blueprint.h"
 #include "Engine/Font.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture.h"
 #include "Editor.h"
@@ -21,6 +24,8 @@
 #include "K2Node_ExecutionSequence.h"
 #include "K2Node_FunctionEntry.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/CompilerResultsLog.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/Image.h"
@@ -30,7 +35,9 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Framework/Application/SlateApplication.h"
+#include "GameFramework/Actor.h"
 #include "HAL/PlatformProcess.h"
+#include "IContentBrowserSingleton.h"
 #include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/EngineVersionComparison.h"
@@ -40,6 +47,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "WidgetBlueprint.h"
 
 namespace BlueprintExtractorAutomation
@@ -77,6 +85,46 @@ static FString MakeObjectPath(const FString& AssetPath)
 		TEXT("%s.%s"),
 		*AssetPath,
 		*FPackageName::GetLongPackageAssetName(AssetPath));
+}
+
+static UClass* ResolveFixtureClass(const TCHAR* ClassPath)
+{
+	if (UClass* ExistingClass = FindObject<UClass>(nullptr, ClassPath))
+	{
+		return ExistingClass;
+	}
+
+	return LoadClass<UObject>(nullptr, ClassPath);
+}
+
+static bool ReparentWidgetBlueprintForTest(FAutomationTestBase& Test,
+                                           const FString& WidgetObjectPath,
+                                           const TCHAR* ParentClassPath)
+{
+	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
+	Test.TestNotNull(TEXT("Widget blueprint exists for test reparent"), WidgetBP);
+	if (!WidgetBP)
+	{
+		return false;
+	}
+
+	UClass* ParentClass = ResolveFixtureClass(ParentClassPath);
+	Test.TestNotNull(TEXT("Fixture parent class resolves for test reparent"), ParentClass);
+	if (!ParentClass)
+	{
+		return false;
+	}
+
+	WidgetBP->Modify();
+	WidgetBP->ParentClass = ParentClass;
+	if (WidgetBP->SimpleConstructionScript)
+	{
+		WidgetBP->SimpleConstructionScript->ValidateSceneRootNodes();
+	}
+
+	FBlueprintEditorUtils::RefreshAllNodes(WidgetBP);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
+	return true;
 }
 
 static FString MakePackageFilename(const FString& AssetPath)
@@ -803,6 +851,128 @@ static bool RunProjectControlCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunEditorContextCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> HeadlessContext = ExpectSuccessfulResult(
+		Test,
+		Subsystem->GetEditorContext(),
+		TEXT("GetEditorContext"));
+	if (!HeadlessContext.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestTrue(TEXT("Editor context returns instanceId"), HeadlessContext->HasTypedField<EJson::String>(TEXT("instanceId")));
+	Test.TestTrue(TEXT("Editor context returns projectFilePath"), HeadlessContext->HasTypedField<EJson::String>(TEXT("projectFilePath")));
+	Test.TestTrue(TEXT("Editor context returns selectedAssetPaths array"), HeadlessContext->HasTypedField<EJson::Array>(TEXT("selectedAssetPaths")));
+	Test.TestTrue(TEXT("Editor context returns selectedActorNames array"), HeadlessContext->HasTypedField<EJson::Array>(TEXT("selectedActorNames")));
+	Test.TestTrue(TEXT("Editor context returns openAssetEditors array"), HeadlessContext->HasTypedField<EJson::Array>(TEXT("openAssetEditors")));
+	Test.TestTrue(TEXT("Editor context returns pieSummary object"), HeadlessContext->HasTypedField<EJson::Object>(TEXT("pieSummary")));
+
+	if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
+	{
+		bool bPartial = false;
+		Test.TestTrue(TEXT("Headless editor context reports partial=true"), HeadlessContext->TryGetBoolField(TEXT("partial"), bPartial) && bPartial);
+		Test.TestTrue(TEXT("Headless editor context marks selected_asset_paths unsupported"), JsonArrayContainsString(HeadlessContext, TEXT("unsupportedSections"), TEXT("selected_asset_paths")));
+		Test.TestTrue(TEXT("Headless editor context marks selected_actor_names unsupported"), JsonArrayContainsString(HeadlessContext, TEXT("unsupportedSections"), TEXT("selected_actor_names")));
+		Test.TestTrue(TEXT("Headless editor context marks open_asset_editors unsupported"), JsonArrayContainsString(HeadlessContext, TEXT("unsupportedSections"), TEXT("open_asset_editors")));
+		return true;
+	}
+
+	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_EditorContext"));
+	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
+	const TSharedPtr<FJsonObject> CreateWidgetResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateWidgetBlueprint(WidgetAssetPath, TEXT("UserWidget")),
+		TEXT("CreateWidgetBlueprint editor context"));
+	if (!CreateWidgetResult.IsValid())
+	{
+		return false;
+	}
+
+	UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetAssetPath));
+	if (!WidgetBlueprint)
+	{
+		Test.AddError(TEXT("Editor context coverage failed to resolve the created widget blueprint."));
+		return false;
+	}
+
+	UAssetEditorSubsystem* AssetEditorSubsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+	if (!AssetEditorSubsystem)
+	{
+		Test.AddError(TEXT("Editor context coverage requires UAssetEditorSubsystem."));
+		return false;
+	}
+
+	AssetEditorSubsystem->OpenEditorForAsset(WidgetBlueprint);
+
+	FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+	TArray<FAssetData> AssetsToSync;
+	AssetsToSync.Add(FAssetData(WidgetBlueprint));
+	ContentBrowserModule.Get().SyncBrowserToAssets(AssetsToSync);
+
+	UWorld* EditorWorld = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!EditorWorld)
+	{
+		Test.AddError(TEXT("Editor context coverage requires an editor world."));
+		return false;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Name = MakeUniqueObjectName(EditorWorld, AActor::StaticClass(), TEXT("BPEditorContextActor"));
+	SpawnParams.ObjectFlags |= RF_Transient;
+	AActor* SelectedActor = EditorWorld->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, SpawnParams);
+	if (!SelectedActor)
+	{
+		Test.AddError(TEXT("Editor context coverage failed to spawn an actor for selection."));
+		return false;
+	}
+
+	GEditor->SelectNone(false, true, false);
+	GEditor->SelectActor(SelectedActor, true, true, true);
+	FPlatformProcess::Sleep(0.1f);
+	const FString SelectedActorName = SelectedActor->GetActorNameOrLabel();
+
+	const TSharedPtr<FJsonObject> InteractiveContext = ExpectSuccessfulResult(
+		Test,
+		Subsystem->GetEditorContext(),
+		TEXT("GetEditorContext interactive"));
+
+	GEditor->SelectActor(SelectedActor, false, true, true);
+	EditorWorld->DestroyActor(SelectedActor);
+	AssetEditorSubsystem->CloseAllEditorsForAsset(WidgetBlueprint);
+
+	if (!InteractiveContext.IsValid())
+	{
+		return false;
+	}
+
+	bool bPartial = true;
+	Test.TestTrue(TEXT("Interactive editor context reports partial=false"), InteractiveContext->TryGetBoolField(TEXT("partial"), bPartial) && !bPartial);
+	Test.TestTrue(TEXT("Interactive editor context returns the selected asset package path"), JsonArrayContainsString(InteractiveContext, TEXT("selectedAssetPaths"), WidgetAssetPath));
+	Test.TestTrue(TEXT("Interactive editor context returns the selected actor name"), JsonArrayContainsString(InteractiveContext, TEXT("selectedActorNames"), SelectedActorName));
+	Test.TestTrue(TEXT("Interactive editor context returns the open widget editor object path"), JsonArrayContainsString(InteractiveContext, TEXT("openAssetEditors"), WidgetObjectPath));
+
+	FString ActiveLevel;
+	Test.TestTrue(TEXT("Interactive editor context returns activeLevel"), InteractiveContext->TryGetStringField(TEXT("activeLevel"), ActiveLevel) && !ActiveLevel.IsEmpty());
+
+	TSharedPtr<FJsonObject> PieSummary;
+	Test.TestTrue(TEXT("Interactive editor context exposes pieSummary"), TryGetObjectFieldCopy(InteractiveContext, TEXT("pieSummary"), PieSummary) && PieSummary.IsValid());
+	if (PieSummary.IsValid())
+	{
+		bool bIsPlayingInEditor = true;
+		Test.TestTrue(TEXT("Interactive editor context reports PIE inactive"), PieSummary->TryGetBoolField(TEXT("isPlayingInEditor"), bIsPlayingInEditor) && !bIsPlayingInEditor);
+	}
+
+	return true;
+}
+
 static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 {
 	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
@@ -1088,6 +1258,10 @@ static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 			FString::Printf(TEXT(R"json({"skeleton":"%s","previewMesh":"%s","is1D":true,"axisX":{"name":"Speed","min":0.0,"max":600.0,"gridDivisions":4}})json"), EngineSkeletonPath, EnginePreviewMeshPath),
 			false),
 		TEXT("CreateBlendSpace"));
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ AnimSequenceObjectPath, AnimMontageObjectPath, BlendSpaceObjectPath })),
+		TEXT("SaveAssets for animation assets before modification"));
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->ModifyBlendSpace(
@@ -1910,7 +2084,7 @@ static bool RunBindWidgetParentCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CreateWidgetBlueprint(
 			WidgetAssetPath,
-			FixtureBindWidgetParentClassPath),
+			TEXT("UserWidget")),
 		TEXT("CreateWidgetBlueprint for BindWidget parent"));
 
 	ExpectSuccessfulResult(
@@ -1920,6 +2094,16 @@ static bool RunBindWidgetParentCoverage(FAutomationTestBase& Test)
 			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","children":[{"class":"HorizontalBox","name":"TitleBarArea","is_variable":true,"children":[{"class":"TextBlock","name":"TitleText","is_variable":true,"slot":{"Size":{"value":1,"sizeRule":"Fill"}}},{"class":"Button","name":"MinimizeButton","is_variable":true},{"class":"Button","name":"MaximizeButton","is_variable":true},{"class":"Button","name":"CloseButton","is_variable":true}]},{"class":"NamedSlot","name":"ContentSlot","is_variable":true,"slot":{"Size":{"value":1,"sizeRule":"Fill"}}}]})json"),
 			false),
 		TEXT("BuildWidgetTree for BindWidget parent"));
+
+	if (!ReparentWidgetBlueprintForTest(Test, WidgetObjectPath, FixtureBindWidgetParentClassPath))
+	{
+		return false;
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ WidgetObjectPath })),
+		TEXT("SaveAssets for BindWidget parent"));
 
 	ExpectSuccessfulResult(
 		Test,
@@ -1966,7 +2150,7 @@ static bool RunWidgetRenameCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CreateWidgetBlueprint(
 			WidgetAssetPath,
-			FixtureRenameBindWidgetParentClassPath),
+			TEXT("UserWidget")),
 		TEXT("CreateWidgetBlueprint for widget rename"));
 
 	ExpectSuccessfulResult(
@@ -1987,6 +2171,16 @@ static bool RunWidgetRenameCoverage(FAutomationTestBase& Test)
 			TEXT("{}"),
 			false),
 		TEXT("ModifyWidget rename"));
+
+	if (!ReparentWidgetBlueprintForTest(Test, WidgetObjectPath, FixtureRenameBindWidgetParentClassPath))
+	{
+		return false;
+	}
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ WidgetObjectPath })),
+		TEXT("SaveAssets after widget rename"));
 
 	UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
 	Test.TestNotNull(TEXT("Renamed widget blueprint exists"), WidgetBP);
@@ -2140,7 +2334,7 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CreateWidgetBlueprint(
 			WidgetAssetPath,
-			TEXT("BlueprintExtractorFixtureStyledWidgetParent")),
+			TEXT("UserWidget")),
 		TEXT("CreateWidgetBlueprint for widget defaults"));
 
 	ExpectSuccessfulResult(
@@ -2150,6 +2344,15 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","children":[{"class":"Image","name":"TitleBarBg","properties":{"RenderOpacity":0.75}},{"class":"TextBlock","name":"TitleText","properties":{"Text":"Window Title"}}]})json"),
 			false),
 		TEXT("BuildWidgetTree for widget defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintMembers(
+			WidgetObjectPath,
+			TEXT("reparent"),
+			FString::Printf(TEXT(R"json({"parentClassPath":"%s"})json"), FixtureStyledWidgetParentClassPath),
+			false),
+		TEXT("ModifyBlueprintMembers reparent styled widget"));
 
 	ExpectSuccessfulResult(
 		Test,
@@ -2188,6 +2391,11 @@ static bool RunWidgetVariableAndClassDefaultsCoverage(FAutomationTestBase& Test)
 			TEXT(R"json({"class_defaults":{"ActiveTitleBarMaterial":"/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"}})json"),
 			false),
 		TEXT("ModifyWidgetBlueprintStructure patch_class_defaults snake_case"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ WidgetObjectPath })),
+		TEXT("SaveAssets for widget defaults"));
 
 	// Verify CDO values survive patch_class_defaults without an explicit compile.
 	// patch_class_defaults no longer triggers an internal compile, so values must
@@ -2310,7 +2518,7 @@ static bool RunWidgetBatchClassDefaultsCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CreateWidgetBlueprint(
 			WidgetAssetPath,
-			TEXT("BlueprintExtractorFixtureStyledWidgetParent")),
+			TEXT("UserWidget")),
 		TEXT("CreateWidgetBlueprint for batch class defaults"));
 
 	ExpectSuccessfulResult(
@@ -2320,6 +2528,20 @@ static bool RunWidgetBatchClassDefaultsCoverage(FAutomationTestBase& Test)
 			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"Image","name":"TitleBarBg","properties":{"RenderOpacity":0.5}},{"class":"TextBlock","name":"TitleText","properties":{"Text":"Before Batch"}}]})json"),
 			false),
 		TEXT("BuildWidgetTree for batch class defaults"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyBlueprintMembers(
+			WidgetObjectPath,
+			TEXT("reparent"),
+			FString::Printf(TEXT(R"json({"parentClassPath":"%s"})json"), FixtureStyledWidgetParentClassPath),
+			false),
+		TEXT("ModifyBlueprintMembers reparent batch class defaults widget"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ WidgetObjectPath })),
+		TEXT("SaveAssets for batch class defaults"));
 
 	ExpectSuccessfulResult(
 		Test,
@@ -2591,6 +2813,11 @@ static bool RunWidgetFontCoverage(FAutomationTestBase& Test)
 		Subsystem->ImportFonts(SecondImportPayload, false),
 		TEXT("ImportFonts updates existing typeface entry deterministically"));
 
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ FontAssetObjectPath })),
+		TEXT("SaveAssets for imported runtime font"));
+
 	UFont* RuntimeFont = Cast<UFont>(ResolveAssetByPath(FontAssetObjectPath));
 	Test.TestNotNull(TEXT("Runtime UFont asset exists"), RuntimeFont);
 	if (RuntimeFont)
@@ -2682,6 +2909,7 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 	const FString WidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureOps"));
 	const FString WidgetObjectPath = MakeObjectPath(WidgetAssetPath);
 	const FString AssetChildWidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureAssetChild"));
+	const FString AssetChildWidgetObjectPath = MakeObjectPath(AssetChildWidgetAssetPath);
 	const FString GeneratedChildWidgetAssetPath = MakeUniqueAssetPath(TEXT("WBP_StructureGeneratedChild"));
 	const FString GeneratedChildWidgetObjectPath = MakeObjectPath(GeneratedChildWidgetAssetPath);
 
@@ -2711,6 +2939,11 @@ static bool RunWidgetStructureCoverage(FAutomationTestBase& Test)
 			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"HorizontalBox","name":"HeaderRow","is_variable":true,"children":[{"class":"TextBlock","name":"TitleText","is_variable":true,"properties":{"Text":"Window"}},{"class":"Border","name":"ActionHost","is_variable":true}]},{"class":"VerticalBox","name":"ContentRoot","is_variable":true,"children":[{"class":"TextBlock","name":"BodyText","is_variable":true,"properties":{"Text":"Body"}}]}]})json"),
 			false),
 		TEXT("BuildWidgetTree for structure ops"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ AssetChildWidgetObjectPath, GeneratedChildWidgetObjectPath })),
+		TEXT("SaveAssets for child widget class references"));
 
 	ExpectValidateOnlyResult(
 		Test,
@@ -2977,31 +3210,43 @@ static bool RunWidgetCompileFailureExtractionCoverage(FAutomationTestBase& Test)
 		Test,
 		Subsystem->CreateWidgetBlueprint(
 			WidgetAssetPath,
-			FixtureBindWidgetParentClassPath),
+			TEXT("UserWidget")),
 		TEXT("CreateWidgetBlueprint for compile failure extraction"));
 
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->BuildWidgetTree(
 			WidgetObjectPath,
-			TEXT(R"json({"class":"VerticalBox","name":"WindowRoot","is_variable":true,"children":[{"class":"HorizontalBox","name":"TitleBarArea","is_variable":true,"children":[{"class":"TextBlock","name":"WrongTitle","is_variable":true},{"class":"Button","name":"MinimizeButton","is_variable":true},{"class":"Button","name":"MaximizeButton","is_variable":true},{"class":"Button","name":"CloseButton","is_variable":true}]},{"class":"NamedSlot","name":"ContentSlot","is_variable":true}]})json"),
+			TEXT(R"json({"class":"CanvasPanel","name":"WindowRoot","is_variable":true,"children":[{"class":"ListView","name":"BrokenListView","is_variable":true}]})json"),
 			false),
 		TEXT("BuildWidgetTree for compile failure extraction"));
 
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ WidgetObjectPath })),
+		TEXT("SaveAssets before compile failure extraction"));
+
 	UWidgetBlueprint* CompileFailureWidgetBP = Cast<UWidgetBlueprint>(ResolveAssetByPath(WidgetObjectPath));
 	Test.TestNotNull(TEXT("Compile failure widget blueprint exists before compile"), CompileFailureWidgetBP);
-	if (CompileFailureWidgetBP)
+	if (!CompileFailureWidgetBP)
 	{
-		// UMG treats missing BindWidget matches as warnings for newly created assets.
-		// Flip the fixture into the settled state so the compiler emits a true error
-		// contract for extract-after-failure coverage.
-		CompileFailureWidgetBP->bIsNewlyCreated = false;
+		return false;
 	}
 
-	ExpectFailureResult(
-		Test,
-		Subsystem->CompileWidgetBlueprint(WidgetObjectPath),
-		TEXT("CompileWidgetBlueprint expected failure for extract coverage"));
+	FCompilerResultsLog CompileResults;
+	CompileResults.bSilentMode = true;
+	CompileResults.bAnnotateMentionedNodes = false;
+	FKismetEditorUtilities::CompileBlueprint(
+		CompileFailureWidgetBP,
+		EBlueprintCompileOptions::SkipGarbageCollection,
+		&CompileResults);
+	Test.TestEqual(
+		TEXT("Compile failure widget blueprint settles in Error status"),
+		static_cast<int32>(CompileFailureWidgetBP->Status),
+		static_cast<int32>(BS_Error));
+	Test.TestTrue(
+		TEXT("Silent compile captures widget compile errors for extract coverage"),
+		CompileResults.NumErrors > 0);
 
 	const TSharedPtr<FJsonObject> ExtractResult = ExpectSuccessfulResult(
 		Test,
@@ -3031,8 +3276,8 @@ static bool RunWidgetCompileFailureExtractionCoverage(FAutomationTestBase& Test)
 	if (bHasRootWidget)
 	{
 		Test.TestEqual(TEXT("Compile failure keeps a degraded live widget tree when available"), WidgetTreeStatus, FString(TEXT("ok")));
-		const TSharedPtr<FJsonObject> TitleNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/TitleBarArea/WrongTitle"));
-		Test.TestNotNull(TEXT("Degraded extract still returns the authored tree snapshot"), TitleNode.Get());
+		const TSharedPtr<FJsonObject> BrokenListViewNode = FindWidgetNodeByPath(RootWidgetJson, TEXT("WindowRoot/BrokenListView"));
+		Test.TestNotNull(TEXT("Degraded extract still returns the authored tree snapshot"), BrokenListViewNode.Get());
 	}
 	else
 	{
@@ -3904,6 +4149,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 
 	Describe(TEXT("ProjectControl"), [this]()
 	{
+		It(TEXT("EditorContext"), [this]()
+		{
+			TestTrue(TEXT("Editor context coverage completes"), RunEditorContextCoverage(*this));
+		});
+
 		It(TEXT("PIEAndScreenshots"), [this]()
 		{
 			TestTrue(TEXT("PIE and screenshot coverage completes"), RunProjectControlCoverage(*this));

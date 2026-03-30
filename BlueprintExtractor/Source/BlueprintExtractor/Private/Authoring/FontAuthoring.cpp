@@ -229,7 +229,7 @@ static UFont* ResolveOrCreateFontAsset(const FString& FontAssetPath,
 	}
 
 	const FString ObjectPath = NormalizeFontAssetObjectPath(FontAssetPath);
-	if (UFont* ExistingFont = LoadObject<UFont>(nullptr, *ObjectPath))
+	if (UFont* ExistingFont = Cast<UFont>(ResolveAssetByPath(ObjectPath)))
 	{
 		return ExistingFont;
 	}

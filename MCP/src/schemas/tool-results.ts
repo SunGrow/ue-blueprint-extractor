@@ -104,6 +104,167 @@ export const CheckAssetExistsResultSchema = toolResultSchema.extend({
   package_path: z.string(),
 });
 
+export const analysisSeveritySchema = z.enum(['low', 'medium', 'high']);
+
+export const analysisFindingCategorySchema = z.enum([
+  'logic_flow',
+  'null_validity_ordering',
+  'reference_hygiene',
+  'naming_convention',
+  'replication_authority',
+]);
+
+export const analysisFindingSchema = z.object({
+  severity: analysisSeveritySchema,
+  category: analysisFindingCategorySchema,
+  title: z.string(),
+  asset_path: z.string(),
+  subject: z.string(),
+  graph_name: z.string().optional(),
+  evidence: z.array(z.string()).min(1),
+  next_steps: z.array(z.string()).min(1),
+});
+
+export const severityCountSchema = z.object({
+  low: z.number().int().min(0),
+  medium: z.number().int().min(0),
+  high: z.number().int().min(0),
+});
+
+export const analysisSummarySchema = z.object({
+  asset_path: z.string(),
+  blueprint_name: z.string(),
+  finding_count: z.number().int().min(0),
+  categories_reviewed: z.array(analysisFindingCategorySchema),
+  findings_by_severity: severityCountSchema,
+});
+
+export const contextSourceTypeSchema = z.enum(['asset', 'doc', 'prompt', 'resource']);
+
+export const contextSnippetSchema = z.object({
+  field: z.enum(['title', 'description', 'content', 'metadata']),
+  text: z.string(),
+  match_start: z.number().int().min(0).optional(),
+  match_end: z.number().int().min(0).optional(),
+});
+
+export const contextSearchResultSchema = z.object({
+  source_id: z.string(),
+  source_type: contextSourceTypeSchema,
+  title: z.string(),
+  score: z.number().min(0),
+  stale: z.boolean(),
+  uri: z.string().optional(),
+  path: z.string().optional(),
+  asset_path: z.string().optional(),
+  asset_class: z.string().optional(),
+  snippets: z.array(contextSnippetSchema).min(1),
+});
+
+export const auditFindingCategorySchema = z.enum([
+  'naming',
+  'package_hygiene',
+  'asset_family_coverage',
+  'content_budget',
+  'orphan_detection',
+]);
+
+export const auditFindingSchema = z.object({
+  severity: analysisSeveritySchema,
+  category: auditFindingCategorySchema,
+  title: z.string(),
+  asset_path: z.string(),
+  asset_name: z.string(),
+  asset_class: z.string(),
+  evidence: z.array(z.string()).min(1),
+  next_steps: z.array(z.string()).min(1),
+});
+
+export const auditCheckSummarySchema = z.object({
+  category: auditFindingCategorySchema,
+  finding_count: z.number().int().min(0),
+});
+
+export const assetFamilyCountSchema = z.object({
+  asset_class: z.string(),
+  count: z.number().int().min(0),
+});
+
+export const auditSummarySchema = z.object({
+  package_path: z.string(),
+  asset_count: z.number().int().min(0),
+  finding_count: z.number().int().min(0),
+  findings_by_severity: severityCountSchema,
+  check_summaries: z.array(auditCheckSummarySchema),
+  asset_family_counts: z.array(assetFamilyCountSchema),
+});
+
+export const ReviewBlueprintResultSchema = toolResultSchema.extend({
+  asset_path: z.string(),
+  review: analysisSummarySchema,
+  findings: z.array(analysisFindingSchema),
+});
+
+export const ProjectIndexStatusResultSchema = toolResultSchema.extend({
+  package_path: z.string(),
+  generated_at: z.string().nullable(),
+  age_ms: z.number().int().min(0).nullable(),
+  stale: z.boolean(),
+  asset_count: z.number().int().min(0),
+  repo_doc_count: z.number().int().min(0),
+  prompt_count: z.number().int().min(0),
+  resource_count: z.number().int().min(0),
+  entry_count: z.number().int().min(0),
+});
+
+export const RefreshProjectIndexResultSchema = ProjectIndexStatusResultSchema.extend({
+  refreshed: z.boolean(),
+});
+
+export const SearchProjectContextResultSchema = toolResultSchema.extend({
+  query: z.string(),
+  page: z.number().int().min(1),
+  per_page: z.number().int().min(1),
+  total_count: z.number().int().min(0),
+  total_pages: z.number().int().min(1),
+  has_more: z.boolean(),
+  stale: z.boolean(),
+  generated_at: z.string().nullable(),
+  results: z.array(contextSearchResultSchema),
+});
+
+export const AuditProjectAssetsResultSchema = toolResultSchema.extend({
+  package_path: z.string(),
+  audit: auditSummarySchema,
+  findings: z.array(auditFindingSchema),
+});
+
+export const editorContextPieSummarySchema = z.object({
+  isPlayingInEditor: z.boolean().optional(),
+  isSimulatingInEditor: z.boolean().optional(),
+  worldName: z.string().optional(),
+  worldPath: z.string().optional(),
+});
+
+export const EditorContextResultSchema = toolResultSchema.extend({
+  instanceId: z.string(),
+  projectName: z.string().optional(),
+  projectFilePath: z.string(),
+  projectDir: z.string().optional(),
+  engineRoot: z.string().optional(),
+  editorTarget: z.string().optional(),
+  remoteControlHost: z.string().optional(),
+  remoteControlPort: z.number().int().positive().optional(),
+  lastSeenAt: z.string().optional(),
+  selectedAssetPaths: z.array(z.string()).optional(),
+  selectedActorNames: z.array(z.string()).optional(),
+  openAssetEditors: z.array(z.string()).optional(),
+  activeLevel: z.string().optional(),
+  pieSummary: editorContextPieSummarySchema.optional(),
+  partial: z.boolean().optional(),
+  unsupportedSections: z.array(z.string()).optional(),
+});
+
 export const verificationSurfaceSchema = z.enum([
   'editor_offscreen',
   'pie_runtime',

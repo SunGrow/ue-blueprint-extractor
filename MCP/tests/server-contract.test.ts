@@ -276,9 +276,16 @@ describe('createBlueprintExtractorServer', () => {
     const selectEditor = tools.tools.find((tool) => tool.name === 'select_editor');
     const clearEditorSelection = tools.tools.find((tool) => tool.name === 'clear_editor_selection');
     const launchEditor = tools.tools.find((tool) => tool.name === 'launch_editor');
+    const getEditorContext = tools.tools.find((tool) => tool.name === 'get_editor_context');
+    const reviewBlueprint = tools.tools.find((tool) => tool.name === 'review_blueprint');
+    const refreshProjectIndex = tools.tools.find((tool) => tool.name === 'refresh_project_index');
+    const getProjectIndexStatus = tools.tools.find((tool) => tool.name === 'get_project_index_status');
+    const searchProjectContext = tools.tools.find((tool) => tool.name === 'search_project_context');
+    const auditProjectAssets = tools.tools.find((tool) => tool.name === 'audit_project_assets');
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
-    expect(tools.tools).toHaveLength(100);
+    expect(resources.resources).toHaveLength(38);
+    expect(tools.tools).toHaveLength(106);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -295,6 +302,8 @@ describe('createBlueprintExtractorServer', () => {
     expect(resourceUris).toContain('blueprint://motion-verification-workflow');
     expect(resourceUris).toContain('blueprint://unsupported-surfaces');
     expect(resourceUris).toContain('blueprint://ui-redesign-workflow');
+    expect(resourceUris).toContain('blueprint://analysis-workflows');
+    expect(resourceUris).toContain('blueprint://project-intelligence-workflows');
     expect(resourceTemplateUris).toContain('blueprint://examples/{family}');
     expect(resourceTemplateUris).toContain('blueprint://widget-patterns/{pattern}');
     expect(resourceTemplateUris).toContain('blueprint://captures/{capture_id}');
@@ -309,6 +318,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(selectEditor).toBeTruthy();
     expect(clearEditorSelection).toBeTruthy();
     expect(launchEditor).toBeTruthy();
+    expect(getEditorContext).toBeTruthy();
     expect(tools.tools.some((tool) => tool.name === 'create_widget_animation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_widget_animation')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'list_import_jobs')).toBe(true);
@@ -347,6 +357,11 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'apply_commonui_button_style')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'get_tool_help')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'modify_blueprint_graphs')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'review_blueprint')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'refresh_project_index')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'get_project_index_status')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'search_project_context')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'audit_project_assets')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'extract_statetree')).toBe(false);
     expect(tools.tools.some((tool) => tool.name === 'extract_dataasset')).toBe(false);
     expect(tools.tools.some((tool) => tool.name === 'extract_datatable')).toBe(false);
@@ -397,6 +412,12 @@ describe('createBlueprintExtractorServer', () => {
     expectSchemaProperty(runAutomationTests, 'verificationArtifacts');
     expectSchemaProperty(getAutomationTestRun, 'artifacts');
     expectSchemaProperty(listAutomationTestRuns, 'runs');
+    expectSchemaProperty(getEditorContext, 'selectedAssetPaths');
+    expectSchemaProperty(reviewBlueprint, 'findings');
+    expectSchemaProperty(refreshProjectIndex, 'entry_count');
+    expectSchemaProperty(getProjectIndexStatus, 'stale');
+    expectSchemaProperty(searchProjectContext, 'results');
+    expectSchemaProperty(auditProjectAssets, 'audit');
     expect(extractBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractWidgetBlueprint?.annotations?.readOnlyHint).toBe(true);
     expect(extractMaterial?.annotations?.readOnlyHint).toBe(true);
@@ -417,6 +438,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(stopPie?.annotations?.readOnlyHint).toBe(false);
     expect(relaunchPie?.annotations?.readOnlyHint).toBe(false);
     expect(waitForEditor?.annotations?.readOnlyHint).toBe(true);
+    expect(getEditorContext?.annotations?.readOnlyHint).toBe(true);
     expect(createCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
     expect(extractCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(true);
     expect(modifyCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
@@ -585,6 +607,19 @@ describe('createBlueprintExtractorServer', () => {
           widget_asset_path: '/Game/UI/WBP_Menu',
           compile_summary_json: '{"status":"Error"}',
         },
+        understand_blueprint_project: {
+          package_path: '/Game',
+          question: 'Where is the Blueprint review guidance?',
+        },
+        review_blueprint_asset: {
+          asset_path: '/Game/UI/WBP_Menu',
+        },
+        snapshot_editor_context: {
+          intent: 'Inspect the active UI editor state',
+        },
+        audit_blueprint_project: {
+          package_path: '/Game/UI',
+        },
       };
 
       const prompt = await harness.client.getPrompt({
@@ -618,6 +653,12 @@ describe('createBlueprintExtractorServer', () => {
     expect(promptTextByName.debug_widget_compile_errors).toContain('capture_widget_preview');
     expect(promptTextByName.debug_widget_compile_errors).toContain('partial verification');
     expect(promptTextByName.debug_widget_compile_errors).toContain('apply_commonui_button_style');
+    expect(promptTextByName.understand_blueprint_project).toContain('refresh_project_index');
+    expect(promptTextByName.understand_blueprint_project).toContain('search_project_context');
+    expect(promptTextByName.review_blueprint_asset).toContain('review_blueprint');
+    expect(promptTextByName.review_blueprint_asset).toContain('extract_blueprint');
+    expect(promptTextByName.snapshot_editor_context).toContain('get_editor_context');
+    expect(promptTextByName.audit_blueprint_project).toContain('audit_project_assets');
   });
 
   it('validates example catalog payloads against the live tool schemas', async () => {

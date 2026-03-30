@@ -454,4 +454,51 @@ export function registerStaticDocResources(server: Pick<McpServer, 'resource'>):
       '- Compile/save alone is never accepted as motion verification.',
     ],
   );
+
+  registerStaticTextResource(
+    server,
+    'analysis-workflows',
+    'blueprint://analysis-workflows',
+    'Job-based entry paths for deterministic Blueprint review and asset-audit workflows.',
+    [
+      'Blueprint Extractor Analysis Workflows',
+      '',
+      'Understand project:',
+      '- refresh_project_index -> get_project_index_status -> search_project_context',
+      '',
+      'Review asset:',
+      '- review_blueprint -> extract_blueprint',
+      '- review_blueprint returns deterministic findings only. Each finding includes severity, category, evidence, and next_steps.',
+      '',
+      'Audit project:',
+      '- audit_project_assets for low-noise asset metadata checks.',
+      '- Current check families: naming, package hygiene, and asset-family coverage.',
+      '',
+      'Guardrail:',
+      '- Findings-first output is intentional. Do not treat review_blueprint or audit_project_assets as autofix tools.',
+    ],
+  );
+
+  registerStaticTextResource(
+    server,
+    'project-intelligence-workflows',
+    'blueprint://project-intelligence-workflows',
+    'Job-based entry paths for indexing/searching published context and snapshotting bounded editor context.',
+    [
+      'Blueprint Extractor Project Intelligence Workflows',
+      '',
+      'Project indexing:',
+      '- refresh_project_index caches asset metadata plus published docs, prompts, and resources.',
+      '- get_project_index_status reports freshness, size, and staleness.',
+      '- search_project_context returns snippet-first results with provenance and pagination.',
+      '',
+      'Snapshot editor context:',
+      '- get_editor_context is bounded, session-bound, and read-only.',
+      '- Returned sections are intentionally limited: selected_asset_paths, selected_actor_names, open_asset_editors, active_level, and pie_summary.',
+      '',
+      'Unsupported boundaries:',
+      '- get_editor_context does not open assets, change editor focus, or switch viewports.',
+      '- Search remains metadata-first in v1; code indexing is intentionally deferred.',
+    ],
+  );
 }

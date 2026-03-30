@@ -93,6 +93,54 @@ describe('ProjectController', () => {
     expect(result.stdout).toContain('MyGameEditor');
   });
 
+  it('normalizes Windows project paths before passing them to the build script', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-win-build-'));
+    tempDirs.push(root);
+
+    const engineRoot = join(root, 'UE_5.7');
+    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat');
+    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
+    await writeFile(buildScript, '@echo off\r\n');
+
+    let capturedExecutable = '';
+    let capturedArgs: string[] = [];
+    let capturedCwd = '';
+    const controller = new ProjectController({
+      env: {
+        UE_ENGINE_ROOT: engineRoot,
+        UE_PROJECT_TARGET: 'MyGameEditor',
+      },
+      platform: 'win32',
+      runCommand: async (executable, args, options) => {
+        capturedExecutable = executable;
+        capturedArgs = args;
+        capturedCwd = options.cwd ?? '';
+        return {
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+        };
+      },
+    });
+
+    const result = await controller.compileProjectCode({
+      projectPath: 'C:/Projects/My Game/MyGame.uproject',
+    });
+
+    expect(result.success).toBe(true);
+    expect(capturedExecutable).toBe(buildScript);
+    expect(capturedArgs).toEqual([
+      'MyGameEditor',
+      'Win64',
+      'Development',
+      '-Project=C:\\Projects\\My Game\\MyGame.uproject',
+      '-WaitMutex',
+      '-NoHotReloadFromIDE',
+    ]);
+    expect(capturedCwd).toBe('C:/Projects/My Game');
+    expect(result.projectPath).toBe('C:/Projects/My Game/MyGame.uproject');
+  });
+
   it('wraps Windows batch files through cmd.exe to avoid spawn EINVAL', () => {
     const invocation = resolveCommandInvocation(
       'C:/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat',

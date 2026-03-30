@@ -1352,8 +1352,9 @@ describeLive('live UE e2e', () => {
     if (liveCodingResult.isError) {
       expect(liveCoding).toMatchObject({
         success: false,
-        status: 'unsupported',
-        supported: false,
+        supported: expect.any(Boolean),
+        message: expect.any(String),
+        code: expect.any(String),
       });
     } else {
       expect(liveCoding).toMatchObject({

@@ -315,6 +315,64 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
       'Return the minimal follow-up extract/modify/compile sequence needed to fix the compile state, then finish with capture_widget_preview or explicit partial verification if rendering is blocked.',
     ].join('\n'),
   },
+  understand_blueprint_project: {
+    title: 'Understand Blueprint Project',
+    description: 'Plan a project-understanding pass that uses the published project-intelligence tools and resources.',
+    args: {
+      package_path: z.string().default('/Game'),
+      question: z.string(),
+    },
+    buildPrompt: ({ package_path, question }) => [
+      `Understand the Blueprint Extractor project context rooted at ${package_path}.`,
+      `Question: ${question}.`,
+      'Start with refresh_project_index if the cache is missing or stale, then inspect get_project_index_status and search_project_context.',
+      'Prefer published docs, prompts, and resources before making assumptions from memory.',
+      'When the answer depends on one concrete asset, narrow into extract_asset, extract_blueprint, or extract_widget_blueprint instead of staying at search-summary level.',
+    ].join('\n'),
+  },
+  review_blueprint_asset: {
+    title: 'Review Blueprint Asset',
+    description: 'Plan a deterministic read-only Blueprint review pass.',
+    args: {
+      asset_path: z.string(),
+      review_goal: z.string().optional(),
+    },
+    buildPrompt: ({ asset_path, review_goal }) => [
+      `Review Blueprint asset ${asset_path}.`,
+      review_goal ? `Review goal: ${review_goal}.` : 'Focus on deterministic graph/data issues only.',
+      'Use review_blueprint first, then inspect the cited evidence with extract_blueprint when a finding needs deeper confirmation.',
+      'Keep the output findings-first and include only issues supported by extracted evidence.',
+      'Do not propose autofixes that are not backed by the current public tool surface.',
+    ].join('\n'),
+  },
+  snapshot_editor_context: {
+    title: 'Snapshot Editor Context',
+    description: 'Plan a bounded read-only editor-context inspection.',
+    args: {
+      intent: z.string(),
+    },
+    buildPrompt: ({ intent }) => [
+      `Snapshot the active editor context for: ${intent}.`,
+      'Use get_active_editor first when selection health is unclear, then call get_editor_context for bounded read-only state.',
+      'Treat the result as session-bound and partial when the editor is unbound, headless, or not rendering.',
+      'Do not suggest focus changes, asset opening, or viewport switching because get_editor_context is intentionally query-only.',
+    ].join('\n'),
+  },
+  audit_blueprint_project: {
+    title: 'Audit Blueprint Project',
+    description: 'Plan a low-noise project asset audit pass.',
+    args: {
+      package_path: z.string().default('/Game'),
+      class_filter: z.string().optional(),
+    },
+    buildPrompt: ({ package_path, class_filter }) => [
+      `Audit project assets under ${package_path}.`,
+      class_filter ? `Restrict the audit to class filter: ${class_filter}.` : 'Audit all asset classes in scope.',
+      'Use audit_project_assets for low-noise metadata checks, then use extract_asset or extract_blueprint only for follow-up on concrete findings.',
+      'Present results grouped by check family with counts first, then the actionable findings.',
+      'Keep unsupported checks out of scope instead of widening heuristics until they become noisy.',
+    ].join('\n'),
+  },
 };
 
 export function registerPromptCatalog(
