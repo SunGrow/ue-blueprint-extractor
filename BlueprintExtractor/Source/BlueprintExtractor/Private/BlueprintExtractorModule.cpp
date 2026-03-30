@@ -21,7 +21,7 @@ DEFINE_LOG_CATEGORY(LogBlueprintExtractor);
 namespace
 {
 
-static FString SerializeJsonObject(const TSharedPtr<FJsonObject>& JsonObject)
+static FString SerializeRegistryJsonObject(const TSharedPtr<FJsonObject>& JsonObject)
 {
 	FString OutString;
 	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
@@ -123,7 +123,7 @@ void FBlueprintExtractorModule::RefreshEditorRegistry()
 	Snapshot->SetNumberField(TEXT("remoteControlPort"), GetRemoteControlHttpPort());
 	Snapshot->SetStringField(TEXT("lastSeenAt"), LastRegistryHeartbeat);
 
-	if (!FFileHelper::SaveStringToFile(SerializeJsonObject(Snapshot), *RegistryFilePath))
+	if (!FFileHelper::SaveStringToFile(SerializeRegistryJsonObject(Snapshot), *RegistryFilePath))
 	{
 		UE_LOG(LogBlueprintExtractor, Warning, TEXT("Failed to write BlueprintExtractor editor registry file: %s"), *RegistryFilePath);
 	}
