@@ -1319,12 +1319,15 @@ static bool QueueLinkedStateSelector(const TSharedPtr<FJsonObject>& StateObject,
 	return true;
 }
 
-static bool ApplyTransitionTarget(const TSharedPtr<FJsonObject>& TransitionObject,
-                                  FStateTreeTransition& Transition,
-                                  TArray<FDeferredStateLink>& DeferredLinks,
-                                  TArray<FString>& OutErrors,
-                                  const FString& Path)
+static bool TryGetTransitionTargetLinkType(const TSharedPtr<FJsonObject>& TransitionObject,
+                                           EStateTreeTransitionType& OutLinkType,
+                                           bool& bOutHasTargetState,
+                                           TArray<FString>& OutErrors,
+                                           const FString& Path)
 {
+	bOutHasTargetState = false;
+	OutLinkType = EStateTreeTransitionType::GotoState;
+
 	const TSharedPtr<FJsonObject>* TargetObject = nullptr;
 	if (!TransitionObject.IsValid()
 		|| !TransitionObject->TryGetObjectField(TEXT("targetState"), TargetObject)
@@ -1334,13 +1337,70 @@ static bool ApplyTransitionTarget(const TSharedPtr<FJsonObject>& TransitionObjec
 		return true;
 	}
 
-	EStateTreeTransitionType LinkType = EStateTreeTransitionType::GotoState;
+	bOutHasTargetState = true;
+
 	FString LinkTypeString;
 	if ((*TargetObject)->TryGetStringField(TEXT("linkType"), LinkTypeString)
 		&& !LinkTypeString.IsEmpty()
-		&& !TryParseEnumByName(StaticEnum<EStateTreeTransitionType>(), LinkTypeString, LinkType))
+		&& !TryParseEnumByName(StaticEnum<EStateTreeTransitionType>(), LinkTypeString, OutLinkType))
 	{
 		OutErrors.Add(FString::Printf(TEXT("%s.targetState.linkType '%s' is invalid."), *Path, *LinkTypeString));
+		return false;
+	}
+
+	return true;
+}
+
+static bool ValidateLinkedAssetTransitionTarget(UStateTreeState* OwnerState,
+                                                const TSharedPtr<FJsonObject>& TransitionObject,
+                                                TArray<FString>& OutErrors,
+                                                const FString& Path)
+{
+	if (!OwnerState || OwnerState->Type != EStateTreeStateType::LinkedAsset)
+	{
+		return true;
+	}
+
+	EStateTreeTransitionType LinkType = EStateTreeTransitionType::GotoState;
+	bool bHasTargetState = false;
+	if (!TryGetTransitionTargetLinkType(TransitionObject, LinkType, bHasTargetState, OutErrors, Path))
+	{
+		return false;
+	}
+
+	if (!bHasTargetState || LinkType != EStateTreeTransitionType::GotoState)
+	{
+		return true;
+	}
+
+	OutErrors.Add(FString::Printf(
+		TEXT("%s.targetState: LinkedAsset state '%s' does not support GotoState targetState selectors to peer states in the current tree. Unreal compiles these links as 'None'; use enterConditions on the destination states or a supported transition topology instead."),
+		*Path,
+		*OwnerState->GetPath()));
+	return false;
+}
+
+static bool ApplyTransitionTarget(const TSharedPtr<FJsonObject>& TransitionObject,
+                                  FStateTreeTransition& Transition,
+                                  TArray<FDeferredStateLink>& DeferredLinks,
+                                  TArray<FString>& OutErrors,
+                                  const FString& Path)
+{
+	const TSharedPtr<FJsonObject>* TargetObject = nullptr;
+	EStateTreeTransitionType LinkType = EStateTreeTransitionType::GotoState;
+	bool bHasTargetState = false;
+	if (!TryGetTransitionTargetLinkType(TransitionObject, LinkType, bHasTargetState, OutErrors, Path))
+	{
+		return false;
+	}
+
+	if (!bHasTargetState
+		|| !TransitionObject.IsValid()
+		|| !TransitionObject->TryGetObjectField(TEXT("targetState"), TargetObject)
+		|| !TargetObject
+		|| !TargetObject->IsValid())
+	{
+		return true;
 	}
 
 	Transition.State = FStateTreeStateLink(LinkType);
@@ -1461,12 +1521,18 @@ static bool BuildTransitionArray(UStateTreeState* OwnerState,
 				bValidationOnly);
 		}
 
+		const FString TransitionPath = FString::Printf(TEXT("%s[%d]"), *Path, Index);
+		if (!ValidateLinkedAssetTransitionTarget(OwnerState, TransitionObject, OutErrors, TransitionPath))
+		{
+			continue;
+		}
+
 		ApplyTransitionTarget(
 			TransitionObject,
 			Transition,
 			Scratch.DeferredLinks,
 			OutErrors,
-			FString::Printf(TEXT("%s[%d]"), *Path, Index));
+			TransitionPath);
 	}
 
 	return OutErrors.Num() == 0;
@@ -2032,6 +2098,11 @@ static bool PatchTransition(UStateTree* StateTree,
 
 	if (EffectivePayload->HasField(TEXT("targetState")))
 	{
+		if (!ValidateLinkedAssetTransitionTarget(ExistingHandle->OwnerState, EffectivePayload, OutErrors, ExistingHandle->Path))
+		{
+			return false;
+		}
+
 		FTreeMutationScratch Scratch;
 		ApplyTransitionTarget(EffectivePayload, *ExistingHandle->Transition, Scratch.DeferredLinks, OutErrors, ExistingHandle->Path);
 		ResolveDeferredLinks(EditorData, Scratch, OutErrors, SourceIndex);

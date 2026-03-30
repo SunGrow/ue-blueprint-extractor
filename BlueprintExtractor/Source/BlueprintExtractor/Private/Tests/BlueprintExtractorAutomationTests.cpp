@@ -1653,7 +1653,117 @@ static bool RunStateTreeTransitionTargetCoverage(FAutomationTestBase& Test)
 	const FString FailurePayloadText = SerializeJsonObjectForSearch(AmbiguousFailure);
 	Test.TestTrue(TEXT("Ambiguous stateName surfaces a validation error"), FailurePayloadText.Contains(TEXT("stateName 'SharedTarget' is ambiguous")));
 	Test.TestFalse(TEXT("Ambiguous stateName does not fall through to None compile error"), FailurePayloadText.Contains(TEXT("Failed to resolve transition to state 'None'")));
+
+	const FString LinkedSubtreeAssetPath = MakeUniqueAssetPath(TEXT("ST_TransitionTargetsLinkedSubtree"));
+	const FString LinkedSubtreeObjectPath = MakeObjectPath(LinkedSubtreeAssetPath);
+	const FString LinkedStateTreeAssetPath = MakeUniqueAssetPath(TEXT("ST_TransitionTargetsLinkedAsset"));
+	const FString LinkedStateTreeObjectPath = MakeObjectPath(LinkedStateTreeAssetPath);
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateStateTree(
+			LinkedSubtreeAssetPath,
+			FString::Printf(TEXT(R"json({"schemaClassPath":"%s","states":[{"name":"Root","type":"State"}]})json"), StateTreeSchemaPath),
+			false),
+		TEXT("CreateStateTree linked subtree fixture"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateStateTree(
+			LinkedStateTreeAssetPath,
+			FString::Printf(TEXT(R"json({"schemaClassPath":"%s"})json"), StateTreeSchemaPath),
+			false),
+		TEXT("CreateStateTree linked-asset transition fixture"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyStateTree(
+			LinkedStateTreeObjectPath,
+			TEXT("replace_tree"),
+			FString::Printf(
+				TEXT(R"json({"schemaClassPath":"%s","states":[{"name":"Root","type":"State","children":[{"name":"TrainerAlert","type":"LinkedAsset","linkedAsset":"%s"},{"name":"GoToDestination","type":"State"}]}]})json"),
+				StateTreeSchemaPath,
+				*LinkedSubtreeObjectPath),
+			false),
+		TEXT("ModifyStateTree replace_tree linked-asset transition fixture"));
+
+	const TSharedPtr<FJsonObject> LinkedAssetFailure = ExpectFailureResult(
+		Test,
+		Subsystem->ModifyStateTree(
+			LinkedStateTreeObjectPath,
+			TEXT("patch_state"),
+			TEXT(R"json({"statePath":"Root/TrainerAlert","state":{"transitions":[{"trigger":"OnTick","targetState":{"statePath":"Root/GoToDestination","linkType":"GotoState"}}]}})json"),
+			false),
+		TEXT("ModifyStateTree patch_state linked-asset goto target"));
+	if (!LinkedAssetFailure.IsValid())
+	{
+		return false;
+	}
+
+	const FString LinkedAssetFailureText = SerializeJsonObjectForSearch(LinkedAssetFailure);
+	Test.TestTrue(TEXT("LinkedAsset transition failure mentions LinkedAsset topology"), LinkedAssetFailureText.Contains(TEXT("LinkedAsset state")));
+	Test.TestTrue(TEXT("LinkedAsset transition failure recommends enterConditions workaround"), LinkedAssetFailureText.Contains(TEXT("enterConditions")));
+	Test.TestFalse(TEXT("LinkedAsset transition failure does not fall through to None compile error"), LinkedAssetFailureText.Contains(TEXT("Failed to resolve transition to state 'None'")));
 	return true;
+}
+
+static bool RunAnimMontageAuthoringCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString FailedPreviewAssetPath = MakeUniqueAssetPath(TEXT("AM_FailedPreview"));
+	const FString DifferentAssetPath = MakeUniqueAssetPath(TEXT("AM_AfterFailedPreviewOther"));
+	const FString SequenceLengthAssetPath = MakeUniqueAssetPath(TEXT("AM_SequenceLengthHint"));
+
+	ExpectFailureResult(
+		Test,
+		Subsystem->CreateAnimMontage(
+			FailedPreviewAssetPath,
+			FString::Printf(
+				TEXT(R"json({"skeleton":"%s","previewMesh":"%s","sections":[{"sectionName":"Late","startTime":1.0}]})json"),
+				EngineSkeletonPath,
+				EnginePreviewMeshPath),
+			true),
+		TEXT("CreateAnimMontage validate_only invalid preview payload"));
+
+	Test.TestFalse(
+		TEXT("Failed validate_only does not leave a phantom montage at the requested path"),
+		DoesAssetExist(FailedPreviewAssetPath));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateAnimMontage(
+			DifferentAssetPath,
+			FString::Printf(TEXT(R"json({"skeleton":"%s","previewMesh":"%s"})json"), EngineSkeletonPath, EnginePreviewMeshPath),
+			false),
+		TEXT("CreateAnimMontage different path after failed validate_only"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateAnimMontage(
+			FailedPreviewAssetPath,
+			FString::Printf(TEXT(R"json({"skeleton":"%s","previewMesh":"%s"})json"), EngineSkeletonPath, EnginePreviewMeshPath),
+			false),
+		TEXT("CreateAnimMontage same path after failed validate_only"));
+
+	const bool bSequenceLengthValidationSucceeded = ExpectValidateOnlyResult(
+		Test,
+		Subsystem->CreateAnimMontage(
+			SequenceLengthAssetPath,
+			FString::Printf(
+				TEXT(R"json({"skeleton":"%s","previewMesh":"%s","sequenceLength":5.0,"sections":[{"sectionName":"Intro","startTime":0.0},{"sectionName":"Late","startTime":4.0}],"notifies":[{"notifyName":"LateCue","time":4.5}]})json"),
+				EngineSkeletonPath,
+				EnginePreviewMeshPath),
+			true),
+		TEXT("CreateAnimMontage validate_only honors sequenceLength for late sections and notifies"));
+
+	Test.TestTrue(TEXT("AnimMontage sequenceLength hint allows late metadata validation"), bSequenceLengthValidationSucceeded);
+	Test.TestFalse(TEXT("sequenceLength validate_only does not create an asset"), DoesAssetExist(SequenceLengthAssetPath));
+	return bSequenceLengthValidationSucceeded;
 }
 
 static bool RunInlineInstancedDataAssetCoverage(FAutomationTestBase& Test)
@@ -4449,6 +4559,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("StateTreeTransitionTargets"), [this]()
 		{
 			TestTrue(TEXT("StateTree transition target coverage completes"), RunStateTreeTransitionTargetCoverage(*this));
+		});
+
+		It(TEXT("AnimMontageAuthoring"), [this]()
+		{
+			TestTrue(TEXT("AnimMontage authoring coverage completes"), RunAnimMontageAuthoringCoverage(*this));
 		});
 
 		It(TEXT("DataAssetInlineInstancedGraph"), [this]()

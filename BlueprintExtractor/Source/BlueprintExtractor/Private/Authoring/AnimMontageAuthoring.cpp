@@ -94,6 +94,37 @@ static bool IsValidMontageTime(const UAnimMontage* AnimMontage, const float Time
 	return Time >= 0.0f && Time <= Length + UE_KINDA_SMALL_NUMBER;
 }
 
+static float GetRequestedSequenceLength(const TSharedPtr<FJsonObject>& Payload)
+{
+	double RequestedLength = 0.0;
+	if (TryGetNumberField(Payload, TEXT("sequenceLength"), RequestedLength) && RequestedLength > 0.0)
+	{
+		return static_cast<float>(RequestedLength);
+	}
+
+	return 0.0f;
+}
+
+static void RefreshMontageCompositeLength(UAnimMontage* AnimMontage,
+                                         const TSharedPtr<FJsonObject>& Payload)
+{
+	if (!AnimMontage)
+	{
+		return;
+	}
+
+	float CompositeLength = AnimMontage->CalculateSequenceLength();
+	if (const float RequestedLength = GetRequestedSequenceLength(Payload); RequestedLength > 0.0f)
+	{
+		CompositeLength = FMath::Max(CompositeLength, RequestedLength);
+	}
+
+	if (CompositeLength > 0.0f)
+	{
+		AnimMontage->SetCompositeLength(CompositeLength);
+	}
+}
+
 static UAnimSequence* ResolveSourceAnimation(const TSharedPtr<FJsonObject>& Payload,
                                              TArray<FString>& OutErrors)
 {
@@ -1011,7 +1042,9 @@ static bool ReplaceSections(UAnimMontage* AnimMontage,
 	return true;
 }
 
-static bool FinalizeAnimMontage(UAnimMontage* AnimMontage, TArray<FString>& OutErrors)
+static bool FinalizeAnimMontage(UAnimMontage* AnimMontage,
+                                const TSharedPtr<FJsonObject>& Payload,
+                                TArray<FString>& OutErrors)
 {
 	if (!AnimMontage)
 	{
@@ -1031,7 +1064,7 @@ static bool FinalizeAnimMontage(UAnimMontage* AnimMontage, TArray<FString>& OutE
 		return Left.GetTime() < Right.GetTime();
 	});
 	UAnimMontageFactory::EnsureStartingSection(AnimMontage);
-	AnimMontage->SetCompositeLength(AnimMontage->CalculateSequenceLength());
+	RefreshMontageCompositeLength(AnimMontage, Payload);
 
 	for (const FCompositeSection& Section : AnimMontage->CompositeSections)
 	{
@@ -1089,6 +1122,8 @@ static bool ApplyCreatePayload(UAnimMontage* AnimMontage,
 		return false;
 	}
 
+	RefreshMontageCompositeLength(AnimMontage, Payload);
+
 	const TArray<TSharedPtr<FJsonValue>> Sections = GetArrayField(Payload, TEXT("sections"));
 	if (Sections.Num() > 0 && !ReplaceSections(AnimMontage, Sections, OutErrors))
 	{
@@ -1101,7 +1136,7 @@ static bool ApplyCreatePayload(UAnimMontage* AnimMontage,
 		return false;
 	}
 
-	return FinalizeAnimMontage(AnimMontage, OutErrors);
+	return FinalizeAnimMontage(AnimMontage, Payload, OutErrors);
 }
 
 static bool ApplyModifyOperation(UAnimMontage* AnimMontage,
@@ -1115,7 +1150,7 @@ static bool ApplyModifyOperation(UAnimMontage* AnimMontage,
 		{
 			return false;
 		}
-		return FinalizeAnimMontage(AnimMontage, OutErrors);
+		return FinalizeAnimMontage(AnimMontage, Payload, OutErrors);
 	}
 
 	if (Operation.Equals(TEXT("patch_notify"), ESearchCase::IgnoreCase))
@@ -1124,7 +1159,7 @@ static bool ApplyModifyOperation(UAnimMontage* AnimMontage,
 		{
 			return false;
 		}
-		return FinalizeAnimMontage(AnimMontage, OutErrors);
+		return FinalizeAnimMontage(AnimMontage, Payload, OutErrors);
 	}
 
 	if (Operation.Equals(TEXT("replace_sections"), ESearchCase::IgnoreCase))
@@ -1133,7 +1168,7 @@ static bool ApplyModifyOperation(UAnimMontage* AnimMontage,
 		{
 			return false;
 		}
-		return FinalizeAnimMontage(AnimMontage, OutErrors);
+		return FinalizeAnimMontage(AnimMontage, Payload, OutErrors);
 	}
 
 	if (Operation.Equals(TEXT("replace_slots"), ESearchCase::IgnoreCase))
@@ -1142,7 +1177,7 @@ static bool ApplyModifyOperation(UAnimMontage* AnimMontage,
 		{
 			return false;
 		}
-		return FinalizeAnimMontage(AnimMontage, OutErrors);
+		return FinalizeAnimMontage(AnimMontage, Payload, OutErrors);
 	}
 
 	OutErrors.Add(FString::Printf(TEXT("Unsupported AnimMontage operation '%s'."), *Operation));
@@ -1177,6 +1212,27 @@ static UAnimMontage* CreateMontageAsset(UObject* Outer,
 		Outer == GetTransientPackage() ? RF_Transient : RF_Public | RF_Standalone,
 		nullptr,
 		GWarn));
+}
+
+static void CleanupFailedCreatedMontage(UAnimMontage*& AnimMontage)
+{
+	if (!AnimMontage)
+	{
+		return;
+	}
+
+	if (UPackage* Package = AnimMontage->GetOutermost())
+	{
+		Package->SetDirtyFlag(false);
+	}
+
+	AnimMontage->ClearFlags(RF_Public | RF_Standalone);
+	AnimMontage->Rename(
+		nullptr,
+		GetTransientPackage(),
+		REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional);
+	AnimMontage->MarkAsGarbage();
+	AnimMontage = nullptr;
 }
 
 } // namespace AnimMontageAuthoringInternal
@@ -1267,6 +1323,7 @@ TSharedPtr<FJsonObject> FAnimMontageAuthoring::Create(const FString& AssetPath,
 		{
 			Context.AddError(TEXT("apply_error"), Error, AssetPath);
 		}
+		CleanupFailedCreatedMontage(AnimMontage);
 		return Context.BuildResult(false);
 	}
 
