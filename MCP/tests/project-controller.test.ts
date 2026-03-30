@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ProjectController, classifyChangedPaths, classifyBuildError, resolveCommandInvocation } from '../src/project-controller.js';
+import {
+  ProjectController,
+  classifyChangedPaths,
+  classifyBuildError,
+  resolveBuildScript,
+  resolveCommandInvocation,
+  resolveEditorExecutable,
+} from '../src/project-controller.js';
 
 describe('ProjectController', () => {
   const tempDirs: string[] = [];
@@ -165,6 +172,34 @@ describe('ProjectController', () => {
         stdio: 'ignore',
       }),
     }]);
+  });
+
+  it('resolves platform-specific build scripts and commandlet executables', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-platforms-'));
+    tempDirs.push(root);
+
+    const linuxEngineRoot = join(root, 'UE_5.7-linux');
+    const macEngineRoot = join(root, 'UE_5.7-mac');
+
+    const linuxBuild = join(linuxEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh');
+    const linuxCmd = join(linuxEngineRoot, 'Engine', 'Binaries', 'Linux', 'UnrealEditor-Cmd');
+    const macBuild = join(macEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Mac', 'Build.sh');
+    const macCmd = join(macEngineRoot, 'Engine', 'Binaries', 'Mac', 'UnrealEditor-Cmd');
+
+    await mkdir(join(linuxEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux'), { recursive: true });
+    await mkdir(join(linuxEngineRoot, 'Engine', 'Binaries', 'Linux'), { recursive: true });
+    await mkdir(join(macEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Mac'), { recursive: true });
+    await mkdir(join(macEngineRoot, 'Engine', 'Binaries', 'Mac'), { recursive: true });
+
+    await writeFile(linuxBuild, '#!/usr/bin/env bash\n');
+    await writeFile(linuxCmd, '#!/usr/bin/env bash\n');
+    await writeFile(macBuild, '#!/usr/bin/env bash\n');
+    await writeFile(macCmd, '#!/usr/bin/env bash\n');
+
+    await expect(resolveBuildScript(linuxEngineRoot, 'linux')).resolves.toBe(linuxBuild);
+    await expect(resolveEditorExecutable(linuxEngineRoot, 'linux', 'commandlet')).resolves.toBe(linuxCmd);
+    await expect(resolveBuildScript(macEngineRoot, 'darwin')).resolves.toBe(macBuild);
+    await expect(resolveEditorExecutable(macEngineRoot, 'darwin', 'commandlet')).resolves.toBe(macCmd);
   });
 
   it('waits for the editor to disconnect and reconnect after restart', async () => {

@@ -190,6 +190,39 @@ export function resolveCommandInvocation(
   };
 }
 
+export function getBuildScriptCandidates(engineRoot: string, platform: NodeJS.Platform): string[] {
+  if (platform === 'win32') {
+    return [
+      resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat'),
+    ];
+  }
+
+  if (platform === 'darwin') {
+    return [
+      resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Mac', 'Build.sh'),
+      resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh'),
+    ];
+  }
+
+  return [
+    resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh'),
+    resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh'),
+  ];
+}
+
+export async function resolveBuildScript(engineRoot: string, platform: NodeJS.Platform): Promise<string> {
+  for (const candidate of getBuildScriptCandidates(engineRoot, platform)) {
+    try {
+      await access(candidate, fsConstants.F_OK);
+      return candidate;
+    } catch {
+      // Try the next platform-specific location.
+    }
+  }
+
+  throw new Error(`Unable to locate an Unreal build script under ${engineRoot} for platform ${platform}.`);
+}
+
 export async function resolveEditorExecutable(
   engineRoot: string,
   platform: NodeJS.Platform,
@@ -551,11 +584,7 @@ export class ProjectController implements ProjectControllerLike {
       throw new Error('compile_project_code requires target or UE_PROJECT_TARGET/UE_EDITOR_TARGET');
     }
 
-    const buildScript = this.platform === 'win32'
-      ? resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat')
-      : resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
-
-    await access(buildScript, fsConstants.F_OK);
+    const buildScript = await resolveBuildScript(engineRoot, this.platform);
 
     let uhtCacheFilesDeleted: string[] | undefined;
     if (request.clearUhtCache) {

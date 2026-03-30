@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   getProjectAutomationContext,
+  getHeuristicEngineCandidates,
   HEURISTIC_ENGINE_CANDIDATES,
   rememberExternalBuild,
   resolveProjectInputs,
 } from '../src/helpers/project-resolution.js';
+import {
+  buildEngineAssociationCandidates,
+  filesystemPathsEqual,
+} from '../src/helpers/workspace-project.js';
 
 describe('rememberExternalBuild', () => {
   it('maps CompileProjectCodeResult fields into a flat summary object', () => {
@@ -240,8 +245,34 @@ describe('resolveProjectInputs', () => {
     expect(result.sources.engineRoot).toBe('explicit');
   });
 
-  it('includes UE 5.7 in the filesystem heuristic candidate list', () => {
-    expect(HEURISTIC_ENGINE_CANDIDATES[0]).toBe('C:/Program Files/Epic Games/UE_5.7');
-    expect(HEURISTIC_ENGINE_CANDIDATES).toContain('C:/Program Files/Epic Games/UE_5.7');
+  it('normalizes Windows-style filesystem paths independently of the host platform', () => {
+    expect(filesystemPathsEqual('C:/Proj/Proj.uproject', 'C:\\Proj\\Proj.uproject')).toBe(true);
+  });
+
+  it('builds engine association candidates for Windows and macOS installs', () => {
+    expect(buildEngineAssociationCandidates('5.7', 'win32')).toContain('C:/Program Files/Epic Games/UE_5.7');
+    expect(buildEngineAssociationCandidates('5.7', 'darwin')).toContain('/Users/Shared/Epic Games/UE_5.7');
+  });
+
+  it('includes host-appropriate filesystem heuristic candidates', () => {
+    if (process.platform === 'win32') {
+      expect(HEURISTIC_ENGINE_CANDIDATES[0]).toBe('C:/Program Files/Epic Games/UE_5.7');
+      expect(HEURISTIC_ENGINE_CANDIDATES).toContain('C:/Program Files/Epic Games/UE_5.7');
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      expect(HEURISTIC_ENGINE_CANDIDATES[0]).toBe('/Users/Shared/Epic Games/UE_5.7');
+      expect(HEURISTIC_ENGINE_CANDIDATES).toContain('/Users/Shared/EpicGames/UE_5.7');
+      return;
+    }
+
+    expect(HEURISTIC_ENGINE_CANDIDATES).toEqual([]);
+  });
+
+  it('exposes deterministic heuristic candidates for explicit platforms', () => {
+    expect(getHeuristicEngineCandidates('win32')[0]).toBe('C:/Program Files/Epic Games/UE_5.7');
+    expect(getHeuristicEngineCandidates('darwin')[0]).toBe('/Users/Shared/Epic Games/UE_5.7');
+    expect(getHeuristicEngineCandidates('linux')).toEqual([]);
   });
 });

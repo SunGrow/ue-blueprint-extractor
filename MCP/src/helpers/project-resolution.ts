@@ -23,6 +23,7 @@ type ResolveProjectInputsDeps = {
   firstDefinedString(...values: Array<unknown>): string | undefined;
   env?: NodeJS.ProcessEnv;
   workspaceProjectPath?: string;
+  platform?: NodeJS.Platform;
 };
 
 export function rememberExternalBuild(result: CompileProjectCodeResult): Record<string, unknown> {
@@ -65,44 +66,91 @@ export async function getProjectAutomationContext(
   return nextContext;
 }
 
-let cachedHeuristicEngineRoot: string | undefined;
+const cachedHeuristicEngineRoots = new Map<NodeJS.Platform, string>();
 
-export const HEURISTIC_ENGINE_CANDIDATES = [
-  'C:/Program Files/Epic Games/UE_5.7',
-  'C:/Program Files/Epic Games/UE_5.6',
-  'C:/Program Files/Epic Games/UE_5.5',
-  'C:/Program Files/Epic Games/UE_5.4',
-  'C:/Program Files/Epic Games/UE_5.3',
-];
-
-const ENGINE_MARKER = 'Engine/Build/BatchFiles/Build.bat';
-
-async function probeEngineRootHeuristic(): Promise<string | undefined> {
-  if (cachedHeuristicEngineRoot !== undefined) {
-    return cachedHeuristicEngineRoot || undefined;
+export function getHeuristicEngineCandidates(platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === 'win32') {
+    return [
+      'C:/Program Files/Epic Games/UE_5.7',
+      'C:/Program Files/Epic Games/UE_5.6',
+      'C:/Program Files/Epic Games/UE_5.5',
+      'C:/Program Files/Epic Games/UE_5.4',
+      'C:/Program Files/Epic Games/UE_5.3',
+    ];
   }
 
-  for (const candidate of HEURISTIC_ENGINE_CANDIDATES) {
+  if (platform === 'darwin') {
+    return [
+      '/Users/Shared/Epic Games/UE_5.7',
+      '/Users/Shared/Epic Games/UE_5.6',
+      '/Users/Shared/Epic Games/UE_5.5',
+      '/Users/Shared/Epic Games/UE_5.4',
+      '/Users/Shared/Epic Games/UE_5.3',
+      '/Users/Shared/EpicGames/UE_5.7',
+      '/Users/Shared/EpicGames/UE_5.6',
+      '/Users/Shared/EpicGames/UE_5.5',
+      '/Users/Shared/EpicGames/UE_5.4',
+      '/Users/Shared/EpicGames/UE_5.3',
+    ];
+  }
+
+  return [];
+}
+
+export const HEURISTIC_ENGINE_CANDIDATES = getHeuristicEngineCandidates();
+
+function getEngineMarkers(platform: NodeJS.Platform): string[] {
+  if (platform === 'win32') {
+    return ['Engine/Build/BatchFiles/Build.bat'];
+  }
+
+  if (platform === 'darwin') {
+    return [
+      'Engine/Build/BatchFiles/Mac/Build.sh',
+      'Engine/Build/BatchFiles/Build.sh',
+    ];
+  }
+
+  return [
+    'Engine/Build/BatchFiles/Linux/Build.sh',
+    'Engine/Build/BatchFiles/Build.sh',
+  ];
+}
+
+async function accessFirstMatchingMarker(root: string, markers: string[]): Promise<boolean> {
+  for (const marker of markers) {
     try {
-      await access(resolve(candidate, ENGINE_MARKER), fsConstants.F_OK);
-      cachedHeuristicEngineRoot = candidate;
-      return candidate;
+      await access(resolve(root, marker), fsConstants.F_OK);
+      return true;
     } catch {
-      // not found, try next
+      // try the next marker
     }
   }
 
-  cachedHeuristicEngineRoot = '';
+  return false;
+}
+
+async function probeEngineRootHeuristic(platform: NodeJS.Platform): Promise<string | undefined> {
+  if (cachedHeuristicEngineRoots.has(platform)) {
+    return cachedHeuristicEngineRoots.get(platform) || undefined;
+  }
+
+  for (const candidate of getHeuristicEngineCandidates(platform)) {
+    if (await accessFirstMatchingMarker(candidate, getEngineMarkers(platform))) {
+      cachedHeuristicEngineRoots.set(platform, candidate);
+      return candidate;
+    }
+  }
+
+  cachedHeuristicEngineRoots.set(platform, '');
   return undefined;
 }
 
-async function probePreferredEngineRoot(candidates: string[]): Promise<string | undefined> {
+async function probePreferredEngineRoot(candidates: string[], platform: NodeJS.Platform): Promise<string | undefined> {
+  const markers = getEngineMarkers(platform);
   for (const candidate of candidates) {
-    try {
-      await access(resolve(candidate, ENGINE_MARKER), fsConstants.F_OK);
+    if (await accessFirstMatchingMarker(candidate, markers)) {
       return candidate;
-    } catch {
-      // try next candidate
     }
   }
 
@@ -118,6 +166,7 @@ export async function resolveProjectInputs(
     firstDefinedString,
     env = process.env,
     workspaceProjectPath,
+    platform = process.platform,
   } = deps;
 
   let context: ProjectAutomationContext | null = null;
@@ -144,7 +193,7 @@ export async function resolveProjectInputs(
   const projectPath = firstDefinedString(request.project_path, projectPathFromContext, projectPathFromWorkspace, projectPathFromEnv);
   const target = firstDefinedString(request.target, targetFromContext, targetFromWorkspace, targetFromEnv);
   const engineAssociation = projectPath ? await readProjectEngineAssociation(projectPath) : undefined;
-  const associationCandidates = buildEngineAssociationCandidates(engineAssociation);
+  const associationCandidates = buildEngineAssociationCandidates(engineAssociation, platform);
 
   let engineRoot = firstDefinedString(request.engine_root, engineRootFromContext, engineRootFromEnv);
   let engineRootSource: 'explicit' | 'editor_context' | 'environment' | 'filesystem_heuristic' | 'missing';
@@ -156,8 +205,8 @@ export async function resolveProjectInputs(
   } else if (engineRootFromEnv) {
     engineRootSource = 'environment';
   } else {
-    const preferredCandidate = await probePreferredEngineRoot(associationCandidates);
-    const heuristicRoot = preferredCandidate ?? await probeEngineRootHeuristic();
+    const preferredCandidate = await probePreferredEngineRoot(associationCandidates, platform);
+    const heuristicRoot = preferredCandidate ?? await probeEngineRootHeuristic(platform);
     if (heuristicRoot) {
       engineRoot = heuristicRoot;
       engineRootSource = 'filesystem_heuristic';

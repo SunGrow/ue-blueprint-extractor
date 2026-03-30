@@ -11,15 +11,28 @@ type ProjectDescriptor = {
   EngineAssociation?: unknown;
 };
 
+const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
+const WINDOWS_UNC_PATH = /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/;
+
+function isWindowsStylePath(input: string): boolean {
+  return WINDOWS_DRIVE_PATH.test(input) || WINDOWS_UNC_PATH.test(input);
+}
+
 export function normalizeFilesystemPath(input: string | undefined): string | undefined {
   if (!input) {
     return undefined;
   }
 
-  const normalized = path.normalize(input);
-  return process.platform === 'win32'
-    ? normalized.toLowerCase()
-    : normalized;
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (isWindowsStylePath(trimmed)) {
+    return path.win32.normalize(trimmed).replaceAll('\\', '/').toLowerCase();
+  }
+
+  return path.posix.normalize(trimmed);
 }
 
 export function filesystemPathsEqual(left: string | undefined, right: string | undefined): boolean {
@@ -77,7 +90,10 @@ export async function readProjectEngineAssociation(projectPath: string): Promise
   }
 }
 
-export function buildEngineAssociationCandidates(engineAssociation: string | undefined): string[] {
+export function buildEngineAssociationCandidates(
+  engineAssociation: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
   if (!engineAssociation) {
     return [];
   }
@@ -88,15 +104,24 @@ export function buildEngineAssociationCandidates(engineAssociation: string | und
   }
 
   const candidates = new Set<string>();
+  const installRoots = platform === 'win32'
+    ? ['C:/Program Files/Epic Games']
+    : platform === 'darwin'
+      ? ['/Users/Shared/Epic Games', '/Users/Shared/EpicGames']
+      : [];
+
   if (/^\d+\.\d+$/.test(trimmed)) {
-    candidates.add(`C:/Program Files/Epic Games/UE_${trimmed}`);
+    for (const root of installRoots) {
+      candidates.add(`${root}/UE_${trimmed}`);
+    }
   }
 
   if (/^UE_\d+\.\d+$/.test(trimmed)) {
-    candidates.add(`C:/Program Files/Epic Games/${trimmed}`);
+    for (const root of installRoots) {
+      candidates.add(`${root}/${trimmed}`);
+    }
   }
 
   candidates.add(trimmed);
   return Array.from(candidates);
 }
-

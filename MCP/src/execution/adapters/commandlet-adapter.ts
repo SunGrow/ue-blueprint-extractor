@@ -1,11 +1,12 @@
 /**
- * CommandletAdapter spawns UnrealEditor-Cmd.exe with -run=blueprintextractor
+ * CommandletAdapter spawns the platform-appropriate UnrealEditor-Cmd binary with -run=blueprintextractor
  * and communicates via stdin/stdout JSON-RPC.
  */
 
 import { spawn, type ChildProcess } from 'child_process';
 import type { ExecutionAdapter, ToolCapability } from '../execution-adapter.js';
 import { COMMANDLET_CAPABILITIES } from '../execution-adapter.js';
+import { resolveEditorExecutable } from '../../project-controller.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -13,6 +14,10 @@ const REQUEST_TIMEOUT_MS = 60_000;
 export interface CommandletAdapterOptions {
   engineRoot: string;
   projectPath: string;
+  platform?: NodeJS.Platform;
+  spawnProcess?: typeof spawn;
+  startupTimeoutMs?: number;
+  requestTimeoutMs?: number;
 }
 
 export class CommandletAdapter implements ExecutionAdapter {
@@ -25,16 +30,24 @@ export class CommandletAdapter implements ExecutionAdapter {
     timer: ReturnType<typeof setTimeout>;
   }>();
   private buffer = '';
+  private readonly spawnProcess: typeof spawn;
+  private readonly platform: NodeJS.Platform;
+  private readonly startupTimeoutMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: CommandletAdapterOptions) {
     this.options = options;
+    this.spawnProcess = options.spawnProcess ?? spawn;
+    this.platform = options.platform ?? process.platform;
+    this.startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
   async initialize(): Promise<void> {
     if (this.process) return;
 
-    const editorCmd = `${this.options.engineRoot}/Binaries/Win64/UnrealEditor-Cmd.exe`;
-    this.process = spawn(editorCmd, [
+    const editorCmd = await resolveEditorExecutable(this.options.engineRoot, this.platform, 'commandlet');
+    this.process = this.spawnProcess(editorCmd, [
       this.options.projectPath,
       '-run=blueprintextractor',
       '-stdin',
@@ -63,8 +76,8 @@ export class CommandletAdapter implements ExecutionAdapter {
     // Wait for startup
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`Commandlet startup timed out after ${STARTUP_TIMEOUT_MS}ms`));
-      }, STARTUP_TIMEOUT_MS);
+        reject(new Error(`Commandlet startup timed out after ${this.startupTimeoutMs}ms`));
+      }, this.startupTimeoutMs);
 
       const onData = () => {
         clearTimeout(timer);
@@ -97,8 +110,8 @@ export class CommandletAdapter implements ExecutionAdapter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
-        reject(new Error(`Commandlet request timed out after ${REQUEST_TIMEOUT_MS}ms`));
-      }, REQUEST_TIMEOUT_MS);
+        reject(new Error(`Commandlet request timed out after ${this.requestTimeoutMs}ms`));
+      }, this.requestTimeoutMs);
 
       this.pendingRequests.set(id, { resolve, reject, timer });
       this.process!.stdin!.write(request + '\n');
