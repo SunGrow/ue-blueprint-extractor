@@ -513,9 +513,22 @@ bool FAuthoringHelpers::CompileBlueprint(UBlueprint* Blueprint,
 
 	if (!bSuccess)
 	{
-		Context.AddError(TEXT("compile_failed"),
-		                 FString::Printf(TEXT("%s compile failed with %d errors and %d warnings."), *AssetKind, ErrorCount, WarningCount),
-		                 Blueprint->GetPathName());
+		FString ErrorSummary = FString::Printf(TEXT("%s compile failed with %d errors and %d warnings."), *AssetKind, ErrorCount, WarningCount);
+		constexpr int32 MaxInlineErrors = 5;
+		const int32 InlineCount = FMath::Min(ErrorArray.Num(), MaxInlineErrors);
+		for (int32 Idx = 0; Idx < InlineCount; ++Idx)
+		{
+			FString ErrorText;
+			if (ErrorArray[Idx].IsValid() && ErrorArray[Idx]->TryGetString(ErrorText))
+			{
+				ErrorSummary += FString::Printf(TEXT("\n  [%d] %s"), Idx + 1, *ErrorText);
+			}
+		}
+		if (ErrorArray.Num() > MaxInlineErrors)
+		{
+			ErrorSummary += FString::Printf(TEXT("\n  ... and %d more (see compileSummary.errors)"), ErrorArray.Num() - MaxInlineErrors);
+		}
+		Context.AddError(TEXT("compile_failed"), ErrorSummary, Blueprint->GetPathName());
 	}
 	else if (WarningCount > 0)
 	{

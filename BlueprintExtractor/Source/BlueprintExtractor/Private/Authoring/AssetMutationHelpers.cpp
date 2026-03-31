@@ -219,6 +219,37 @@ bool DoesAssetExist(const FString& AssetPath)
 	});
 }
 
+void CleanupFailedCreateAsset(UObject*& Asset)
+{
+	if (!Asset)
+	{
+		return;
+	}
+
+	UPackage* Package = Asset->GetOutermost();
+	const bool bIsInRealPackage = Package && Package != GetTransientPackage();
+
+	if (bIsInRealPackage)
+	{
+		FAssetRegistryModule::AssetDeleted(Asset);
+		Package->SetDirtyFlag(false);
+	}
+
+	Asset->ClearFlags(RF_Public | RF_Standalone);
+	Asset->Rename(
+		nullptr,
+		GetTransientPackage(),
+		REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional);
+	Asset->MarkAsGarbage();
+	Asset = nullptr;
+
+	if (bIsInRealPackage && Package)
+	{
+		Package->ClearFlags(RF_Standalone);
+		Package->MarkAsGarbage();
+	}
+}
+
 FAssetMutationContext::FAssetMutationContext(const FString& InOperation,
                                              const FString& InAssetPath,
                                              const FString& InAssetClass,

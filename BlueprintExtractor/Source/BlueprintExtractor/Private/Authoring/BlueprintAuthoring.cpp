@@ -4,6 +4,8 @@
 #include "Authoring/AuthoringHelpers.h"
 #include "PropertySerializer.h"
 
+#include "AnimGraphNode_Base.h"
+#include "AnimationGraphSchema.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimInstance.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -704,6 +706,47 @@ static bool ReplaceVariables(UBlueprint* Blueprint,
 			VariableObject,
 			true,
 			true,
+			OutErrors);
+	}
+
+	return bSuccess && OutErrors.Num() == 0;
+}
+
+static bool AddVariables(UBlueprint* Blueprint,
+                         const TArray<TSharedPtr<FJsonValue>>& Variables,
+                         TArray<FString>& OutErrors)
+{
+	if (!Blueprint)
+	{
+		OutErrors.Add(TEXT("Blueprint is null."));
+		return false;
+	}
+
+	if (Variables.Num() == 0)
+	{
+		OutErrors.Add(TEXT("add_variables requires at least one variable."));
+		return false;
+	}
+
+	bool bSuccess = true;
+	for (int32 Index = 0; Index < Variables.Num(); ++Index)
+	{
+		const TSharedPtr<FJsonObject> VariableObject =
+			Variables[Index].IsValid() ? Variables[Index]->AsObject() : nullptr;
+		if (!VariableObject.IsValid())
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("variables[%d] must be an object."),
+				Index));
+			bSuccess = false;
+			continue;
+		}
+
+		bSuccess &= ApplyVariableDefinition(
+			Blueprint,
+			VariableObject,
+			true,
+			false,
 			OutErrors);
 	}
 
@@ -1915,6 +1958,13 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 		return ReplaceVariables(Blueprint, GetVariablesArray(Payload), OutErrors);
 	}
 
+	if (Operation == TEXT("add_variables"))
+	{
+		OutMutationFlags |=
+			EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		return AddVariables(Blueprint, GetVariablesArray(Payload), OutErrors);
+	}
+
 	if (Operation == TEXT("patch_variable"))
 	{
 		OutMutationFlags |=
@@ -1989,6 +2039,497 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 	return false;
 }
 
+// ─── AnimGraph Authoring ────────────────────────────────────────────────────
+
+static UEdGraph* FindAnimGraph(const UBlueprint* Blueprint, const FString& GraphName)
+{
+	const FName TargetName = GraphName.IsEmpty() ? FName(TEXT("AnimGraph")) : FName(*GraphName);
+	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+	{
+		if (Graph && Graph->GetFName() == TargetName)
+		{
+			return Graph;
+		}
+	}
+	return nullptr;
+}
+
+static UClass* ResolveAnimGraphNodeClass(const FString& ClassName, TArray<FString>& OutErrors)
+{
+	// Try short name first: "AnimGraphNode_ModifyBone" → "/Script/AnimGraph.AnimGraphNode_ModifyBone"
+	FString FullPath = ClassName;
+	if (!ClassName.Contains(TEXT(".")))
+	{
+		FullPath = FString::Printf(TEXT("/Script/AnimGraph.%s"), *ClassName);
+	}
+
+	UClass* NodeClass = FindObject<UClass>(nullptr, *FullPath);
+	if (!NodeClass)
+	{
+		// Fallback: try to load it
+		NodeClass = StaticLoadClass(UAnimGraphNode_Base::StaticClass(), nullptr, *FullPath);
+	}
+
+	if (!NodeClass)
+	{
+		// Try other common modules: AnimGraphRuntime, Engine
+		for (const TCHAR* Module : { TEXT("AnimGraphRuntime"), TEXT("Engine") })
+		{
+			FString AltPath = FString::Printf(TEXT("/Script/%s.%s"), Module, *ClassName);
+			NodeClass = FindObject<UClass>(nullptr, *AltPath);
+			if (NodeClass) break;
+			NodeClass = StaticLoadClass(UAnimGraphNode_Base::StaticClass(), nullptr, *AltPath);
+			if (NodeClass) break;
+		}
+	}
+
+	if (!NodeClass)
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("AnimGraph node class '%s' not found. Use full path (e.g. /Script/AnimGraph.AnimGraphNode_ModifyBone) or short name."),
+			*ClassName));
+		return nullptr;
+	}
+
+	if (!NodeClass->IsChildOf(UAnimGraphNode_Base::StaticClass()))
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("Class '%s' is not an AnimGraph node (must derive from UAnimGraphNode_Base)."),
+			*ClassName));
+		return nullptr;
+	}
+
+	return NodeClass;
+}
+
+static UEdGraphNode* FindNodeById(
+	const UEdGraph* Graph,
+	const FString& NodeRef,
+	const TMap<FString, UAnimGraphNode_Base*>& CreatedNodes,
+	TArray<FString>& OutErrors)
+{
+	// Check created nodes first (by user-assigned ID)
+	if (UAnimGraphNode_Base* const* Found = CreatedNodes.Find(NodeRef))
+	{
+		return *Found;
+	}
+
+	// Try GUID
+	FGuid ParsedGuid;
+	if (FGuid::Parse(NodeRef, ParsedGuid))
+	{
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node && Node->NodeGuid == ParsedGuid)
+			{
+				return Node;
+			}
+		}
+	}
+
+	// Try by node title / class name suffix
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (!Node) continue;
+		// Match by class short name (e.g. "AnimGraphNode_Root")
+		if (Node->GetClass()->GetName() == NodeRef)
+		{
+			return Node;
+		}
+		// Match by comment/title
+		if (Node->NodeComment == NodeRef)
+		{
+			return Node;
+		}
+	}
+
+	OutErrors.Add(FString::Printf(
+		TEXT("AnimGraph node '%s' not found. Use a node ID from this call, a node GUID, or a class name like 'AnimGraphNode_Root'."),
+		*NodeRef));
+	return nullptr;
+}
+
+static UEdGraphPin* FindPinOnAnimNode(UEdGraphNode* Node, const FString& PinName, TArray<FString>& OutErrors)
+{
+	if (!Node)
+	{
+		return nullptr;
+	}
+
+	for (UEdGraphPin* Pin : Node->Pins)
+	{
+		if (Pin && Pin->PinName.ToString() == PinName)
+		{
+			return Pin;
+		}
+	}
+
+	// Build available pin list for the error message
+	TArray<FString> AvailablePins;
+	for (const UEdGraphPin* Pin : Node->Pins)
+	{
+		if (Pin)
+		{
+			AvailablePins.Add(FString::Printf(TEXT("%s (%s)"),
+				*Pin->PinName.ToString(),
+				Pin->Direction == EGPD_Input ? TEXT("in") : TEXT("out")));
+		}
+	}
+
+	OutErrors.Add(FString::Printf(
+		TEXT("Pin '%s' not found on node '%s'. Available pins: [%s]"),
+		*PinName,
+		*Node->GetClass()->GetName(),
+		*FString::Join(AvailablePins, TEXT(", "))));
+	return nullptr;
+}
+
+static bool AddAnimGraphNodes(UBlueprint* Blueprint,
+                              const TSharedPtr<FJsonObject>& Payload,
+                              TArray<FString>& OutErrors)
+{
+	if (!Blueprint || !Payload.IsValid())
+	{
+		OutErrors.Add(TEXT("add_animgraph_nodes requires a valid Blueprint and payload."));
+		return false;
+	}
+
+	FString GraphName;
+	Payload->TryGetStringField(TEXT("graphName"), GraphName);
+	UEdGraph* AnimGraph = FindAnimGraph(Blueprint, GraphName);
+	if (!AnimGraph)
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("AnimGraph '%s' not found. This operation requires an AnimBlueprint."),
+			GraphName.IsEmpty() ? TEXT("AnimGraph") : *GraphName));
+		return false;
+	}
+
+	// Phase 1: Create all nodes
+	TMap<FString, UAnimGraphNode_Base*> CreatedNodes;
+	const TArray<TSharedPtr<FJsonValue>>* NodesArray = nullptr;
+	if (!Payload->TryGetArrayField(TEXT("nodes"), NodesArray) || !NodesArray)
+	{
+		OutErrors.Add(TEXT("add_animgraph_nodes requires a 'nodes' array."));
+		return false;
+	}
+
+	for (int32 Index = 0; Index < NodesArray->Num(); ++Index)
+	{
+		const FString NodePath = FString::Printf(TEXT("nodes[%d]"), Index);
+		const TSharedPtr<FJsonObject> NodeDef = (*NodesArray)[Index].IsValid()
+			? (*NodesArray)[Index]->AsObject()
+			: nullptr;
+		if (!NodeDef.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s: expected an object."), *NodePath));
+			continue;
+		}
+
+		FString NodeId;
+		if (!NodeDef->TryGetStringField(TEXT("id"), NodeId) || NodeId.IsEmpty())
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s.id: required string identifier."), *NodePath));
+			continue;
+		}
+
+		if (CreatedNodes.Contains(NodeId))
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s.id: duplicate node ID '%s'."), *NodePath, *NodeId));
+			continue;
+		}
+
+		FString ClassName;
+		if (!(NodeDef->TryGetStringField(TEXT("class"), ClassName)
+			  || NodeDef->TryGetStringField(TEXT("nodeClass"), ClassName))
+			|| ClassName.IsEmpty())
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s.class: required AnimGraph node class name."), *NodePath));
+			continue;
+		}
+
+		UClass* NodeClass = ResolveAnimGraphNodeClass(ClassName, OutErrors);
+		if (!NodeClass)
+		{
+			continue;
+		}
+
+		UAnimGraphNode_Base* NewNode = NewObject<UAnimGraphNode_Base>(AnimGraph, NodeClass);
+		if (!NewNode)
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s: failed to create node of class '%s'."), *NodePath, *ClassName));
+			continue;
+		}
+
+		NewNode->CreateNewGuid();
+		NewNode->AllocateDefaultPins();
+
+		// Position
+		const TSharedPtr<FJsonObject>* PositionObj = nullptr;
+		if (NodeDef->TryGetObjectField(TEXT("position"), PositionObj) && PositionObj && (*PositionObj)->IsValid())
+		{
+			double X = 0, Y = 0;
+			(*PositionObj)->TryGetNumberField(TEXT("x"), X);
+			(*PositionObj)->TryGetNumberField(TEXT("y"), Y);
+			NewNode->NodePosX = static_cast<int32>(X);
+			NewNode->NodePosY = static_cast<int32>(Y);
+		}
+
+		// Comment
+		FString NodeComment;
+		if (NodeDef->TryGetStringField(TEXT("comment"), NodeComment))
+		{
+			NewNode->NodeComment = NodeComment;
+			NewNode->bCommentBubbleVisible_InDetailsPanel = true;
+		}
+
+		// Apply node properties via reflection
+		const TSharedPtr<FJsonObject>* PropsObj = nullptr;
+		if ((NodeDef->TryGetObjectField(TEXT("nodeProperties"), PropsObj)
+			|| NodeDef->TryGetObjectField(TEXT("properties"), PropsObj))
+			&& PropsObj && (*PropsObj)->IsValid())
+		{
+			TArray<FString> PropErrors;
+			FPropertySerializer::ApplyPropertiesFromJson(NewNode, *PropsObj, PropErrors, false, true);
+			for (const FString& PropError : PropErrors)
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s.properties: %s"), *NodePath, *PropError));
+			}
+		}
+
+		AnimGraph->AddNode(NewNode, /*bFromUI=*/false, /*bSelectNewNode=*/false);
+		CreatedNodes.Add(NodeId, NewNode);
+	}
+
+	if (CreatedNodes.Num() == 0)
+	{
+		return OutErrors.Num() == 0;
+	}
+
+	// Phase 2: Connect pins
+	const TArray<TSharedPtr<FJsonValue>>* ConnectionsArray = nullptr;
+	if (Payload->TryGetArrayField(TEXT("connections"), ConnectionsArray) && ConnectionsArray)
+	{
+		for (int32 Index = 0; Index < ConnectionsArray->Num(); ++Index)
+		{
+			const FString ConnPath = FString::Printf(TEXT("connections[%d]"), Index);
+			const TSharedPtr<FJsonObject> ConnDef = (*ConnectionsArray)[Index].IsValid()
+				? (*ConnectionsArray)[Index]->AsObject()
+				: nullptr;
+			if (!ConnDef.IsValid())
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s: expected an object."), *ConnPath));
+				continue;
+			}
+
+			// Parse "source" and "target" as "nodeRef:pinName" or separate fields
+			FString SourceNodeRef, SourcePinName, TargetNodeRef, TargetPinName;
+
+			FString SourceStr, TargetStr;
+			if (ConnDef->TryGetStringField(TEXT("source"), SourceStr) && SourceStr.Contains(TEXT(":")))
+			{
+				SourceStr.Split(TEXT(":"), &SourceNodeRef, &SourcePinName);
+			}
+			else
+			{
+				ConnDef->TryGetStringField(TEXT("sourceNode"), SourceNodeRef);
+				ConnDef->TryGetStringField(TEXT("sourcePin"), SourcePinName);
+			}
+
+			if (ConnDef->TryGetStringField(TEXT("target"), TargetStr) && TargetStr.Contains(TEXT(":")))
+			{
+				TargetStr.Split(TEXT(":"), &TargetNodeRef, &TargetPinName);
+			}
+			else
+			{
+				ConnDef->TryGetStringField(TEXT("targetNode"), TargetNodeRef);
+				ConnDef->TryGetStringField(TEXT("targetPin"), TargetPinName);
+			}
+
+			if (SourceNodeRef.IsEmpty() || SourcePinName.IsEmpty()
+				|| TargetNodeRef.IsEmpty() || TargetPinName.IsEmpty())
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("%s: requires source and target in 'nodeRef:pinName' format or separate sourceNode/sourcePin/targetNode/targetPin fields."),
+					*ConnPath));
+				continue;
+			}
+
+			UEdGraphNode* SourceNode = FindNodeById(AnimGraph, SourceNodeRef, CreatedNodes, OutErrors);
+			UEdGraphNode* TargetNode = FindNodeById(AnimGraph, TargetNodeRef, CreatedNodes, OutErrors);
+			if (!SourceNode || !TargetNode) continue;
+
+			UEdGraphPin* SourcePin = FindPinOnAnimNode(SourceNode, SourcePinName, OutErrors);
+			UEdGraphPin* TargetPin = FindPinOnAnimNode(TargetNode, TargetPinName, OutErrors);
+			if (!SourcePin || !TargetPin) continue;
+
+			// Break existing connections if requested
+			bool bBreakExisting = false;
+			ConnDef->TryGetBoolField(TEXT("breakExisting"), bBreakExisting);
+			if (bBreakExisting)
+			{
+				TargetPin->BreakAllPinLinks(/*bNotify=*/false);
+			}
+
+			if (!AnimGraph->GetSchema()->TryCreateConnection(SourcePin, TargetPin))
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("%s: failed to connect %s:%s → %s:%s. Pins may be incompatible."),
+					*ConnPath,
+					*SourceNodeRef, *SourcePinName,
+					*TargetNodeRef, *TargetPinName));
+			}
+		}
+	}
+
+	return OutErrors.Num() == 0;
+}
+
+static bool ConnectAnimGraphPins(UBlueprint* Blueprint,
+                                 const TSharedPtr<FJsonObject>& Payload,
+                                 TArray<FString>& OutErrors)
+{
+	if (!Blueprint || !Payload.IsValid())
+	{
+		OutErrors.Add(TEXT("connect_animgraph_pins requires a valid Blueprint and payload."));
+		return false;
+	}
+
+	FString GraphName;
+	Payload->TryGetStringField(TEXT("graphName"), GraphName);
+	UEdGraph* AnimGraph = FindAnimGraph(Blueprint, GraphName);
+	if (!AnimGraph)
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("AnimGraph '%s' not found. This operation requires an AnimBlueprint."),
+			GraphName.IsEmpty() ? TEXT("AnimGraph") : *GraphName));
+		return false;
+	}
+
+	TMap<FString, UAnimGraphNode_Base*> EmptyMap;
+	const TArray<TSharedPtr<FJsonValue>>* ConnectionsArray = nullptr;
+	if (!Payload->TryGetArrayField(TEXT("connections"), ConnectionsArray) || !ConnectionsArray)
+	{
+		OutErrors.Add(TEXT("connect_animgraph_pins requires a 'connections' array."));
+		return false;
+	}
+
+	// Also handle disconnections
+	const TArray<TSharedPtr<FJsonValue>>* DisconnectsArray = nullptr;
+	Payload->TryGetArrayField(TEXT("disconnections"), DisconnectsArray);
+
+	// Process disconnections first
+	if (DisconnectsArray)
+	{
+		for (int32 Index = 0; Index < DisconnectsArray->Num(); ++Index)
+		{
+			const FString DiscPath = FString::Printf(TEXT("disconnections[%d]"), Index);
+			const TSharedPtr<FJsonObject> DiscDef = (*DisconnectsArray)[Index].IsValid()
+				? (*DisconnectsArray)[Index]->AsObject()
+				: nullptr;
+			if (!DiscDef.IsValid()) continue;
+
+			FString NodeRef, PinName;
+			FString CompactRef;
+			if (DiscDef->TryGetStringField(TEXT("pin"), CompactRef) && CompactRef.Contains(TEXT(":")))
+			{
+				CompactRef.Split(TEXT(":"), &NodeRef, &PinName);
+			}
+			else
+			{
+				DiscDef->TryGetStringField(TEXT("node"), NodeRef);
+				DiscDef->TryGetStringField(TEXT("pin"), PinName);
+			}
+
+			if (NodeRef.IsEmpty() || PinName.IsEmpty())
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s: requires 'nodeRef:pinName' format."), *DiscPath));
+				continue;
+			}
+
+			UEdGraphNode* Node = FindNodeById(AnimGraph, NodeRef, EmptyMap, OutErrors);
+			if (!Node) continue;
+
+			UEdGraphPin* Pin = FindPinOnAnimNode(Node, PinName, OutErrors);
+			if (!Pin) continue;
+
+			Pin->BreakAllPinLinks(/*bNotify=*/false);
+		}
+	}
+
+	// Process connections
+	for (int32 Index = 0; Index < ConnectionsArray->Num(); ++Index)
+	{
+		const FString ConnPath = FString::Printf(TEXT("connections[%d]"), Index);
+		const TSharedPtr<FJsonObject> ConnDef = (*ConnectionsArray)[Index].IsValid()
+			? (*ConnectionsArray)[Index]->AsObject()
+			: nullptr;
+		if (!ConnDef.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s: expected an object."), *ConnPath));
+			continue;
+		}
+
+		FString SourceNodeRef, SourcePinName, TargetNodeRef, TargetPinName;
+
+		FString SourceStr, TargetStr;
+		if (ConnDef->TryGetStringField(TEXT("source"), SourceStr) && SourceStr.Contains(TEXT(":")))
+		{
+			SourceStr.Split(TEXT(":"), &SourceNodeRef, &SourcePinName);
+		}
+		else
+		{
+			ConnDef->TryGetStringField(TEXT("sourceNode"), SourceNodeRef);
+			ConnDef->TryGetStringField(TEXT("sourcePin"), SourcePinName);
+		}
+
+		if (ConnDef->TryGetStringField(TEXT("target"), TargetStr) && TargetStr.Contains(TEXT(":")))
+		{
+			TargetStr.Split(TEXT(":"), &TargetNodeRef, &TargetPinName);
+		}
+		else
+		{
+			ConnDef->TryGetStringField(TEXT("targetNode"), TargetNodeRef);
+			ConnDef->TryGetStringField(TEXT("targetPin"), TargetPinName);
+		}
+
+		if (SourceNodeRef.IsEmpty() || SourcePinName.IsEmpty()
+			|| TargetNodeRef.IsEmpty() || TargetPinName.IsEmpty())
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("%s: requires source and target in 'nodeRef:pinName' format."),
+				*ConnPath));
+			continue;
+		}
+
+		UEdGraphNode* SourceNode = FindNodeById(AnimGraph, SourceNodeRef, EmptyMap, OutErrors);
+		UEdGraphNode* TargetNode = FindNodeById(AnimGraph, TargetNodeRef, EmptyMap, OutErrors);
+		if (!SourceNode || !TargetNode) continue;
+
+		UEdGraphPin* SourcePin = FindPinOnAnimNode(SourceNode, SourcePinName, OutErrors);
+		UEdGraphPin* TargetPin = FindPinOnAnimNode(TargetNode, TargetPinName, OutErrors);
+		if (!SourcePin || !TargetPin) continue;
+
+		bool bBreakExisting = false;
+		ConnDef->TryGetBoolField(TEXT("breakExisting"), bBreakExisting);
+		if (bBreakExisting)
+		{
+			TargetPin->BreakAllPinLinks(/*bNotify=*/false);
+		}
+
+		if (!AnimGraph->GetSchema()->TryCreateConnection(SourcePin, TargetPin))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("%s: failed to connect %s:%s → %s:%s."),
+				*ConnPath,
+				*SourceNodeRef, *SourcePinName,
+				*TargetNodeRef, *TargetPinName));
+		}
+	}
+
+	return OutErrors.Num() == 0;
+}
+
 static bool ApplyGraphOperation(UBlueprint* Blueprint,
                                 const FString& Operation,
                                 const TSharedPtr<FJsonObject>& Payload,
@@ -2011,6 +2552,18 @@ static bool ApplyGraphOperation(UBlueprint* Blueprint,
 	{
 		OutMutationFlags |= EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
 		return AppendFunctionCallToSequence(Blueprint, Payload, OutErrors);
+	}
+
+	if (Operation == TEXT("add_animgraph_nodes"))
+	{
+		OutMutationFlags |= EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		return AddAnimGraphNodes(Blueprint, Payload, OutErrors);
+	}
+
+	if (Operation == TEXT("connect_animgraph_pins"))
+	{
+		OutMutationFlags |= EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		return ConnectAnimGraphPins(Blueprint, Payload, OutErrors);
 	}
 
 	if (Operation == TEXT("compile"))

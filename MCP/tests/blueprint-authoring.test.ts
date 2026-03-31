@@ -7,6 +7,7 @@ import { getTextContent } from './test-helpers.js';
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const blueprintMemberMutationOperationSchema = z.enum([
   'replace_variables',
+  'add_variables',
   'patch_variable',
   'add_component',
   'patch_component',
@@ -16,6 +17,8 @@ const blueprintMemberMutationOperationSchema = z.enum([
 const blueprintGraphMutationOperationSchema = z.enum([
   'upsert_function_graphs',
   'append_function_call_to_sequence',
+  'add_animgraph_nodes',
+  'connect_animgraph_pins',
   'compile',
 ]);
 

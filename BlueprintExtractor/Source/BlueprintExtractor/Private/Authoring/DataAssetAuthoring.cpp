@@ -63,19 +63,9 @@ static bool IsEnhancedInputDataAssetClass(const UClass* AssetClass)
 	return ClassPath.StartsWith(TEXT("/Script/EnhancedInput."));
 }
 
-static void CleanupFailedCreate(UObject* CreatedObject, UPackage* Package)
+static void CleanupFailedCreate(UObject* CreatedObject, UPackage* /*Package*/)
 {
-	if (CreatedObject)
-	{
-		CreatedObject->ClearFlags(RF_Public | RF_Standalone);
-		CreatedObject->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional);
-		CreatedObject->MarkAsGarbage();
-	}
-
-	if (Package)
-	{
-		Package->SetDirtyFlag(false);
-	}
+	CleanupFailedCreateAsset(CreatedObject);
 }
 
 } // namespace DataAssetAuthoringInternal

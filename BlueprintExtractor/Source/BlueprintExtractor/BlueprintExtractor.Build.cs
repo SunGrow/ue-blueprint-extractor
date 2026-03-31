@@ -56,6 +56,7 @@ public class BlueprintExtractor : ModuleRules
 			PrivateDependencyModuleNames.AddRange(new string[]
 			{
 				"AIGraph",
+				"AnimGraph",
 				"AnimationBlueprintLibrary",
 				"BehaviorTreeEditor",
 				"StateTreeEditorModule"

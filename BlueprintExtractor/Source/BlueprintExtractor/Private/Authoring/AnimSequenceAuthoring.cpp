@@ -1181,6 +1181,8 @@ TSharedPtr<FJsonObject> FAnimSequenceAuthoring::Create(const FString& AssetPath,
 		{
 			Context.AddError(TEXT("apply_error"), Error, AssetPath);
 		}
+		UObject* AssetPtr = AnimSequence;
+		CleanupFailedCreateAsset(AssetPtr);
 		return Context.BuildResult(false);
 	}
 

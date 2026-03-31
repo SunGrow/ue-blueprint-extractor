@@ -590,6 +590,8 @@ TSharedPtr<FJsonObject> FBlendSpaceAuthoring::Create(const FString& AssetPath,
 		{
 			Context.AddError(TEXT("apply_error"), Error, AssetPath);
 		}
+		UObject* AssetPtr = BlendSpace;
+		CleanupFailedCreateAsset(AssetPtr);
 		return Context.BuildResult(false);
 	}
 

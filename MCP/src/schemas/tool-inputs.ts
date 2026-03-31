@@ -432,6 +432,7 @@ export const BlendSpaceMutationOperationSchema = z.enum([
 
 export const BlueprintMemberMutationOperationSchema = z.enum([
   'replace_variables',
+  'add_variables',
   'patch_variable',
   'replace_components',
   'patch_component',
@@ -445,6 +446,8 @@ export const BlueprintMemberMutationOperationSchema = z.enum([
 export const BlueprintGraphMutationOperationSchema = z.enum([
   'upsert_function_graphs',
   'append_function_call_to_sequence',
+  'add_animgraph_nodes',
+  'connect_animgraph_pins',
   'compile',
 ]);
 

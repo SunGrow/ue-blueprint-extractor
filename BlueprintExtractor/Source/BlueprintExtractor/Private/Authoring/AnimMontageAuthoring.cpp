@@ -1214,24 +1214,22 @@ static UAnimMontage* CreateMontageAsset(UObject* Outer,
 		GWarn));
 }
 
-static void CleanupFailedCreatedMontage(UAnimMontage*& AnimMontage)
+static void CleanupTransientMontage(UAnimMontage*& AnimMontage)
 {
 	if (!AnimMontage)
 	{
 		return;
 	}
 
-	if (UPackage* Package = AnimMontage->GetOutermost())
-	{
-		Package->SetDirtyFlag(false);
-	}
-
 	AnimMontage->ClearFlags(RF_Public | RF_Standalone);
-	AnimMontage->Rename(
-		nullptr,
-		GetTransientPackage(),
-		REN_DontCreateRedirectors | REN_ForceNoResetLoaders | REN_NonTransactional);
 	AnimMontage->MarkAsGarbage();
+	AnimMontage = nullptr;
+}
+
+static void CleanupFailedCreatedMontage(UAnimMontage*& AnimMontage)
+{
+	UObject* AssetPtr = AnimMontage;
+	CleanupFailedCreateAsset(AssetPtr);
 	AnimMontage = nullptr;
 }
 
@@ -1277,6 +1275,7 @@ TSharedPtr<FJsonObject> FAnimMontageAuthoring::Create(const FString& AssetPath,
 	if (PreviewMontage)
 	{
 		ApplyCreatePayload(PreviewMontage, Payload, ValidationErrors);
+		CleanupTransientMontage(PreviewMontage);
 	}
 
 	if (!AppendValidationSummary(Context, ValidationErrors, TEXT("AnimMontage payload validated.")))
@@ -1360,6 +1359,7 @@ TSharedPtr<FJsonObject> FAnimMontageAuthoring::Modify(UAnimMontage* AnimMontage,
 	else
 	{
 		ApplyModifyOperation(PreviewMontage, Operation, Payload, ValidationErrors);
+		CleanupTransientMontage(PreviewMontage);
 	}
 
 	if (!AppendValidationSummary(Context, ValidationErrors, TEXT("AnimMontage payload validated.")))

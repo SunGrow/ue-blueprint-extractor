@@ -9,6 +9,7 @@ class UObject;
 FString NormalizeAssetObjectPath(const FString& AssetPath);
 UObject* ResolveAssetByPath(const FString& AssetPath);
 bool DoesAssetExist(const FString& AssetPath);
+void CleanupFailedCreateAsset(UObject*& Asset);
 
 struct FAssetMutationDiagnostic
 {
