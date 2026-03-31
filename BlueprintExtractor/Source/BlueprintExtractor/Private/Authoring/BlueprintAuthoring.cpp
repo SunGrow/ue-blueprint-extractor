@@ -5,6 +5,7 @@
 #include "PropertySerializer.h"
 
 #include "AnimGraphNode_Base.h"
+#include "AnimationGraph.h"
 #include "AnimationGraphSchema.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimInstance.h"
@@ -2044,6 +2045,17 @@ static bool ApplyOperation(UBlueprint* Blueprint,
 static UEdGraph* FindAnimGraph(const UBlueprint* Blueprint, const FString& GraphName)
 {
 	const FName TargetName = GraphName.IsEmpty() ? FName(TEXT("AnimGraph")) : FName(*GraphName);
+
+	// Main AnimGraph lives in UbergraphPages
+	for (UEdGraph* Graph : Blueprint->UbergraphPages)
+	{
+		if (Graph && Graph->GetFName() == TargetName)
+		{
+			return Graph;
+		}
+	}
+
+	// Anim layer graphs live in FunctionGraphs
 	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
 	{
 		if (Graph && Graph->GetFName() == TargetName)
@@ -2051,6 +2063,7 @@ static UEdGraph* FindAnimGraph(const UBlueprint* Blueprint, const FString& Graph
 			return Graph;
 		}
 	}
+
 	return nullptr;
 }
 
@@ -2254,7 +2267,9 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 			continue;
 		}
 
-		UAnimGraphNode_Base* NewNode = NewObject<UAnimGraphNode_Base>(AnimGraph, NodeClass);
+		// Use CreateNode + PostPlacedNewNode + AllocateDefaultPins (same as FGraphNodeCreator)
+		UAnimGraphNode_Base* NewNode = Cast<UAnimGraphNode_Base>(
+			AnimGraph->CreateNode(NodeClass, /*bSelectNewNode=*/false));
 		if (!NewNode)
 		{
 			OutErrors.Add(FString::Printf(TEXT("%s: failed to create node of class '%s'."), *NodePath, *ClassName));
@@ -2262,7 +2277,11 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 		}
 
 		NewNode->CreateNewGuid();
-		NewNode->AllocateDefaultPins();
+		NewNode->PostPlacedNewNode();
+		if (NewNode->Pins.Num() == 0)
+		{
+			NewNode->AllocateDefaultPins();
+		}
 
 		// Position
 		const TSharedPtr<FJsonObject>* PositionObj = nullptr;
@@ -2297,7 +2316,6 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 			}
 		}
 
-		AnimGraph->AddNode(NewNode, /*bFromUI=*/false, /*bSelectNewNode=*/false);
 		CreatedNodes.Add(NodeId, NewNode);
 	}
 
