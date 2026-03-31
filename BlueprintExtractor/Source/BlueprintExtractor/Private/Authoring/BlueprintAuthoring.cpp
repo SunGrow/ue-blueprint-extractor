@@ -2294,7 +2294,26 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 				continue;
 			}
 
-			VarGetNode->VariableReference.SetSelfMember(FName(*VariableName));
+			// Resolve the property on the Blueprint's class hierarchy so that
+			// AllocateDefaultPins can determine the correct pin type.
+			// SetSelfMember alone doesn't provide enough context for inherited
+			// native properties (e.g. SpineRotation from UCoachAnimInstance).
+			const FName VarFName(*VariableName);
+			FProperty* VarProperty = Blueprint->ParentClass
+				? FindFProperty<FProperty>(Blueprint->ParentClass, VarFName)
+				: nullptr;
+			if (!VarProperty && Blueprint->SkeletonGeneratedClass)
+			{
+				VarProperty = FindFProperty<FProperty>(Blueprint->SkeletonGeneratedClass, VarFName);
+			}
+			if (VarProperty)
+			{
+				VarGetNode->VariableReference.SetFromField<FProperty>(VarProperty, /*bSelfContext=*/true);
+			}
+			else
+			{
+				VarGetNode->VariableReference.SetSelfMember(VarFName);
+			}
 			NewNode = VarGetNode;
 		}
 		else
@@ -2312,11 +2331,29 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 			NewNode->AllocateDefaultPins();
 		}
 
-		// K2Node_VariableGet needs ReconstructNode after being added to graph
-		// so the Blueprint context is available for resolving the variable type.
+		// K2Node_VariableGet: the skeleton class may not be compiled yet,
+		// so AllocateDefaultPins/ReconstructNode can't resolve the variable.
+		// Create the output pin manually from the resolved FProperty.
 		if (NewNode->IsA<UK2Node_VariableGet>() && NewNode->Pins.Num() == 0)
 		{
 			NewNode->ReconstructNode();
+			if (NewNode->Pins.Num() == 0)
+			{
+				// Manual fallback: create pin from the native property type.
+				UK2Node_VariableGet* VarNode = CastChecked<UK2Node_VariableGet>(NewNode);
+				const FName VarName = VarNode->VariableReference.GetMemberName();
+				FProperty* Prop = Blueprint->ParentClass
+					? FindFProperty<FProperty>(Blueprint->ParentClass, VarName)
+					: nullptr;
+				if (Prop)
+				{
+					FEdGraphPinType PinType;
+					if (GetDefault<UEdGraphSchema_K2>()->ConvertPropertyToPinType(Prop, PinType))
+					{
+						NewNode->CreatePin(EGPD_Output, PinType, VarName);
+					}
+				}
+			}
 		}
 
 		// Position
