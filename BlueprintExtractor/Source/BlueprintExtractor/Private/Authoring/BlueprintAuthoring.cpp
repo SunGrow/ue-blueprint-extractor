@@ -5,7 +5,6 @@
 #include "PropertySerializer.h"
 
 #include "AnimGraphNode_Base.h"
-#include "AnimationGraph.h"
 #include "AnimationGraphSchema.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimInstance.h"
@@ -2267,15 +2266,15 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 			continue;
 		}
 
-		// Use CreateNode + PostPlacedNewNode + AllocateDefaultPins (same as FGraphNodeCreator)
-		UAnimGraphNode_Base* NewNode = Cast<UAnimGraphNode_Base>(
-			AnimGraph->CreateNode(NodeClass, /*bSelectNewNode=*/false));
+		// NewObject + PostPlacedNewNode + AllocateDefaultPins (FGraphNodeCreator pattern)
+		UAnimGraphNode_Base* NewNode = NewObject<UAnimGraphNode_Base>(AnimGraph, NodeClass);
 		if (!NewNode)
 		{
 			OutErrors.Add(FString::Printf(TEXT("%s: failed to create node of class '%s'."), *NodePath, *ClassName));
 			continue;
 		}
 
+		AnimGraph->AddNode(NewNode, /*bFromUI=*/false, /*bSelectNewNode=*/false);
 		NewNode->CreateNewGuid();
 		NewNode->PostPlacedNewNode();
 		if (NewNode->Pins.Num() == 0)
@@ -2285,7 +2284,7 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 
 		// Position
 		const TSharedPtr<FJsonObject>* PositionObj = nullptr;
-		if (NodeDef->TryGetObjectField(TEXT("position"), PositionObj) && PositionObj && (*PositionObj)->IsValid())
+		if (NodeDef->TryGetObjectField(TEXT("position"), PositionObj) && PositionObj)
 		{
 			double X = 0, Y = 0;
 			(*PositionObj)->TryGetNumberField(TEXT("x"), X);
@@ -2299,14 +2298,13 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 		if (NodeDef->TryGetStringField(TEXT("comment"), NodeComment))
 		{
 			NewNode->NodeComment = NodeComment;
-			NewNode->bCommentBubbleVisible_InDetailsPanel = true;
 		}
 
 		// Apply node properties via reflection
 		const TSharedPtr<FJsonObject>* PropsObj = nullptr;
 		if ((NodeDef->TryGetObjectField(TEXT("nodeProperties"), PropsObj)
 			|| NodeDef->TryGetObjectField(TEXT("properties"), PropsObj))
-			&& PropsObj && (*PropsObj)->IsValid())
+			&& PropsObj)
 		{
 			TArray<FString> PropErrors;
 			FPropertySerializer::ApplyPropertiesFromJson(NewNode, *PropsObj, PropErrors, false, true);
