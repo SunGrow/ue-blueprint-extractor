@@ -1184,14 +1184,33 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 	{
 		if (const TSharedPtr<FJsonObject> StructValue = JsonValue->AsObject())
 		{
+			// Try FJsonObjectConverter first (handles simple structs: FVector, FRotator, etc.)
 			const bool bConverted = FJsonObjectConverter::JsonObjectToUStruct(
 				StructValue.ToSharedRef(), StructProp->Struct, WorkingPtr);
-			if (!bConverted)
+			if (bConverted)
 			{
-				AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to parse struct '%s'"),
-					*Property->GetName(), *StructProp->Struct->GetName()));
+				return true;
 			}
-			return bConverted;
+
+			// Fallback: recursive field-by-field application for complex structs
+			// (e.g. FAnimNode_ModifyBone) where bulk conversion fails due to
+			// internal properties that are not safe for JSON deserialization.
+			bool bFieldSuccess = true;
+			for (const auto& FieldPair : StructValue->Values)
+			{
+				FProperty* FieldProp = FindFProperty<FProperty>(StructProp->Struct, FName(*FieldPair.Key));
+				if (!FieldProp)
+				{
+					AddError(OutErrors, FString::Printf(TEXT("Property '%s.%s': not found on struct '%s'"),
+						*Property->GetName(), *FieldPair.Key, *StructProp->Struct->GetName()));
+					bFieldSuccess = false;
+					continue;
+				}
+				void* FieldPtr = FieldProp->ContainerPtrToValuePtr<void>(WorkingPtr);
+				bFieldSuccess &= ApplyJsonValueToPropertyInternal(
+					FieldProp, FieldPtr, OwnerObject, FieldPair.Value, OutErrors, bValidationOnly);
+			}
+			return bFieldSuccess;
 		}
 
 		FString StringValue;
