@@ -1,5 +1,10 @@
 # Changelog
 
+## 6.3.0
+- **AnimGraph K2Node_VariableGet support** — `add_animgraph_nodes` now accepts `K2Node_VariableGet` with a `variableName` field, resolving inherited native properties via `SetFromField` with a manual `CreatePin` fallback when the skeleton class is not yet compiled.
+- **Struct property field-by-field fallback** — `PropertySerializer` now falls back to recursive per-field application when `FJsonObjectConverter::JsonObjectToUStruct` fails, enabling partial property updates on complex structs like `FAnimNode_ModifyBone` (e.g. setting `BoneToModify`, `RotationMode`, `RotationSpace` individually).
+- **AnimBlueprint validate_only crash fix** — `DuplicateObject<UBlueprint>` in both `Modify` and `ModifyGraphs` validate-only paths now uses `MakeUniqueObjectName` to prevent CDO class-mismatch crashes during `PostDuplicateBlueprint` compilation.
+
 ## 2.1.0
 - **Material selector precision** — material graph writes now resolve source outputs and destination inputs by index or name, preserve explicit output-index wiring on expression and property connections, and validate conflicting selectors before mutating assets.
 - **Widget class-default parity** — widget class-default patch flows now accept the canonical `classDefaults` payload shape while preserving `class_defaults` compatibility, and extraction hardens inherited generated-class default serialization.
