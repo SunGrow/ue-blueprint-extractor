@@ -2825,7 +2825,14 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::Modify(
 			|| (Operation == TEXT("patch_component") && bHasBlueprintParent);
 		if (!bSkipDuplicate)
 		{
-			WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage());
+			// Use a unique name to prevent CDO class-mismatch crashes during
+			// PostDuplicateBlueprint compilation (critical for AnimBlueprints where
+			// duplication triggers immediate recompilation via PostDuplicateBlueprint).
+			const FName PreviewName = MakeUniqueObjectName(
+				GetTransientPackage(),
+				Blueprint->GetClass(),
+				*FString::Printf(TEXT("%s_BEValidation"), *Blueprint->GetName()));
+			WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage(), PreviewName);
 			if (!WorkingBlueprint)
 			{
 				Context.AddError(
@@ -2997,7 +3004,14 @@ TSharedPtr<FJsonObject> FBlueprintAuthoring::ModifyGraphs(
 	UBlueprint* WorkingBlueprint = Blueprint;
 	if (bValidateOnly)
 	{
-		WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage());
+		// Use a unique name to prevent CDO class-mismatch crashes during
+		// PostDuplicateBlueprint compilation (critical for AnimBlueprints where
+		// duplication triggers immediate recompilation via PostDuplicateBlueprint).
+		const FName PreviewName = MakeUniqueObjectName(
+			GetTransientPackage(),
+			Blueprint->GetClass(),
+			*FString::Printf(TEXT("%s_BEValidation"), *Blueprint->GetName()));
+		WorkingBlueprint = DuplicateObject<UBlueprint>(Blueprint, GetTransientPackage(), PreviewName);
 		if (!WorkingBlueprint)
 		{
 			Context.AddError(
