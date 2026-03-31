@@ -27,6 +27,7 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_ExecutionSequence.h"
 #include "K2Node_FunctionEntry.h"
+#include "K2Node_VariableGet.h"
 #include "KismetCompilerModule.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -2117,11 +2118,11 @@ static UClass* ResolveAnimGraphNodeClass(const FString& ClassName, TArray<FStrin
 static UEdGraphNode* FindNodeById(
 	const UEdGraph* Graph,
 	const FString& NodeRef,
-	const TMap<FString, UAnimGraphNode_Base*>& CreatedNodes,
+	const TMap<FString, UEdGraphNode*>& CreatedNodes,
 	TArray<FString>& OutErrors)
 {
 	// Check created nodes first (by user-assigned ID)
-	if (UAnimGraphNode_Base* const* Found = CreatedNodes.Find(NodeRef))
+	if (UEdGraphNode* const* Found = CreatedNodes.Find(NodeRef))
 	{
 		return *Found;
 	}
@@ -2218,7 +2219,7 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 	}
 
 	// Phase 1: Create all nodes
-	TMap<FString, UAnimGraphNode_Base*> CreatedNodes;
+	TMap<FString, UEdGraphNode*> CreatedNodes;
 	const TArray<TSharedPtr<FJsonValue>>* NodesArray = nullptr;
 	if (!Payload->TryGetArrayField(TEXT("nodes"), NodesArray) || !NodesArray)
 	{
@@ -2260,17 +2261,46 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 			continue;
 		}
 
-		UClass* NodeClass = ResolveAnimGraphNodeClass(ClassName, OutErrors);
-		if (!NodeClass)
-		{
-			continue;
-		}
+		// Try AnimGraphNode_Base first, then K2Node_VariableGet as fallback
+		UEdGraphNode* NewNode = nullptr;
 
-		// NewObject + PostPlacedNewNode + AllocateDefaultPins (FGraphNodeCreator pattern)
-		UAnimGraphNode_Base* NewNode = NewObject<UAnimGraphNode_Base>(AnimGraph, NodeClass);
-		if (!NewNode)
+		TArray<FString> AnimResolveErrors;
+		UClass* NodeClass = ResolveAnimGraphNodeClass(ClassName, AnimResolveErrors);
+		if (NodeClass)
 		{
-			OutErrors.Add(FString::Printf(TEXT("%s: failed to create node of class '%s'."), *NodePath, *ClassName));
+			// Standard AnimGraph node
+			UAnimGraphNode_Base* AnimNode = NewObject<UAnimGraphNode_Base>(AnimGraph, NodeClass);
+			if (!AnimNode)
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s: failed to create node of class '%s'."), *NodePath, *ClassName));
+				continue;
+			}
+			NewNode = AnimNode;
+		}
+		else if (ClassName == TEXT("K2Node_VariableGet") || ClassName.EndsWith(TEXT(".K2Node_VariableGet")))
+		{
+			// K2Node_VariableGet — variable getter (e.g. Get SpineRotation)
+			FString VariableName;
+			if (!NodeDef->TryGetStringField(TEXT("variableName"), VariableName) || VariableName.IsEmpty())
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s: K2Node_VariableGet requires a 'variableName' field."), *NodePath));
+				continue;
+			}
+
+			UK2Node_VariableGet* VarGetNode = NewObject<UK2Node_VariableGet>(AnimGraph);
+			if (!VarGetNode)
+			{
+				OutErrors.Add(FString::Printf(TEXT("%s: failed to create K2Node_VariableGet."), *NodePath));
+				continue;
+			}
+
+			VarGetNode->VariableReference.SetSelfMember(FName(*VariableName));
+			NewNode = VarGetNode;
+		}
+		else
+		{
+			// Neither an AnimGraph node nor a supported K2Node
+			OutErrors.Append(AnimResolveErrors);
 			continue;
 		}
 
@@ -2422,7 +2452,7 @@ static bool ConnectAnimGraphPins(UBlueprint* Blueprint,
 		return false;
 	}
 
-	TMap<FString, UAnimGraphNode_Base*> EmptyMap;
+	TMap<FString, UEdGraphNode*> EmptyMap;
 	const TArray<TSharedPtr<FJsonValue>>* ConnectionsArray = nullptr;
 	if (!Payload->TryGetArrayField(TEXT("connections"), ConnectionsArray) || !ConnectionsArray)
 	{
