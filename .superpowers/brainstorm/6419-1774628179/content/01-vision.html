@@ -1,0 +1,59 @@
+<h2>Pipeline Studio</h2>
+<p class="subtitle">A visual tool for building LLM workflows across projects, models, and tools</p>
+
+<div class="section">
+  <h3>The Problem</h3>
+  <p>Today, multi-step LLM work is manual. You copy output from one terminal, paste it into another, adjust prompts, re-run when something fails. Context is lost between steps. Errors are invisible until you check manually. Cost is untracked. Parallelism is impossible.</p>
+  <p>These aren't limitations of any individual LLM. They are limitations of treating LLM interactions as isolated conversations instead of steps in a structured workflow.</p>
+</div>
+
+<div class="section">
+  <h3>The Solution</h3>
+  <p>Pipeline Studio is a desktop app where you build LLM workflows visually. Drag nodes onto a canvas, connect them with wires, run the whole pipeline with one click. Each node is a self-contained step: call an LLM, route data based on conditions, loop until quality is met, or pause for human review.</p>
+
+  <div style="margin:24px 0; display:grid; grid-template-columns:repeat(3,1fr); gap:16px;">
+    <div style="padding:16px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Typed data flow</div>
+      <div style="color:#999; font-size:13px;">Wires carry typed data (text, images, JSON). The system blocks you from connecting incompatible types before you run anything.</div>
+    </div>
+    <div style="padding:16px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Any model, any CLI</div>
+      <div style="color:#999; font-size:13px;">Claude Code, Gemini, GPT, Kimi — each node can use a different model. CLI tools run natively with their full ecosystems (MCP, skills, agents).</div>
+    </div>
+    <div style="padding:16px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Safe by default</div>
+      <div style="color:#999; font-size:13px;">Type checking at wire-time. Cost budgets on every LLM call. Process sandboxing. Error ports that force you to handle failures — or explicitly ignore them.</div>
+    </div>
+    <div style="padding:16px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Reusable functions</div>
+      <div style="color:#999; font-size:13px;">Select a group of nodes, collapse to a function. Parameterized inputs and outputs. Share across projects via libraries.</div>
+    </div>
+    <div style="padding:16px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Incremental execution</div>
+      <div style="color:#999; font-size:13px;">Change one step, re-run only what's downstream. Unchanged nodes use cached results. No wasted compute or API spend.</div>
+    </div>
+    <div style="padding:16px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">LLM-editable</div>
+      <div style="color:#999; font-size:13px;">A built-in MCP server lets LLMs create, modify, and run pipelines. The tool is programmable infrastructure, not just a GUI.</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Documents delivered</h3>
+  <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:12px;">
+    <div style="padding:14px; background:#1a2332; border-radius:8px; border-left:3px solid #4ea8de;">
+      <div style="color:#4ea8de; font-weight:600;">Vision</div>
+      <div style="color:#888; font-size:12px; margin-top:4px;">9 sections — problem, concepts, scenario walkthrough, architecture, safety, LLM self-editing, competitive comparison</div>
+    </div>
+    <div style="padding:14px; background:#1a2332; border-radius:8px; border-left:3px solid #e94560;">
+      <div style="color:#e94560; font-weight:600;">Technical Design</div>
+      <div style="color:#888; font-size:12px; margin-top:4px;">11 sections — protocol spec, engine architecture, all 9 node types, adapters, functions, loops, safety, MCP API, persistence</div>
+    </div>
+    <div style="padding:14px; background:#1a2332; border-radius:8px; border-left:3px solid #06d6a0;">
+      <div style="color:#06d6a0; font-weight:600;">Implementation Plan</div>
+      <div style="color:#888; font-size:12px; margin-top:4px;">3 sequential phases, 24 milestones, dependency graph, backflow tracking, risk mitigation</div>
+    </div>
+  </div>
+  <p style="color:#666; font-size:12px; margin-top:12px;">Navigate through the following pages for architecture, the example pipeline, and the development roadmap →</p>
+</div>

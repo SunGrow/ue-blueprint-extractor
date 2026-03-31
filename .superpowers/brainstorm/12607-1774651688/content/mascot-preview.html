@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { background: #0d1117; color: #e6e6e6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 40px; display: flex; flex-direction: column; align-items: center; }
+  h2 { color: #e6e6e6; margin-bottom: 4px; }
+  .subtitle { color: #888; margin-bottom: 30px; }
+  .preview-area { display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+  .mascot-card { background: #161b22; border-radius: 16px; padding: 30px; text-align: center; border: 1px solid #30363d; }
+  .mascot-card.dark { background: #0d1117; }
+  .mascot-card.light { background: #f6f8fa; }
+  .mascot-card h3 { margin: 16px 0 4px; font-size: 14px; }
+  .mascot-card p { color: #888; font-size: 12px; margin: 0; }
+  .color-strip { display: flex; gap: 8px; margin-top: 24px; justify-content: center; }
+  .swatch { width: 40px; height: 40px; border-radius: 8px; border: 1px solid #30363d; }
+  .swatch-label { font-size: 10px; color: #888; margin-top: 4px; text-align: center; }
+  .notes { max-width: 600px; margin-top: 30px; padding: 20px; background: #161b22; border-radius: 12px; border: 1px solid #30363d; font-size: 13px; line-height: 1.6; color: #aaa; }
+  .notes strong { color: #C47A1E; }
+</style>
+</head>
+<body>
+  <h2>GnomeFlow Mascot — First Draft</h2>
+  <p class="subtitle">A serious rabbit-gnome miner with a sliding hat</p>
+
+  <div class="preview-area">
+    <div class="mascot-card dark">
+      <img src="/file/D:/Development/llm-tools/gnomeflow/logo.svg" width="280" height="340" alt="GnomeFlow mascot on dark background" onerror="this.parentElement.innerHTML='<p style=color:#666>SVG preview unavailable — open logo.svg directly</p>'"/>
+      <h3>Dark Background</h3>
+      <p>Primary context (dark theme editors)</p>
+    </div>
+    <div class="mascot-card light">
+      <img src="/file/D:/Development/llm-tools/gnomeflow/logo.svg" width="280" height="340" alt="GnomeFlow mascot on light background" onerror="this.parentElement.innerHTML='<p style=color:#666>SVG preview unavailable — open logo.svg directly</p>'"/>
+      <h3>Light Background</h3>
+      <p>Docs, README, print</p>
+    </div>
+  </div>
+
+  <div class="color-strip">
+    <div>
+      <div class="swatch" style="background:#F5E6C8;"></div>
+      <div class="swatch-label">Cream<br/>#F5E6C8</div>
+    </div>
+    <div>
+      <div class="swatch" style="background:#C47A1E;"></div>
+      <div class="swatch-label">Amber<br/>#C47A1E</div>
+    </div>
+    <div>
+      <div class="swatch" style="background:#FFD700;"></div>
+      <div class="swatch-label">Lamp<br/>#FFD700</div>
+    </div>
+    <div>
+      <div class="swatch" style="background:#3D2010;"></div>
+      <div class="swatch-label">Outline<br/>#3D2010</div>
+    </div>
+    <div>
+      <div class="swatch" style="background:#7A8A9A;"></div>
+      <div class="swatch-label">Steel<br/>#7A8A9A</div>
+    </div>
+    <div>
+      <div class="swatch" style="background:#5B7A9A;"></div>
+      <div class="swatch-label">Overalls<br/>#5B7A9A</div>
+    </div>
+    <div>
+      <div class="swatch" style="background:#F2B8B5;"></div>
+      <div class="swatch-label">Inner ear<br/>#F2B8B5</div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <strong>Design notes:</strong><br/>
+    — 1:2.5 head-to-body ratio (chibi range)<br/>
+    — Hard hat tilted 14° with headlamp, one ear escaped, one trapped under brim<br/>
+    — Determined expression: inner brows lowered, straight mouth, big irises with catchlights<br/>
+    — Pickaxe held at side, subtle whiskers, tiny cotton tail<br/>
+    — Blue-grey overalls with amber suspender straps<br/>
+    — Warm palette (cream + amber) to differentiate from blue/purple AI startup space<br/><br/>
+    <strong>If SVG doesn't render in browser:</strong> Open <code>D:/Development/llm-tools/gnomeflow/logo.svg</code> directly in a browser or VS Code.
+  </div>
+</body>
+</html>

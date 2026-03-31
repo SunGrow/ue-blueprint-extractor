@@ -1,0 +1,185 @@
+<h2>Pipeline Studio — Architecture Overview</h2>
+<p class="subtitle">Protocol-first visual LLM workflow orchestrator — 42 features across 9 subsystems</p>
+
+<div class="section">
+  <h3>System Architecture</h3>
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin:20px 0;">
+
+    <div style="background:#1a1a2e; border:2px solid #e94560; border-radius:12px; padding:16px; grid-column:1/4;">
+      <div style="color:#e94560; font-weight:bold; font-size:14px; margin-bottom:8px;">PROTOCOL LAYER (JSON-RPC 2.0 + LSP-style capabilities)</div>
+      <div style="color:#aaa; font-size:12px;">Graph schema, node definitions, typed ports, execution states, safety rules — the single source of truth</div>
+      <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+        <span style="background:#e94560; color:white; padding:2px 8px; border-radius:4px; font-size:11px;">7 protocol features</span>
+        <span style="background:#333; color:#ccc; padding:2px 8px; border-radius:4px; font-size:11px;">Typed event stream</span>
+        <span style="background:#333; color:#ccc; padding:2px 8px; border-radius:4px; font-size:11px;">Lifecycle management</span>
+        <span style="background:#333; color:#ccc; padding:2px 8px; border-radius:4px; font-size:11px;">Cancellation</span>
+        <span style="background:#333; color:#ccc; padding:2px 8px; border-radius:4px; font-size:11px;">Structured errors</span>
+      </div>
+    </div>
+
+    <div style="background:#1a1a2e; border:2px solid #0f3460; border-radius:12px; padding:16px;">
+      <div style="color:#4ea8de; font-weight:bold; font-size:14px; margin-bottom:8px;">ENGINE (Rust + Tokio)</div>
+      <div style="color:#aaa; font-size:12px; margin-bottom:8px;">Standalone headless binary</div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <span style="background:#0f3460; color:#4ea8de; padding:2px 8px; border-radius:4px; font-size:11px;">Reactive actor model (10 features)</span>
+        <span style="background:#0f3460; color:#4ea8de; padding:2px 8px; border-radius:4px; font-size:11px;">Tokio actor per node</span>
+        <span style="background:#0f3460; color:#4ea8de; padding:2px 8px; border-radius:4px; font-size:11px;">Topological scheduling</span>
+        <span style="background:#0f3460; color:#4ea8de; padding:2px 8px; border-radius:4px; font-size:11px;">Incremental caching</span>
+        <span style="background:#0f3460; color:#4ea8de; padding:2px 8px; border-radius:4px; font-size:11px;">Cycle detection + loop mode</span>
+        <span style="background:#0f3460; color:#4ea8de; padding:2px 8px; border-radius:4px; font-size:11px;">Pure/action distinction</span>
+        <span style="background:#0f3460; color:#4ea8de; padding:2px 8px; border-radius:4px; font-size:11px;">Node state machine</span>
+      </div>
+    </div>
+
+    <div style="background:#1a1a2e; border:2px solid #533483; border-radius:12px; padding:16px;">
+      <div style="color:#b06ab3; font-weight:bold; font-size:14px; margin-bottom:8px;">VISUAL EDITOR (Tauri + Web Canvas)</div>
+      <div style="color:#aaa; font-size:12px; margin-bottom:8px;">Separate app, connects to engine</div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <span style="background:#533483; color:#b06ab3; padding:2px 8px; border-radius:4px; font-size:11px;">Node canvas (5 UI features)</span>
+        <span style="background:#533483; color:#b06ab3; padding:2px 8px; border-radius:4px; font-size:11px;">Per-node live output</span>
+        <span style="background:#533483; color:#b06ab3; padding:2px 8px; border-radius:4px; font-size:11px;">Loop iteration history</span>
+        <span style="background:#533483; color:#b06ab3; padding:2px 8px; border-radius:4px; font-size:11px;">Error panel + jump-to-node</span>
+        <span style="background:#533483; color:#b06ab3; padding:2px 8px; border-radius:4px; font-size:11px;">Searchable node palette</span>
+      </div>
+    </div>
+
+    <div style="background:#1a1a2e; border:2px solid #16697a; border-radius:12px; padding:16px;">
+      <div style="color:#00b4d8; font-weight:bold; font-size:14px; margin-bottom:8px;">EMBEDDED MCP SERVER</div>
+      <div style="color:#aaa; font-size:12px; margin-bottom:8px;">LLMs can edit the graph</div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <span style="background:#16697a; color:#00b4d8; padding:2px 8px; border-radius:4px; font-size:11px;">Graph manipulation tools</span>
+        <span style="background:#16697a; color:#00b4d8; padding:2px 8px; border-radius:4px; font-size:11px;">stdio transport</span>
+        <span style="background:#16697a; color:#00b4d8; padding:2px 8px; border-radius:4px; font-size:11px;">Meta-orchestration</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section">
+  <h3>Node Types (v1)</h3>
+  <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin:16px 0;">
+    <div style="background:#1a2332; border-left:3px solid #4ea8de; padding:10px; border-radius:4px;">
+      <div style="color:#4ea8de; font-weight:bold; font-size:13px;">LLM Node</div>
+      <div style="color:#888; font-size:11px;">CLI session or API call with streaming output</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #e94560; padding:10px; border-radius:4px;">
+      <div style="color:#e94560; font-weight:bold; font-size:13px;">Command Node</div>
+      <div style="color:#888; font-size:11px;">Shell command (npm test, cargo build)</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #b06ab3; padding:10px; border-radius:4px;">
+      <div style="color:#b06ab3; font-weight:bold; font-size:13px;">Router / Director</div>
+      <div style="color:#888; font-size:11px;">Inspect data, route dynamically</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #ffd166; padding:10px; border-radius:4px;">
+      <div style="color:#ffd166; font-weight:bold; font-size:13px;">Loop Nodes</div>
+      <div style="color:#888; font-size:11px;">For / ForEach / While / Break</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #06d6a0; padding:10px; border-radius:4px;">
+      <div style="color:#06d6a0; font-weight:bold; font-size:13px;">Function Node</div>
+      <div style="color:#888; font-size:11px;">UE-style parameterized subgraph</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #00b4d8; padding:10px; border-radius:4px;">
+      <div style="color:#00b4d8; font-weight:bold; font-size:13px;">Human-in-the-Loop</div>
+      <div style="color:#888; font-size:11px;">Pause for user input (text only v1)</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #aaa; padding:10px; border-radius:4px;">
+      <div style="color:#aaa; font-weight:bold; font-size:13px;">Splitter / Merger</div>
+      <div style="color:#888; font-size:11px;">Break/combine struct fields</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #aaa; padding:10px; border-radius:4px;">
+      <div style="color:#aaa; font-weight:bold; font-size:13px;">Constant / Template</div>
+      <div style="color:#888; font-size:11px;">Static prompt values</div>
+    </div>
+    <div style="background:#1a2332; border-left:3px solid #aaa; padding:10px; border-radius:4px;">
+      <div style="color:#aaa; font-weight:bold; font-size:13px;">Sequence</div>
+      <div style="color:#888; font-size:11px;">Execute outputs in order</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Data Flow Model</h3>
+  <div style="background:#1a1a2e; border-radius:8px; padding:16px; margin:12px 0;">
+    <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
+      <div style="text-align:center;">
+        <div style="width:60px; height:40px; background:#e94560; border-radius:6px; display:flex; align-items:center; justify-content:center; color:white; font-size:11px; font-weight:bold;">Node A</div>
+        <div style="color:#888; font-size:10px; margin-top:4px;">outputs struct</div>
+      </div>
+      <div style="color:#e94560; font-size:20px;">→</div>
+      <div style="text-align:center; border:1px dashed #555; padding:8px; border-radius:6px;">
+        <div style="color:#ffd166; font-size:11px; font-weight:bold;">{text, image, file}</div>
+        <div style="color:#666; font-size:10px;">typed struct</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div style="color:#4ea8de; font-size:14px;">→</div>
+          <div style="color:#4ea8de; font-size:11px;">text field</div>
+          <div style="color:#4ea8de; font-size:14px;">→</div>
+          <div style="width:60px; height:24px; background:#0f3460; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#4ea8de; font-size:10px;">Node B</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div style="color:#06d6a0; font-size:14px;">→</div>
+          <div style="color:#06d6a0; font-size:11px;">image field</div>
+          <div style="color:#06d6a0; font-size:14px;">→</div>
+          <div style="width:60px; height:24px; background:#1a4332; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#06d6a0; font-size:10px;">Node C</div>
+        </div>
+      </div>
+    </div>
+    <div style="color:#888; font-size:11px; margin-top:12px;">Dual wire types: exec pins (control flow) + data pins (typed values). Field-level destructuring on connections.</div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Safety System (Code Complete / Rust model)</h3>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:12px 0;">
+    <div style="background:#1a2332; padding:10px; border-radius:6px; border-left:3px solid #06d6a0;">
+      <div style="color:#06d6a0; font-weight:bold; font-size:12px;">Connection-time validation</div>
+      <div style="color:#888; font-size:11px;">Type mismatches caught when you wire</div>
+    </div>
+    <div style="background:#1a2332; padding:10px; border-radius:6px; border-left:3px solid #06d6a0;">
+      <div style="color:#06d6a0; font-weight:bold; font-size:12px;">Build-time validation pass</div>
+      <div style="color:#888; font-size:11px;">Full graph validation before execution</div>
+    </div>
+    <div style="background:#1a2332; padding:10px; border-radius:6px; border-left:3px solid #06d6a0;">
+      <div style="color:#06d6a0; font-weight:bold; font-size:12px;">Per-node error port</div>
+      <div style="color:#888; font-size:11px;">Every node has an error output — must be connected or explicitly ignored</div>
+    </div>
+    <div style="background:#1a2332; padding:10px; border-radius:6px; border-left:3px solid #06d6a0;">
+      <div style="color:#06d6a0; font-weight:bold; font-size:12px;">Process sandboxing</div>
+      <div style="color:#888; font-size:11px;">CLI processes isolated, resource limits enforced</div>
+    </div>
+    <div style="background:#1a2332; padding:10px; border-radius:6px; border-left:3px solid #ffd166; grid-column:1/3;">
+      <div style="color:#ffd166; font-weight:bold; font-size:12px;">Cost budget enforcement</div>
+      <div style="color:#888; font-size:11px;">Per-node and per-pipeline token/cost limits with configurable action on breach</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>LLM Adapters (v1)</h3>
+  <div style="display:flex; gap:16px; margin:12px 0;">
+    <div style="flex:1; background:#1a2332; padding:12px; border-radius:6px; border:1px solid #4ea8de;">
+      <div style="color:#4ea8de; font-weight:bold;">Claude Code CLI</div>
+      <div style="color:#888; font-size:11px; margin-top:4px;">Full CLI with MCP, skills, agent system. JSONL streaming. Per-node config.</div>
+    </div>
+    <div style="flex:1; background:#1a2332; padding:12px; border-radius:6px; border:1px solid #b06ab3;">
+      <div style="color:#b06ab3; font-weight:bold;">OpenRouter API</div>
+      <div style="color:#888; font-size:11px; margin-top:4px;">Covers Gemini, Kimi K2.5, and 200+ models. Unified API adapter.</div>
+    </div>
+  </div>
+  <div style="color:#666; font-size:11px;">Unified NodeExecutor trait — both adapters produce Stream&lt;Item = NodeEvent&gt;. Additional CLI adapters (Gemini, Codex) planned for v2.</div>
+</div>
+
+<div class="section">
+  <h3>Deferred to v2+</h3>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; margin:12px 0;">
+    <span style="background:#2a2a2a; color:#888; padding:4px 10px; border-radius:4px; font-size:11px;">Dynamic Fan-Out (v2 priority)</span>
+    <span style="background:#2a2a2a; color:#888; padding:4px 10px; border-radius:4px; font-size:11px;">MCP Sampling (v2)</span>
+    <span style="background:#2a2a2a; color:#888; padding:4px 10px; border-radius:4px; font-size:11px;">Gemini CLI adapter (v2)</span>
+    <span style="background:#2a2a2a; color:#888; padding:4px 10px; border-radius:4px; font-size:11px;">Race Inputs (v2)</span>
+    <span style="background:#2a2a2a; color:#888; padding:4px 10px; border-radius:4px; font-size:11px;">Ralph Loop as primitive (v2, template in v1)</span>
+    <span style="background:#2a2a2a; color:#888; padding:4px 10px; border-radius:4px; font-size:11px;">Durable checkpointing (v3)</span>
+    <span style="background:#2a2a2a; color:#888; padding:4px 10px; border-radius:4px; font-size:11px;">Remote debugging (v3)</span>
+  </div>
+</div>

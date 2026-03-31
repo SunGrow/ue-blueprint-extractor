@@ -1,0 +1,122 @@
+<h2>Example Pipeline — UI Research Workflow</h2>
+<p class="subtitle">Your original scenario: Claude researches → Gemini generates CSS → Claude reviews → build step</p>
+
+<div class="section">
+  <div style="position:relative; padding:20px; background:#0d1117; border-radius:12px; min-height:420px; overflow:hidden;">
+
+    <!-- Node 1: Research -->
+    <div style="position:absolute; left:30px; top:30px; width:220px; background:#161b22; border:1px solid #4ea8de; border-radius:8px; overflow:hidden;">
+      <div style="background:#4ea8de22; padding:8px 12px; border-bottom:1px solid #4ea8de33; display:flex; align-items:center; gap:8px;">
+        <span style="font-size:10px; background:#4ea8de; color:#000; padding:1px 6px; border-radius:3px; font-weight:600;">LLM</span>
+        <span style="font-weight:600; font-size:13px;">Research Components</span>
+      </div>
+      <div style="padding:10px 12px; font-size:11px; color:#888;">
+        <div><span style="color:#666;">Backend:</span> Claude Code CLI</div>
+        <div><span style="color:#666;">Model:</span> claude-opus-4-6</div>
+        <div style="margin-top:6px; color:#666; font-size:10px;">Prompt: "Research the shadcn/ui library. List all button variants..."</div>
+      </div>
+      <div style="padding:6px 12px; border-top:1px solid #21262d; display:flex; justify-content:space-between; font-size:10px;">
+        <span style="color:#b07aed;">● prompt <span style="color:#555;">(text)</span></span>
+        <span style="color:#b07aed;">findings <span style="color:#555;">(text)</span> ●</span>
+      </div>
+    </div>
+
+    <!-- Wire 1→2 -->
+    <svg style="position:absolute; left:250px; top:105px; width:60px; height:40px;" viewBox="0 0 60 40">
+      <path d="M0,0 C30,0 30,40 60,40" stroke="#b07aed" stroke-width="2" fill="none" opacity="0.6"/>
+    </svg>
+
+    <!-- Node 2: CSS Generator -->
+    <div style="position:absolute; left:310px; top:110px; width:220px; background:#161b22; border:1px solid #b06ab3; border-radius:8px; overflow:hidden;">
+      <div style="background:#b06ab322; padding:8px 12px; border-bottom:1px solid #b06ab333; display:flex; align-items:center; gap:8px;">
+        <span style="font-size:10px; background:#b06ab3; color:#000; padding:1px 6px; border-radius:3px; font-weight:600;">LLM</span>
+        <span style="font-weight:600; font-size:13px;">Generate CSS</span>
+      </div>
+      <div style="padding:10px 12px; font-size:11px; color:#888;">
+        <div><span style="color:#666;">Backend:</span> OpenRouter API</div>
+        <div><span style="color:#666;">Model:</span> gemini-2.5-pro</div>
+        <div style="margin-top:6px; color:#666; font-size:10px;">Prompt: "Generate Tailwind CSS utility classes for each button variant..."</div>
+      </div>
+      <div style="padding:6px 12px; border-top:1px solid #21262d; display:flex; justify-content:space-between; font-size:10px;">
+        <span style="color:#b07aed;">● context <span style="color:#555;">(text)</span></span>
+        <span style="color:#b07aed;">css_classes <span style="color:#555;">(text)</span> ●</span>
+      </div>
+    </div>
+
+    <!-- Wire 2→3 -->
+    <svg style="position:absolute; left:530px; top:195px; width:60px; height:40px;" viewBox="0 0 60 40">
+      <path d="M0,0 C30,0 30,40 60,40" stroke="#b07aed" stroke-width="2" fill="none" opacity="0.6"/>
+    </svg>
+
+    <!-- Node 3: Review -->
+    <div style="position:absolute; left:590px; top:200px; width:220px; background:#161b22; border:1px solid #06d6a0; border-radius:8px; overflow:hidden;">
+      <div style="background:#06d6a022; padding:8px 12px; border-bottom:1px solid #06d6a033; display:flex; align-items:center; gap:8px;">
+        <span style="font-size:10px; background:#06d6a0; color:#000; padding:1px 6px; border-radius:3px; font-weight:600;">LLM</span>
+        <span style="font-weight:600; font-size:13px;">Accessibility Review</span>
+      </div>
+      <div style="padding:10px 12px; font-size:11px; color:#888;">
+        <div><span style="color:#666;">Backend:</span> Claude Code CLI</div>
+        <div><span style="color:#666;">Model:</span> claude-sonnet-4-6</div>
+      </div>
+      <div style="padding:6px 12px; border-top:1px solid #21262d; display:flex; justify-content:space-between; font-size:10px;">
+        <span style="color:#b07aed;">● css_input <span style="color:#555;">(text)</span></span>
+        <div style="text-align:right;">
+          <div style="color:#b07aed;">review <span style="color:#555;">(text)</span> ●</div>
+          <div style="color:#58a6ff;">issues_found <span style="color:#555;">(bool)</span> ●</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Node 4: Router -->
+    <div style="position:absolute; left:420px; top:320px; width:180px; background:#161b22; border:1px solid #ffd166; border-radius:8px; overflow:hidden;">
+      <div style="background:#ffd16622; padding:8px 12px; border-bottom:1px solid #ffd16633; display:flex; align-items:center; gap:8px;">
+        <span style="font-size:10px; background:#ffd166; color:#000; padding:1px 6px; border-radius:3px; font-weight:600;">ROUTER</span>
+        <span style="font-weight:600; font-size:13px;">Quality Gate</span>
+      </div>
+      <div style="padding:8px 12px; font-size:11px; color:#888;">
+        <div>if issues_found = true → retry</div>
+        <div>if issues_found = false → build</div>
+      </div>
+    </div>
+
+    <!-- Loop back arrow (conceptual) -->
+    <svg style="position:absolute; left:310px; top:250px; width:110px; height:100px;" viewBox="0 0 110 100">
+      <path d="M110,100 C80,100 0,80 0,0" stroke="#ffd166" stroke-width="1.5" fill="none" stroke-dasharray="4,4" opacity="0.5"/>
+      <polygon points="0,0 8,4 4,10" fill="#ffd166" opacity="0.5"/>
+    </svg>
+    <div style="position:absolute; left:295px; top:270px; font-size:9px; color:#ffd166; opacity:0.7;">retry loop<br/>(max 5×)</div>
+
+    <!-- Node 5: Build -->
+    <div style="position:absolute; left:660px; top:340px; width:180px; background:#161b22; border:1px solid #58a6ff; border-radius:8px; overflow:hidden;">
+      <div style="background:#58a6ff22; padding:8px 12px; border-bottom:1px solid #58a6ff33; display:flex; align-items:center; gap:8px;">
+        <span style="font-size:10px; background:#58a6ff; color:#000; padding:1px 6px; border-radius:3px; font-weight:600;">LLM</span>
+        <span style="font-weight:600; font-size:13px;">Apply to Project</span>
+      </div>
+      <div style="padding:8px 12px; font-size:11px; color:#888;">
+        <div><span style="color:#666;">Backend:</span> Claude Code CLI</div>
+        <div style="margin-top:4px; color:#666; font-size:10px;">Apply CSS classes to components</div>
+      </div>
+    </div>
+
+    <!-- Wire labels -->
+    <svg style="position:absolute; left:600px; top:310px; width:80px; height:50px;" viewBox="0 0 80 50">
+      <path d="M0,0 C40,0 40,50 80,50" stroke="#58a6ff" stroke-width="1.5" fill="none" opacity="0.5"/>
+    </svg>
+
+  </div>
+
+  <div style="margin-top:16px; display:grid; grid-template-columns:repeat(4,1fr); gap:10px; font-size:12px;">
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <span style="color:#4ea8de;">Step 1:</span> Claude Opus researches the component library
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <span style="color:#b06ab3;">Step 2:</span> Gemini generates CSS via OpenRouter
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <span style="color:#06d6a0;">Step 3:</span> Claude Sonnet reviews for accessibility
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <span style="color:#ffd166;">Step 4:</span> Quality gate loops or passes to build
+    </div>
+  </div>
+</div>

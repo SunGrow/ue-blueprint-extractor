@@ -1,0 +1,156 @@
+<h2>Implementation Roadmap — 3 Phases, 24 Milestones</h2>
+<p class="subtitle">Each phase completes fully before the next begins. Tests at every boundary.</p>
+
+<div class="section">
+
+  <!-- Phase 1 -->
+  <div style="margin-bottom:24px;">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+      <div style="width:36px; height:36px; background:#e94560; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; color:#000; flex-shrink:0;">P1</div>
+      <div>
+        <div style="font-weight:700; font-size:15px; color:#e94560;">Phase 1: Protocol</div>
+        <div style="color:#888; font-size:12px;">Define the contract. No engine code, no UI code.</div>
+      </div>
+    </div>
+    <div style="margin-left:18px; border-left:2px solid #e9456044; padding-left:24px;">
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#e94560; font-weight:600;">1.1 Message Schema</div>
+          <div style="color:#888; margin-top:2px;">JSON Schema files for all protocol messages</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#e94560; font-weight:600;">1.2 Type System</div>
+          <div style="color:#888; margin-top:2px;">13 types, compatibility matrix, wildcard resolution</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#e94560; font-weight:600;">1.3 Validation Rules</div>
+          <div style="color:#888; margin-top:2px;">~30 graph fixtures testing every validation check</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#e94560; font-weight:600;">1.4 Conformance Suite</div>
+          <div style="color:#888; margin-top:2px;">Rust test harness + ~80 JSON fixtures + mock server</div>
+        </div>
+      </div>
+      <div style="margin-top:8px; padding:8px 12px; background:#e9456011; border-radius:6px; font-size:11px; color:#e94560;">
+        Exit: Frozen protocol v0.1 — all fixtures pass against mock server
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2 -->
+  <div style="margin-bottom:24px;">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+      <div style="width:36px; height:36px; background:#4ea8de; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; color:#000; flex-shrink:0;">P2</div>
+      <div>
+        <div style="font-weight:700; font-size:15px; color:#4ea8de;">Phase 2: Engine</div>
+        <div style="color:#888; font-size:12px;">Build the Rust engine. Headless execution without UI.</div>
+      </div>
+    </div>
+    <div style="margin-left:18px; border-left:2px solid #4ea8de44; padding-left:24px;">
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.1 Data Model</div>
+          <div style="color:#888; margin-top:2px;">Rust workspace (lib + bin crates), serde parsing, type checker</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.2 Validation Engine</div>
+          <div style="color:#888; margin-top:2px;">All build-time checks, cycle detection, structured reports</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.3 Scheduler + Actors</div>
+          <div style="color:#888; margin-top:2px;">Tokio actor per node, topological sort, parallel execution</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.4 Node Types</div>
+          <div style="color:#888; margin-top:2px;">All 9 types including loops with condition re-pull</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.5 LLM Adapters</div>
+          <div style="color:#888; margin-top:2px;">Claude Code CLI + OpenRouter API + mock adapter</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.6 Functions</div>
+          <div style="color:#888; margin-top:2px;">Subgraphs, nesting, library loading, recursion detection</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.7 Caching</div>
+          <div style="color:#888; margin-top:2px;">Input-signature hashing, LRU cache, skip unchanged nodes</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.8 Safety</div>
+          <div style="color:#888; margin-top:2px;">Error port routing, cost budgets, process sandboxing</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.9 MCP Server</div>
+          <div style="color:#888; margin-top:2px;">13 tools for programmatic graph manipulation via stdio</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#4ea8de; font-weight:600;">2.10 CLI Runner</div>
+          <div style="color:#888; margin-top:2px;">Run pipelines from terminal: <code style="color:#4ea8de;">pipeline-studio run graph.json</code></div>
+        </div>
+      </div>
+      <div style="margin-top:8px; padding:8px 12px; background:#4ea8de11; border-radius:6px; font-size:11px; color:#4ea8de;">
+        Exit: All conformance tests pass against real engine. CLI can execute graphs. MCP server works.
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 3 -->
+  <div>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+      <div style="width:36px; height:36px; background:#b06ab3; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; color:#000; flex-shrink:0;">P3</div>
+      <div>
+        <div style="font-weight:700; font-size:15px; color:#b06ab3;">Phase 3: Visual Editor</div>
+        <div style="color:#888; font-size:12px;">Tauri 2 desktop app built on the proven engine.</div>
+      </div>
+    </div>
+    <div style="margin-left:18px; border-left:2px solid #b06ab344; padding-left:24px;">
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.1 Tauri Shell + IPC</div>
+          <div style="color:#888; margin-top:2px;">Engine embedded as Rust library, IPC roundtrip &lt;5ms</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.2 React Flow Canvas</div>
+          <div style="color:#888; margin-top:2px;">Custom nodes, typed port colors, graph serialization</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.3 Wire Type Checking</div>
+          <div style="color:#888; margin-top:2px;">Real-time validation, compatible ports highlight, tooltip errors</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.4 Node Palette</div>
+          <div style="color:#888; margin-top:2px;">Searchable, type-filtered, right-click context menu</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.5 Config Panels</div>
+          <div style="color:#888; margin-top:2px;">Per-node settings: model, prompt, budget, conditions</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.6 Live Streaming Output</div>
+          <div style="color:#888; margin-top:2px;">Tokens appear in nodes as LLMs work, state indicators</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.7 Error Panel</div>
+          <div style="color:#888; margin-top:2px;">Click error → canvas scrolls to the problem node</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.8 Function UI</div>
+          <div style="color:#888; margin-top:2px;">Collapse to function, double-click to inspect, breadcrumbs</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.9 Loop Inspector</div>
+          <div style="color:#888; margin-top:2px;">Pick an iteration number, see that pass's inputs and outputs</div>
+        </div>
+        <div style="padding:10px; background:#161b22; border-radius:6px; font-size:12px;">
+          <div style="color:#b06ab3; font-weight:600;">3.10 Project Save/Load</div>
+          <div style="color:#888; margin-top:2px;">Git-friendly JSON files, autosave, recent projects</div>
+        </div>
+      </div>
+      <div style="margin-top:8px; padding:8px 12px; background:#b06ab311; border-radius:6px; font-size:11px; color:#b06ab3;">
+        Exit: Full desktop app — create, configure, wire, run, debug, save, and reopen pipelines
+      </div>
+    </div>
+  </div>
+
+</div>

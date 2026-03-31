@@ -1,0 +1,105 @@
+<h2>Pipeline Studio — Final Design</h2>
+<p class="subtitle">Visual node-based LLM workflow orchestrator. 3 documents approved through 3 review rounds.</p>
+
+<div class="section">
+  <h3>What it is</h3>
+  <p>A desktop app where you build LLM workflows visually — drag nodes onto a canvas, connect them with typed wires, run everything with one click. Each node can use a different model and CLI tool. The engine runs headlessly in Rust. An embedded MCP server makes the tool programmable by LLMs themselves.</p>
+</div>
+
+<div class="section">
+  <h3>Key capabilities</h3>
+  <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:14px;">
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">4 LLM backends</div>
+      <div style="color:#999; font-size:13px;">Claude Code CLI, Gemini CLI, Codex CLI (native with full ecosystems) + OpenRouter API (200+ models). Auto-detects installed CLIs; grays out missing ones with install instructions.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Typed data flow</div>
+      <div style="color:#999; font-size:13px;">13 data types with color-coded wires. Type mismatches blocked at wire-draw time. Struct outputs can be split into individual fields and routed to different nodes.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Safe by default</div>
+      <div style="color:#999; font-size:13px;">Wire-time type checking. Build-time graph validation. Per-node cost budgets. Process sandboxing. Every error port must be handled or explicitly ignored. Opt-out like Rust's <code>unsafe</code>.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Functions & loops</div>
+      <div style="color:#999; font-size:13px;">Select nodes, extract to reusable function. Functions nest and share across projects. For/ForEach/While/Break loops with per-iteration debugging.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Graph editing</div>
+      <div style="color:#999; font-size:13px;">Multi-select, copy-paste (within and across graphs), extract-to-function, undo/redo. Standard node editor UX.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">LLM-editable</div>
+      <div style="color:#999; font-size:13px;">Built-in MCP server with 13 tools. LLMs can create nodes, wire them, validate, execute. Pipelines are programmable infrastructure.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Incremental execution</div>
+      <div style="color:#999; font-size:13px;">Input-signature caching. Changed one node? Only it and its downstream re-run. Unchanged steps skipped.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Performance-conscious</div>
+      <div style="color:#999; font-size:13px;">256KB buffered child I/O (10-50x syscall reduction). Zero-copy <code>bytes::Bytes</code> for streaming. <code>simd-json</code> parsing. 16ms event batching for UI.</div>
+    </div>
+    <div style="padding:14px; border:1px solid #333; border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:6px;">Protocol-first</div>
+      <div style="color:#999; font-size:13px;">JSON-RPC 2.0 (same as LSP and MCP). Evaluated against gRPC, Cap'n Proto, FlatBuffers, MessagePack — JSON-RPC wins on Tauri compat, MCP sharing, and LLM readability.</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Delivered documents</h3>
+  <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:12px;">
+    <div style="padding:14px; background:#1a2332; border-radius:8px; border-left:3px solid #4ea8de;">
+      <div style="color:#4ea8de; font-weight:600; font-size:15px;">Vision</div>
+      <div style="color:#888; font-size:12px; margin-top:6px;">Problem, core concepts, full scenario walkthrough (3 different CLIs in one pipeline), 4-layer architecture, safety philosophy, LLM self-editing, competitive comparison, deferred features</div>
+    </div>
+    <div style="padding:14px; background:#1a2332; border-radius:8px; border-left:3px solid #e94560;">
+      <div style="color:#e94560; font-weight:600; font-size:15px;">Technical Design</div>
+      <div style="color:#888; font-size:12px; margin-top:6px;">11 sections. Protocol spec, engine architecture + performance, 9 node types, data flow, 4 LLM adapters + auto-detection, functions, loops, safety, MCP API, persistence, testing</div>
+    </div>
+    <div style="padding:14px; background:#1a2332; border-radius:8px; border-left:3px solid #06d6a0;">
+      <div style="color:#06d6a0; font-weight:600; font-size:15px;">Implementation Plan</div>
+      <div style="color:#888; font-size:12px; margin-top:6px;">3 sequential phases, 24 milestones. Protocol fully → Engine fully → UI fully. Dependency graph, backflow tracking, risk mitigation, performance baselines</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Research & evaluation produced</h3>
+  <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; font-size:12px;">
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">Existing tools</div>
+      <div style="color:#666; margin-top:2px;">ComfyUI, Rete.js, React Flow, n8n, Node-RED, LangFlow, Rivet, Prefect</div>
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">UE Blueprints</div>
+      <div style="color:#666; margin-top:2px;">VM, type system, functions, macros, loops, validation, serialization</div>
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">Execution models</div>
+      <div style="color:#666; margin-top:2px;">Actors, streams, protocols, DAG engines, language eval → Rust recommended</div>
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">LLM orchestration</div>
+      <div style="color:#666; margin-top:2px;">CLI integration, MCP embedding, process management, Ralph Loop</div>
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">UI stacks</div>
+      <div style="color:#666; margin-top:2px;">React 19 + Vite + React Flow + Zustand/Jotai recommended</div>
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">Protocol eval</div>
+      <div style="color:#666; margin-top:2px;">JSON-RPC 2.0 confirmed over 5 alternatives</div>
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">Syscall performance</div>
+      <div style="color:#666; margin-top:2px;">Buffered I/O, bytes::Bytes, jemalloc, simd-json</div>
+    </div>
+    <div style="padding:10px; background:#161b22; border-radius:6px;">
+      <div style="color:#aaa; font-weight:600;">Feature court</div>
+      <div style="color:#666; margin-top:2px;">72 candidates → 40 KEEP + 2 included by court → 4 added by user</div>
+    </div>
+  </div>
+</div>

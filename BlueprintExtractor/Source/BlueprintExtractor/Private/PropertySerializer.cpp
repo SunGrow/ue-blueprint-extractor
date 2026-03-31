@@ -2,6 +2,7 @@
 #include "Authoring/AuthoringHelpers.h"
 
 #include "Components/Widget.h"
+#include "GameplayTagContainer.h"
 #include "JsonObjectConverter.h"
 #include "UObject/UnrealType.h"
 
@@ -336,6 +337,164 @@ static bool IsInstancedObjectProperty(const FObjectPropertyBase* ObjectProperty)
 {
 	return ObjectProperty && ObjectProperty->HasAnyPropertyFlags(
 		CPF_InstancedReference | CPF_ContainsInstancedReference | CPF_ExportObject | CPF_PersistentInstance);
+}
+
+static void AddError(TArray<FString>& OutErrors, const FString& Message);
+
+/**
+ * Extracts a tag name string from the UE text-export format (TagName="Foo.Bar")
+ * that ExportText_InContainer / ExportTextItem produces for FGameplayTag.
+ * Returns true if a tag name was successfully parsed (even if empty).
+ */
+static bool TryParseGameplayTagExportText(const FString& ExportText, FString& OutTagName)
+{
+	OutTagName.Reset();
+
+	FString Trimmed = ExportText.TrimStartAndEnd();
+	if (Trimmed.IsEmpty())
+	{
+		return true;
+	}
+
+	// Plain tag name without parentheses (e.g. "Foo.Bar")
+	if (!Trimmed.StartsWith(TEXT("(")))
+	{
+		OutTagName = Trimmed;
+		return true;
+	}
+
+	// Struct export format: (TagName="Foo.Bar") or ()
+	if (Trimmed == TEXT("()"))
+	{
+		return true;
+	}
+
+	// Try to extract TagName="..." from the parenthesised form
+	static const FString TagNamePrefix = TEXT("TagName=");
+
+	int32 TagNameStart = Trimmed.Find(TagNamePrefix, ESearchCase::IgnoreCase, ESearchDir::FromStart, 1);
+	if (TagNameStart == INDEX_NONE)
+	{
+		return false;
+	}
+
+	int32 ValueStart = TagNameStart + TagNamePrefix.Len();
+	if (ValueStart >= Trimmed.Len())
+	{
+		return false;
+	}
+
+	// Value may be quoted ("Foo.Bar") or unquoted (Foo.Bar)
+	FString ValuePortion = Trimmed.Mid(ValueStart);
+	// Strip trailing ')' and whitespace
+	ValuePortion.TrimEndInline();
+	if (ValuePortion.EndsWith(TEXT(")")))
+	{
+		ValuePortion.LeftChopInline(1);
+	}
+
+	// Strip surrounding quotes if present
+	if (ValuePortion.Len() >= 2
+		&& ValuePortion[0] == TEXT('"')
+		&& ValuePortion[ValuePortion.Len() - 1] == TEXT('"'))
+	{
+		ValuePortion = ValuePortion.Mid(1, ValuePortion.Len() - 2);
+	}
+
+	// "None" is UE's FName representation of NAME_None
+	if (ValuePortion == TEXT("None") || ValuePortion.IsEmpty())
+	{
+		return true;
+	}
+
+	OutTagName = ValuePortion;
+	return true;
+}
+
+/**
+ * Attempts to apply a JSON value to an FGameplayTag property.
+ * Accepts:
+ *   - JSON string: "(TagName=\"Foo.Bar\")" (UE export text)
+ *   - JSON string: "Foo.Bar" (plain tag name)
+ *   - JSON object: { "TagName": "Foo.Bar" }
+ * Returns true if the value was handled (even if the tag is invalid/empty).
+ * Returns false if the JSON value format is unrecognised.
+ */
+static bool TryApplyGameplayTagValue(const FStructProperty* StructProp,
+                                     void* ValuePtr,
+                                     const TSharedPtr<FJsonValue>& JsonValue,
+                                     TArray<FString>& OutErrors,
+                                     const bool bValidationOnly)
+{
+	if (!StructProp || !StructProp->Struct || StructProp->Struct != FGameplayTag::StaticStruct())
+	{
+		return false;
+	}
+
+	FString TagName;
+
+	// Try JSON object format: { "TagName": "Foo.Bar" }
+	// IMPORTANT: Check Type before calling AsObject(). UE's FJsonValueString::AsObject()
+	// returns a non-null TSharedPtr wrapping an empty FJsonObject instead of nullptr,
+	// which would cause the if-branch to be taken and TagName to remain empty.
+	if (JsonValue->Type == EJson::Object)
+	{
+		const TSharedPtr<FJsonObject> JsonObject = JsonValue->AsObject();
+		if (JsonObject.IsValid())
+		{
+			JsonObject->TryGetStringField(TEXT("TagName"), TagName);
+		}
+	}
+	else
+	{
+		// Try string format: "(TagName=\"Foo.Bar\")" or "Foo.Bar"
+		FString StringValue;
+		if (!JsonValue->TryGetString(StringValue))
+		{
+			AddError(OutErrors, FString::Printf(
+				TEXT("Property '%s': FGameplayTag expects a string (tag name or export text) or object ({\"TagName\":\"...\"}), got %s"),
+				*StructProp->GetName(),
+				*FString::Printf(TEXT("JSON type %d"), static_cast<int32>(JsonValue->Type))));
+			return true; // handled (with error)
+		}
+
+		if (!TryParseGameplayTagExportText(StringValue, TagName))
+		{
+			// Not a recognised format — fall through to generic struct import
+			return false;
+		}
+	}
+
+	// Empty tag name → clear the tag
+	if (TagName.IsEmpty())
+	{
+		if (!bValidationOnly)
+		{
+			FGameplayTag* Tag = static_cast<FGameplayTag*>(ValuePtr);
+			*Tag = FGameplayTag();
+		}
+		return true;
+	}
+
+	// Request the tag through the gameplay tag manager so it is properly validated
+	const FGameplayTag ResolvedTag = FGameplayTag::RequestGameplayTag(FName(*TagName), /*bErrorIfNotFound=*/ false);
+	if (!ResolvedTag.IsValid())
+	{
+		AddError(OutErrors, FString::Printf(
+			TEXT("Property '%s': gameplay tag '%s' is not registered. "
+			     "Register it in the project's GameplayTags settings or DefaultGameplayTags.ini before setting it."),
+			*StructProp->GetName(),
+			*TagName));
+		return true; // handled (with error)
+	}
+
+	if (!bValidationOnly)
+	{
+		FGameplayTag* Tag = static_cast<FGameplayTag*>(ValuePtr);
+		*Tag = ResolvedTag;
+	}
+
+	return true;
 }
 
 static TSharedPtr<FJsonObject> CloneJsonObjectWithoutInlineMetadata(const TSharedPtr<FJsonObject>& Source)
@@ -1182,6 +1341,19 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 
 	if (const FStructProperty* StructProp = CastField<FStructProperty>(Property))
 	{
+		// FGameplayTag requires creation through RequestGameplayTag for proper
+		// tag-manager registration.  Generic ImportText / JsonObjectToUStruct
+		// only sets the raw TagName FName, producing a tag that appears valid in
+		// memory but is unrecognised by the gameplay-tag system and silently
+		// reverts to empty on the next serialisation round-trip.
+		{
+			const int32 ErrorCountBefore = OutErrors.Num();
+			if (TryApplyGameplayTagValue(StructProp, WorkingPtr, JsonValue, OutErrors, bValidationOnly))
+			{
+				return OutErrors.Num() == ErrorCountBefore;
+			}
+		}
+
 		if (const TSharedPtr<FJsonObject> StructValue = JsonValue->AsObject())
 		{
 			// Try FJsonObjectConverter first (handles simple structs: FVector, FRotator, etc.)
