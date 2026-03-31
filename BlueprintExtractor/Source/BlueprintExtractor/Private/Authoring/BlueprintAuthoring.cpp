@@ -2312,6 +2312,13 @@ static bool AddAnimGraphNodes(UBlueprint* Blueprint,
 			NewNode->AllocateDefaultPins();
 		}
 
+		// K2Node_VariableGet needs ReconstructNode after being added to graph
+		// so the Blueprint context is available for resolving the variable type.
+		if (NewNode->IsA<UK2Node_VariableGet>() && NewNode->Pins.Num() == 0)
+		{
+			NewNode->ReconstructNode();
+		}
+
 		// Position
 		const TSharedPtr<FJsonObject>* PositionObj = nullptr;
 		if (NodeDef->TryGetObjectField(TEXT("position"), PositionObj) && PositionObj)
