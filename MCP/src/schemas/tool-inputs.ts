@@ -496,9 +496,21 @@ export const StateTreeTransitionSelectorSchema = z.object({
   id: z.string().optional(),
 });
 
+const PropertyPathValueSchema = z.union([
+  z.string().describe('Shorthand: "structGuid:Property.SubProp[Index]".'),
+  z.object({
+    structId: z.string().optional(),
+    segments: z.array(z.object({
+      name: z.string(),
+      arrayIndex: z.number().int().optional(),
+      instanceStruct: z.string().optional(),
+    })),
+  }).passthrough().describe('Full path object with structId and segments.'),
+]);
+
 export const PropertyPathBindingSchema = z.object({
-  sourcePath: z.string().describe('Path: "structGuid:Property.SubProp[Index]".'),
-  targetPath: z.string().describe('Path: "structGuid:Property.SubProp[Index]".'),
+  sourcePath: PropertyPathValueSchema,
+  targetPath: PropertyPathValueSchema,
 });
 
 export const StateTreeBindingsObjectSchema = z.object({

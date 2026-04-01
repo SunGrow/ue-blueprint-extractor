@@ -173,6 +173,8 @@ function validateBindingPropertyPaths(payload: Record<string, unknown> | undefin
 
   for (const [i, binding] of bindingsObj.propertyBindings.entries()) {
     const b = binding as Record<string, unknown>;
+    // Skip validation for string paths — they'll be parsed by normalizeBindingPaths
+    if (typeof b.sourcePath === 'string' || typeof b.targetPath === 'string') continue;
     const sourcePath = b.sourcePath as { segments?: unknown[] } | undefined;
     const targetPath = b.targetPath as { segments?: unknown[] } | undefined;
 
@@ -182,6 +184,57 @@ function validateBindingPropertyPaths(payload: Record<string, unknown> | undefin
     if (!targetPath?.segments?.length) {
       warnings.push(`Binding [${i}]: targetPath requires at least one segment`);
     }
+  }
+}
+
+/**
+ * Converts shorthand string binding paths ("structGuid:Prop.Sub[0]") to the
+ * JSON-object format that the C++ ApplyBindingsFromJson expects.
+ * Mutates the payload in place.
+ */
+function normalizeBindingPaths(payload: Record<string, unknown> | undefined): void {
+  if (!payload) return;
+
+  const convert = (value: unknown): unknown => {
+    if (typeof value !== 'string') return value;
+    // Format: "GUID:Property.SubProperty[Index]" or just "Property"
+    const colonIdx = value.indexOf(':');
+    const structId = colonIdx >= 0 ? value.slice(0, colonIdx) : undefined;
+    const pathStr = colonIdx >= 0 ? value.slice(colonIdx + 1) : value;
+    if (!pathStr) return value;
+
+    // Parse segments: split by "." and handle optional [Index]
+    const parts = pathStr.split('.');
+    const segments: Array<{ name: string; arrayIndex?: number }> = [];
+    for (const part of parts) {
+      const bracketMatch = part.match(/^(.+)\[(\d+)]$/);
+      if (bracketMatch) {
+        segments.push({ name: bracketMatch[1], arrayIndex: parseInt(bracketMatch[2], 10) });
+      } else {
+        segments.push({ name: part });
+      }
+    }
+
+    const result: Record<string, unknown> = { segments };
+    if (structId) result.structId = structId;
+    return result;
+  };
+
+  // Process bindings at payload level
+  const processBindings = (obj: Record<string, unknown>) => {
+    const bindingsObj = obj.bindings as { propertyBindings?: unknown[] } | undefined;
+    if (!bindingsObj?.propertyBindings || !Array.isArray(bindingsObj.propertyBindings)) return;
+    for (const binding of bindingsObj.propertyBindings) {
+      const b = binding as Record<string, unknown>;
+      b.sourcePath = convert(b.sourcePath);
+      b.targetPath = convert(b.targetPath);
+    }
+  };
+
+  processBindings(payload);
+  // Also check inside stateTree envelope
+  if (payload.stateTree && typeof payload.stateTree === 'object') {
+    processBindings(payload.stateTree as Record<string, unknown>);
   }
 }
 
@@ -824,6 +877,9 @@ export function registerSchemaAndAiAuthoringTools({
         // Validate nodeStructType path formats after normalization
         validateNodeStructTypes(normalizedPayload, warnings);
         warnMissingInstanceObjectClass(normalizedPayload, warnings);
+
+        // Convert string binding paths to JSON-object format for C++
+        normalizeBindingPaths(normalizedPayload as Record<string, unknown>);
 
         const timeoutMs = (timeout_seconds ?? 90) * 1000;
         const parsed = await callSubsystemJson('ModifyStateTree', {
