@@ -1,5 +1,10 @@
 # Changelog
 
+## 7.0.1
+### Bug fixes
+- **`patch_editor_node` selector resolution** — fixed selector lookup failing when `editorNodeId` was provided via the `selector` sub-object alongside an `editorNode` payload. The selector was being parsed from the `editorNode` content instead of the original payload.
+- **`patch_transition` selector resolution** — same fix: selector is now parsed from the original payload (or its `selector` sub-object), not from the `transition` content.
+
 ## 7.0.0 — Code-Over-JSON
 LLMs are better at generating code than constructing large JSON payloads. This release redesigns how the MCP server exposes capabilities to exploit that strength — DSL inputs, compressed outputs, composite workflows, and intent-level tools.
 

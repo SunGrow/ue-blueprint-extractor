@@ -1910,7 +1910,12 @@ static bool PatchEditorNode(UStateTree* StateTree,
 
 	FEditorNodeSelector Selector;
 	FString SelectorError;
-	if (!ParseEditorNodeSelector(EffectivePayload, Selector, SelectorError))
+	TSharedPtr<FJsonObject> SelectorSource = Payload;
+	if (Payload.IsValid() && Payload->HasField(TEXT("selector")))
+	{
+		SelectorSource = Payload->GetObjectField(TEXT("selector"));
+	}
+	if (!ParseEditorNodeSelector(SelectorSource, Selector, SelectorError))
 	{
 		OutErrors.Add(SelectorError);
 		return false;
@@ -2030,7 +2035,12 @@ static bool PatchTransition(UStateTree* StateTree,
 
 	FTransitionSelector Selector;
 	FString SelectorError;
-	if (!ParseTransitionSelector(EffectivePayload, Selector, SelectorError))
+	TSharedPtr<FJsonObject> SelectorSource = Payload;
+	if (Payload.IsValid() && Payload->HasField(TEXT("selector")))
+	{
+		SelectorSource = Payload->GetObjectField(TEXT("selector"));
+	}
+	if (!ParseTransitionSelector(SelectorSource, Selector, SelectorError))
 	{
 		OutErrors.Add(SelectorError);
 		return false;
