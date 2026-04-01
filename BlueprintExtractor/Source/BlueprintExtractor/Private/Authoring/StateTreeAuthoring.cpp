@@ -1887,6 +1887,21 @@ static bool PatchState(UStateTree* StateTree,
 	FTreeMutationScratch Scratch;
 	ApplyStatePayload(TargetState, EffectivePayload, Scratch, OutErrors, TargetState->GetPath(), bValidationOnly, true);
 	ResolveDeferredLinks(EditorData, Scratch, OutErrors, SourceIndex);
+
+	// Apply bindings if provided (from the original Payload, not EffectivePayload).
+	// This allows callers to create tasks (with pre-assigned ids) and wire their
+	// bindings in a single patch_state call.
+	if (const TSharedPtr<FJsonObject>* BindingsObj = nullptr;
+		Payload.IsValid() && Payload->TryGetObjectField(TEXT("bindings"), BindingsObj)
+		&& BindingsObj && BindingsObj->IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* BindingValues = nullptr;
+		if ((*BindingsObj)->TryGetArrayField(TEXT("propertyBindings"), BindingValues) && BindingValues)
+		{
+			ApplyBindingsFromJson(EditorData, *BindingValues, OutErrors, TEXT("bindings.propertyBindings"));
+		}
+	}
+
 	return OutErrors.Num() == 0;
 }
 

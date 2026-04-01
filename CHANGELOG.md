@@ -1,6 +1,9 @@
 # Changelog
 
-## 7.0.1
+## 7.0.2
+### Features
+- **`patch_state` inline bindings** — `patch_state` now accepts a `bindings` field in the payload, allowing callers to create states, tasks (with pre-assigned `id` fields), and wire their property bindings in a single operation. Previously, bindings required a separate `add_binding` call after task creation, which was impossible because task IDs weren't known until creation.
+
 ### Bug fixes
 - **`patch_editor_node` selector resolution** — fixed selector lookup failing when `editorNodeId` was provided via the `selector` sub-object alongside an `editorNode` payload. The selector was being parsed from the `editorNode` content instead of the original payload.
 - **`patch_transition` selector resolution** — same fix: selector is now parsed from the original payload (or its `selector` sub-object), not from the `transition` content.
