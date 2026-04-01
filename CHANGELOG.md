@@ -1,7 +1,8 @@
 # Changelog
 
-## 7.0.3
+## 7.0.4
 ### Features
+- **`addTasks` and `addChildren`** — `patch_state` now supports `addTasks` and `addChildren` fields that append to existing tasks/children instead of replacing them. Use `tasks`/`children` to replace all, `addTasks`/`addChildren` to append.
 - **`patch_state` inline bindings** — `patch_state` now accepts a `bindings` field in the payload, allowing callers to create states, tasks (with pre-assigned `id` fields), and wire their property bindings in a single operation. Previously, bindings required a separate `add_binding` call after task creation, which was impossible because task IDs weren't known until creation.
 - **String binding path format** — `PropertyPathBindingSchema` now accepts both the shorthand string format (`"structGuid:Property.SubProp[Index]"`) and the full object format (`{structId, segments}`). String paths are auto-converted to the object format before being sent to the C++ layer.
 

@@ -1650,6 +1650,21 @@ static bool ApplyStatePayload(UStateTreeState* State,
 		BuildEditorNodeArray(*Tasks, State, State->Tasks, OutErrors, Path + TEXT(".tasks"), bValidationOnly);
 	}
 
+	// addTasks — append to existing tasks instead of replacing
+	if (const TArray<TSharedPtr<FJsonValue>>* AddTasks = nullptr;
+		StateObject->TryGetArrayField(TEXT("addTasks"), AddTasks) && AddTasks)
+	{
+		for (int32 Index = 0; Index < AddTasks->Num(); ++Index)
+		{
+			const TSharedPtr<FJsonObject> NodeObject = (*AddTasks)[Index].IsValid() ? (*AddTasks)[Index]->AsObject() : nullptr;
+			FStateTreeEditorNode& NewNode = State->Tasks.AddDefaulted_GetRef();
+			if (!BuildEditorNode(NewNode, State, NodeObject, OutErrors, FString::Printf(TEXT("%s.addTasks[%d]"), *Path, Index), bValidationOnly))
+			{
+				State->Tasks.Pop();
+			}
+		}
+	}
+
 	if (const TArray<TSharedPtr<FJsonValue>>* Considerations = nullptr;
 		StateObject->TryGetArrayField(TEXT("considerations"), Considerations) && Considerations)
 	{
@@ -1690,6 +1705,22 @@ static bool ApplyStatePayload(UStateTreeState* State,
 					ChildState->Parent = State;
 					State->Children.Add(ChildState);
 				}
+			}
+		}
+	}
+
+	// addChildren — append to existing children instead of replacing
+	if (const TArray<TSharedPtr<FJsonValue>>* AddChildren = nullptr;
+		StateObject->TryGetArrayField(TEXT("addChildren"), AddChildren) && AddChildren)
+	{
+		for (int32 ChildIndex = 0; ChildIndex < AddChildren->Num(); ++ChildIndex)
+		{
+			const TSharedPtr<FJsonObject> ChildObject = (*AddChildren)[ChildIndex].IsValid() ? (*AddChildren)[ChildIndex]->AsObject() : nullptr;
+			UStateTreeState* ChildState = nullptr;
+			if (BuildStateRecursive(State, ChildState, ChildObject, Scratch, OutErrors, FString::Printf(TEXT("%s.addChildren[%d]"), *Path, ChildIndex), bValidationOnly))
+			{
+				ChildState->Parent = State;
+				State->Children.Add(ChildState);
 			}
 		}
 	}
