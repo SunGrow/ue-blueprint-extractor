@@ -1529,4 +1529,94 @@ describe('registerSchemaAndAiAuthoringTools', () => {
     const tasks = states[0].tasks as Array<Record<string, unknown>>;
     expect(tasks[0].instanceObjectClass).toBe('/Game/AI/BP_MyTask.BP_MyTask_C');
   });
+
+  // --- Bug fix: flat propertyBindings in patch_state ---
+
+  it('patch_state forwards flat propertyBindings alongside addTasks', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Coach',
+      operation: 'patch_state',
+      payload: {
+        stateName: 'Idle',
+        addTasks: [
+          { nodeStructType: '/Script/Mod.STCSelectGesture', name: 'SelectGesture', id: 'AAAA' },
+          { nodeStructType: '/Script/Mod.STCPlayMontage', name: 'PlayMontage', id: 'BBBB' },
+        ],
+        propertyBindings: [{
+          sourcePath: { structId: 'AAAA', segments: [{ name: 'SelectedGestureTag' }] },
+          targetPath: { structId: 'BBBB', segments: [{ name: 'MontageTag' }] },
+        }],
+      },
+      validate_only: false,
+    });
+
+    const callArgs = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    expect(callArgs.Operation).toBe('patch_state');
+    const sent = JSON.parse(callArgs.PayloadJson as string) as Record<string, unknown>;
+    // propertyBindings should be forwarded at the top level (C++ PatchState reads it)
+    const bindings = sent.propertyBindings as Array<Record<string, unknown>>;
+    expect(bindings).toBeDefined();
+    expect(bindings).toHaveLength(1);
+    expect((bindings[0].sourcePath as Record<string, unknown>).structId).toBe('AAAA');
+    expect((bindings[0].targetPath as Record<string, unknown>).structId).toBe('BBBB');
+  });
+
+  it('normalizes string binding paths in flat propertyBindings', async () => {
+    const { registry, callSubsystemJson } = setupRegistry(vi.fn(async () => ({
+      success: true,
+    })));
+
+    await registry.getTool('modify_state_tree').handler({
+      asset_path: '/Game/AI/ST_Coach',
+      operation: 'patch_state',
+      payload: {
+        stateName: 'Idle',
+        propertyBindings: [{
+          sourcePath: 'AAAA:SelectedGestureTag',
+          targetPath: 'BBBB:MontageTag',
+        }],
+      },
+      validate_only: false,
+    });
+
+    const callArgs = (callSubsystemJson.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    const sent = JSON.parse(callArgs.PayloadJson as string) as Record<string, unknown>;
+    const bindings = sent.propertyBindings as Array<Record<string, unknown>>;
+    expect(bindings).toBeDefined();
+    const source = bindings[0].sourcePath as Record<string, unknown>;
+    const target = bindings[0].targetPath as Record<string, unknown>;
+    expect(source.structId).toBe('AAAA');
+    expect(source.segments).toEqual([{ name: 'SelectedGestureTag' }]);
+    expect(target.structId).toBe('BBBB');
+    expect(target.segments).toEqual([{ name: 'MontageTag' }]);
+  });
+
+  it('validates flat propertyBindings paths for empty segments', async () => {
+    const { registry } = setupRegistry(vi.fn(async () => ({
+      success: true,
+      assetPath: '/Game/AI/ST_FlatBad',
+    })));
+
+    const result = await registry.getTool('create_state_tree').handler({
+      asset_path: '/Game/AI/ST_FlatBad',
+      payload: {
+        schema: '/Script/GameplayStateTreeModule.StateTreeComponentSchema',
+        states: [{ name: 'Root', type: 'State' }],
+        propertyBindings: [{
+          sourcePath: { segments: [] },
+          targetPath: { segments: [{ name: 'Input' }] },
+        }],
+      },
+      validate_only: false,
+    });
+
+    const parsed = parseDirectToolResult(result) as Record<string, unknown>;
+    const warnings = parsed.warnings as string[];
+    expect(warnings).toBeDefined();
+    expect(warnings.some((w: string) => w.includes('sourcePath') && w.includes('segment'))).toBe(true);
+  });
 });

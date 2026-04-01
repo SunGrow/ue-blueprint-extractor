@@ -5,6 +5,14 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.5] - 2026-04-01
+
+### Fixed
+
+- Fixed FGameplayTagContainer (and other struct types) not being applied when passed as UE export-text strings in `nodeProperties`. The string value was silently treated as an empty JSON object due to UE's `FJsonValueString::AsObject()` returning a non-null empty object, causing `FJsonObjectConverter::JsonObjectToUStruct` to reset the struct to default.
+- Fixed `patch_state` not recognizing flat `propertyBindings` arrays in the payload. Bindings provided at the payload root (matching `set_bindings`/`add_binding` format) were silently ignored because `PatchState` only checked the nested `bindings.propertyBindings` path. Both formats are now accepted.
+- Added string binding path normalization for the flat `propertyBindings` format, consistent with the nested `bindings.propertyBindings` normalization.
+
 ## [6.0.6] - 2026-03-30
 
 ### Added

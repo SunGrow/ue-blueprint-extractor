@@ -167,23 +167,36 @@ function validateTransitionTargets(payload: Record<string, unknown> | undefined,
  */
 function validateBindingPropertyPaths(payload: Record<string, unknown> | undefined, warnings: string[]): void {
   if (!payload) return;
+
+  const validateArray = (bindings: unknown[], label: string) => {
+    for (const [i, binding] of bindings.entries()) {
+      const b = binding as Record<string, unknown>;
+      // Skip validation for string paths — they'll be parsed by normalizeBindingPaths
+      if (typeof b.sourcePath === 'string' || typeof b.targetPath === 'string') continue;
+      const sourcePath = b.sourcePath as { segments?: unknown[] } | undefined;
+      const targetPath = b.targetPath as { segments?: unknown[] } | undefined;
+
+      if (!sourcePath?.segments?.length) {
+        warnings.push(`${label}[${i}]: sourcePath requires at least one segment`);
+      }
+      if (!targetPath?.segments?.length) {
+        warnings.push(`${label}[${i}]: targetPath requires at least one segment`);
+      }
+    }
+  };
+
+  // Check nested format: bindings.propertyBindings
   const bindingsObj = (payload.bindings ?? (payload.stateTree as Record<string, unknown> | undefined)?.bindings) as
     { propertyBindings?: unknown[] } | undefined;
-  if (!bindingsObj?.propertyBindings || !Array.isArray(bindingsObj.propertyBindings)) return;
+  if (bindingsObj?.propertyBindings && Array.isArray(bindingsObj.propertyBindings)) {
+    validateArray(bindingsObj.propertyBindings, 'Binding');
+  }
 
-  for (const [i, binding] of bindingsObj.propertyBindings.entries()) {
-    const b = binding as Record<string, unknown>;
-    // Skip validation for string paths — they'll be parsed by normalizeBindingPaths
-    if (typeof b.sourcePath === 'string' || typeof b.targetPath === 'string') continue;
-    const sourcePath = b.sourcePath as { segments?: unknown[] } | undefined;
-    const targetPath = b.targetPath as { segments?: unknown[] } | undefined;
-
-    if (!sourcePath?.segments?.length) {
-      warnings.push(`Binding [${i}]: sourcePath requires at least one segment`);
-    }
-    if (!targetPath?.segments?.length) {
-      warnings.push(`Binding [${i}]: targetPath requires at least one segment`);
-    }
+  // Check flat format: propertyBindings at payload level
+  const flatBindings = (payload.propertyBindings ?? (payload.stateTree as Record<string, unknown> | undefined)?.propertyBindings) as
+    unknown[] | undefined;
+  if (Array.isArray(flatBindings)) {
+    validateArray(flatBindings, 'Binding');
   }
 }
 
@@ -220,21 +233,37 @@ function normalizeBindingPaths(payload: Record<string, unknown> | undefined): vo
     return result;
   };
 
-  // Process bindings at payload level
-  const processBindings = (obj: Record<string, unknown>) => {
-    const bindingsObj = obj.bindings as { propertyBindings?: unknown[] } | undefined;
-    if (!bindingsObj?.propertyBindings || !Array.isArray(bindingsObj.propertyBindings)) return;
-    for (const binding of bindingsObj.propertyBindings) {
+  // Process a propertyBindings array in place
+  const processBindingArray = (bindings: unknown[]) => {
+    for (const binding of bindings) {
       const b = binding as Record<string, unknown>;
       b.sourcePath = convert(b.sourcePath);
       b.targetPath = convert(b.targetPath);
     }
   };
 
-  processBindings(payload);
+  // Process nested bindings at payload level (bindings.propertyBindings)
+  const processNestedBindings = (obj: Record<string, unknown>) => {
+    const bindingsObj = obj.bindings as { propertyBindings?: unknown[] } | undefined;
+    if (bindingsObj?.propertyBindings && Array.isArray(bindingsObj.propertyBindings)) {
+      processBindingArray(bindingsObj.propertyBindings);
+    }
+  };
+
+  // Process flat propertyBindings at payload level (used by set_bindings, add_binding,
+  // and patch_state flat format)
+  const processFlatBindings = (obj: Record<string, unknown>) => {
+    if (Array.isArray(obj.propertyBindings)) {
+      processBindingArray(obj.propertyBindings);
+    }
+  };
+
+  processNestedBindings(payload);
+  processFlatBindings(payload);
   // Also check inside stateTree envelope
   if (payload.stateTree && typeof payload.stateTree === 'object') {
-    processBindings(payload.stateTree as Record<string, unknown>);
+    processNestedBindings(payload.stateTree as Record<string, unknown>);
+    processFlatBindings(payload.stateTree as Record<string, unknown>);
   }
 }
 

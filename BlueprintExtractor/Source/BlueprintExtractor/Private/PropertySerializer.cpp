@@ -1354,8 +1354,13 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 			}
 		}
 
-		if (const TSharedPtr<FJsonObject> StructValue = JsonValue->AsObject())
+		// IMPORTANT: Check Type before calling AsObject(). UE's FJsonValueString::AsObject()
+		// returns a non-null TSharedPtr wrapping an empty FJsonObject instead of nullptr,
+		// which would cause this branch to be taken for string values and prevent the
+		// ImportText_Direct fallback from running (needed for FGameplayTagContainer, etc.).
+		if (JsonValue->Type == EJson::Object)
 		{
+			const TSharedPtr<FJsonObject> StructValue = JsonValue->AsObject();
 			// Try FJsonObjectConverter first (handles simple structs: FVector, FRotator, etc.)
 			const bool bConverted = FJsonObjectConverter::JsonObjectToUStruct(
 				StructValue.ToSharedRef(), StructProp->Struct, WorkingPtr);

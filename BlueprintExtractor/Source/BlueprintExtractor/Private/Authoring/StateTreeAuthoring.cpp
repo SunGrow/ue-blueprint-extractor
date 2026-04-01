@@ -1922,14 +1922,32 @@ static bool PatchState(UStateTree* StateTree,
 	// Apply bindings if provided (from the original Payload, not EffectivePayload).
 	// This allows callers to create tasks (with pre-assigned ids) and wire their
 	// bindings in a single patch_state call.
-	if (const TSharedPtr<FJsonObject>* BindingsObj = nullptr;
-		Payload.IsValid() && Payload->TryGetObjectField(TEXT("bindings"), BindingsObj)
-		&& BindingsObj && BindingsObj->IsValid())
+	// Supports both nested format (bindings.propertyBindings) and flat format
+	// (propertyBindings at the Payload root), matching the set_bindings/add_binding
+	// conventions.
+	if (Payload.IsValid())
 	{
 		const TArray<TSharedPtr<FJsonValue>>* BindingValues = nullptr;
-		if ((*BindingsObj)->TryGetArrayField(TEXT("propertyBindings"), BindingValues) && BindingValues)
+		bool bFoundBindings = false;
+
+		// Try nested: payload.bindings.propertyBindings
+		if (const TSharedPtr<FJsonObject>* BindingsObj = nullptr;
+			Payload->TryGetObjectField(TEXT("bindings"), BindingsObj)
+			&& BindingsObj && BindingsObj->IsValid())
 		{
-			ApplyBindingsFromJson(EditorData, *BindingValues, OutErrors, TEXT("bindings.propertyBindings"));
+			if ((*BindingsObj)->TryGetArrayField(TEXT("propertyBindings"), BindingValues) && BindingValues)
+			{
+				bFoundBindings = true;
+				ApplyBindingsFromJson(EditorData, *BindingValues, OutErrors, TEXT("bindings.propertyBindings"));
+			}
+		}
+
+		// Fallback: flat payload.propertyBindings (same format as set_bindings/add_binding)
+		if (!bFoundBindings
+			&& Payload->TryGetArrayField(TEXT("propertyBindings"), BindingValues)
+			&& BindingValues)
+		{
+			ApplyBindingsFromJson(EditorData, *BindingValues, OutErrors, TEXT("propertyBindings"));
 		}
 	}
 
