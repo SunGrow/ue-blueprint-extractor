@@ -69,25 +69,25 @@ export function registerAutomationRunTools({
           /^[A-Za-z0-9_.+* -]+$/u,
           'automation_filter must contain only alphanumeric, dots, underscores, plus, asterisk, hyphen, and spaces',
         ).describe(
-          'Automation test filter passed to `Automation RunTests <filter>`.',
+          'Automation test filter.',
         ),
         engine_root: z.string().optional().describe(
-          'Optional Unreal Engine root. Falls back to editor context or UE_ENGINE_ROOT.',
+          'UE root. Falls back to UE_ENGINE_ROOT.',
         ),
         project_path: z.string().optional().describe(
-          'Optional .uproject path. Falls back to editor context or UE_PROJECT_PATH.',
+          '.uproject path. Falls back to UE_PROJECT_PATH.',
         ),
         target: z.string().optional().describe(
-          'Optional editor target name to keep in the run metadata.',
+          'Editor target name.',
         ),
         report_output_dir: z.string().optional().describe(
-          'Optional host filesystem directory for this run.',
+          'Report output directory.',
         ),
         timeout_seconds: z.number().int().positive().default(3600).describe(
-          'Maximum wall-clock time for the automation process before the host terminates it.',
+          'Max wall-clock seconds.',
         ),
         null_rhi: z.boolean().default(true).describe(
-          'When true, include -NullRHI for headless logic-focused automation runs.',
+          'Include -NullRHI for headless runs.',
         ),
       },
       outputSchema: automationRunSchema,
@@ -148,7 +148,7 @@ export function registerAutomationRunTools({
       description: 'Read the latest known status and exported artifacts for one host-side automation run.',
       inputSchema: {
         run_id: z.string().describe(
-          'Run id returned by run_automation_tests.',
+          'Automation run id.',
         ),
       },
       outputSchema: automationRunSchema,
@@ -182,7 +182,7 @@ export function registerAutomationRunTools({
       description: 'List host-side automation runs and their current statuses.',
       inputSchema: {
         include_completed: z.boolean().default(true).describe(
-          'When true, include terminal runs in addition to still-running jobs.',
+          'Include completed runs.',
         ),
       },
       outputSchema: automationRunListSchema,

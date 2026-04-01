@@ -40,7 +40,7 @@ export const serverInstructions = [
   'Use run_automation_tests for gameplay or runtime verification. If no Automation Spec or Functional Test exists for a mechanic, report verification as partial instead of inferring success from structure alone.',
   'Use capture_runtime_screenshot when a runtime verification lane already exports screenshot artifacts through automation. Use capture_editor_screenshot for the active editor viewport when a rendered editor reference is needed.',
   // Results format
-  'Successful tool results use structuredContent as the canonical JSON payload. Recoverable execution failures return isError=true with code, message, recoverable, and next_steps.',
+  'Successful tool results use structuredContent as the canonical JSON payload. Recoverable execution failures return isError=true with code, message, and recoverable.',
 ].join('\n');
 
 export const taskAwareTools = new Set([
@@ -119,8 +119,12 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['modify_widget', 'editor_only'],
   ['modify_widget_blueprint', 'editor_only'],
   ['batch_widget_operations', 'editor_only'],
+  ['apply_widget_diff', 'editor_only'],
   ['compile_widget', 'editor_only'],
   ['compile_widget_blueprint', 'editor_only'],
+  ['create_menu_screen', 'editor_only'],
+  ['apply_widget_patch', 'editor_only'],
+  ['execute_widget_recipe', 'editor_only'],
 
   // ── CommonUI style mutation (editor_only) ──
   ['create_commonui_button_style', 'editor_only'],
@@ -137,10 +141,12 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['compile_material_asset', 'editor_only'],
   ['create_material_instance', 'editor_only'],
   ['modify_material_instance', 'editor_only'],
+  ['create_material_setup', 'editor_only'],
 
   // ── Blueprint mutation tools (editor_only) ──
   ['modify_blueprint_members', 'editor_only'],
   ['modify_blueprint_graphs', 'editor_only'],
+  ['scaffold_blueprint', 'editor_only'],
 
   // ── Schema & AI authoring mutation (editor_only) ──
   ['create_user_defined_struct', 'editor_only'],

@@ -186,6 +186,55 @@ describe('tool result normalizers', () => {
     expect((structured.diagnostics as any[])[0].code).toBe('SCHEMA_NOT_FOUND');
   });
 
+  it('omits execution from success envelope for non-task-aware tools', () => {
+    const result = normalizeToolSuccess('extract_blueprint', {
+      success: true,
+      blueprint: '/Game/Test/BP_Foo',
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      success: true,
+      operation: 'extract_blueprint',
+      blueprint: '/Game/Test/BP_Foo',
+    });
+    expect(result.structuredContent).not.toHaveProperty('execution');
+    expect(result.structuredContent).not.toHaveProperty('_hints');
+  });
+
+  it('omits next_steps and _hints from error envelopes', () => {
+    const result = normalizeToolError('create_blueprint', { message: 'compilation failed' });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      success: false,
+      operation: 'create_blueprint',
+      message: 'compilation failed',
+    });
+    expect(result.structuredContent).not.toHaveProperty('next_steps');
+    expect(result.structuredContent).not.toHaveProperty('_hints');
+    expect(result.structuredContent).not.toHaveProperty('execution');
+  });
+
+  it('includes execution in error envelope for task-aware tools', () => {
+    const result = normalizeToolError('run_automation_tests', {
+      message: 'test runner crashed',
+      status: 'failed',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      success: false,
+      operation: 'run_automation_tests',
+      execution: {
+        mode: 'task_aware',
+        task_support: 'optional',
+        status: 'failed',
+      },
+    });
+    expect(result.structuredContent).not.toHaveProperty('next_steps');
+    expect(result.structuredContent).not.toHaveProperty('_hints');
+  });
+
   it('normalizes errors without re-emitting text blocks and preserves non-text artifacts', () => {
     const result = normalizeToolError(
       'extract_blueprint',
@@ -223,13 +272,12 @@ describe('tool result normalizers', () => {
       code: 'editor_unavailable',
       recoverable: true,
       retry_after_ms: 1000,
-      next_steps: ['Call wait_for_editor.'],
       message: 'editor unavailable while extracting',
-      execution: {
-        mode: 'immediate',
-        task_support: 'forbidden',
-        status: 'completed',
-      },
     });
+    // Phase 3B: execution omitted for non-task-aware tools
+    expect(result.structuredContent).not.toHaveProperty('execution');
+    // Phase 3B: next_steps and _hints removed from error envelopes
+    expect(result.structuredContent).not.toHaveProperty('next_steps');
+    expect(result.structuredContent).not.toHaveProperty('_hints');
   });
 });

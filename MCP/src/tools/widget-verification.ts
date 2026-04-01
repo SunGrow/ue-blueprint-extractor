@@ -98,13 +98,13 @@ export function registerWidgetVerificationTools({
       description: 'Render a WidgetBlueprint offscreen and return preview capture artifacts.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint to preview.',
+          'UE content path.',
         ),
         width: z.number().int().min(64).max(2048).default(512).describe(
-          'Requested capture width in pixels. The editor clamps to a safe range.',
+          'Capture width in pixels.',
         ),
         height: z.number().int().min(64).max(2048).default(512).describe(
-          'Requested capture height in pixels. The editor clamps to a safe range.',
+          'Capture height in pixels.',
         ),
       },
       outputSchema: captureResultSchema,
@@ -201,25 +201,25 @@ export function registerWidgetVerificationTools({
           /^[A-Za-z0-9_.+* -]+$/u,
           'automation_filter must contain only alphanumeric, dots, underscores, plus, asterisk, hyphen, and spaces',
         ).describe(
-          'Automation test filter passed to run_automation_tests.',
+          'Automation test filter.',
         ),
         engine_root: z.string().optional().describe(
-          'Optional Unreal Engine root. Falls back to editor context or UE_ENGINE_ROOT.',
+          'UE root. Falls back to UE_ENGINE_ROOT.',
         ),
         project_path: z.string().optional().describe(
-          'Optional .uproject path. Falls back to editor context or UE_PROJECT_PATH.',
+          '.uproject path. Falls back to UE_PROJECT_PATH.',
         ),
         target: z.string().optional().describe(
-          'Optional editor target name to keep in the run metadata.',
+          'Editor target name.',
         ),
         report_output_dir: z.string().optional().describe(
-          'Optional host filesystem directory for this run.',
+          'Report output directory.',
         ),
         timeout_seconds: z.number().int().positive().default(3600).describe(
-          'Maximum wall-clock time for the automation process before the host terminates it.',
+          'Max wall-clock seconds.',
         ),
         null_rhi: z.boolean().default(false).describe(
-          'Leave false for screenshot-backed runtime verification. Set true only when the automation path exports images without live rendering.',
+          'True for headless (no rendering).',
         ),
       },
       outputSchema: captureResultSchema,
@@ -496,13 +496,13 @@ export function registerWidgetVerificationTools({
       description: 'Compare a saved capture or PNG against a reference and return diff artifacts.',
       inputSchema: {
         capture: z.string().describe(
-          'Capture id or absolute PNG path for the actual result.',
+          'Capture id or PNG path (actual).',
         ),
         reference: z.string().describe(
-          'Capture id or absolute PNG path for the expected reference.',
+          'Capture id or PNG path (reference).',
         ),
         tolerance: z.number().min(0).default(0.01).describe(
-          'Normalized RMSE tolerance. 0 is pixel-perfect.',
+          'RMSE tolerance. 0 = pixel-perfect.',
         ),
       },
       outputSchema: compareCaptureResultSchema,
@@ -557,7 +557,7 @@ export function registerWidgetVerificationTools({
       description: 'List saved visual verification captures recorded by the editor-side verification lane.',
       inputSchema: {
         asset_path_filter: z.string().default('').describe(
-          'Optional exact asset path filter for captures created from one asset.',
+          'Asset path filter.',
         ),
       },
       outputSchema: listCapturesResultSchema,
@@ -595,7 +595,7 @@ export function registerWidgetVerificationTools({
       description: 'Delete old capture artifacts from Saved/BlueprintExtractor/Captures without touching UE assets.',
       inputSchema: {
         max_age_days: z.number().int().min(0).default(7).describe(
-          'Delete capture directories older than this many days. 0 removes all captures.',
+          'Delete captures older than N days. 0 = all.',
         ),
       },
       outputSchema: cleanupCapturesResultSchema,
@@ -626,19 +626,19 @@ export function registerWidgetVerificationTools({
       description: 'Compare motion checkpoint captures against reference frames or another bundle.',
       inputSchema: {
         capture_artifacts: z.array(z.record(z.string(), z.unknown())).describe(
-          'Captured checkpoint artifacts from capture_widget_motion_checkpoints.',
+          'Checkpoint artifacts from motion capture.',
         ),
         reference_frames: z.array(z.object({
           checkpoint_name: z.string(),
           reference: z.string(),
         }).passthrough()).optional().describe(
-          'Optional checkpoint-to-reference frame mapping.',
+          'Checkpoint-to-reference mapping.',
         ),
         reference_artifacts: z.array(z.record(z.string(), z.unknown())).optional().describe(
-          'Optional reference checkpoint bundle from capture_widget_motion_checkpoints.',
+          'Reference checkpoint bundle.',
         ),
         tolerance: z.number().min(0).default(0.01).describe(
-          'Normalized RMSE tolerance. 0 is pixel-perfect.',
+          'RMSE tolerance. 0 = pixel-perfect.',
         ),
       },
       outputSchema: compareMotionCaptureBundleResultSchema,

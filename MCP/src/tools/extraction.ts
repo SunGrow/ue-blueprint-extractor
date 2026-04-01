@@ -123,28 +123,25 @@ export function registerExtractionTools({
       title: 'Extract Blueprint',
       description: 'Extract a UE5 Blueprint asset to structured JSON with configurable scope, graph filtering, compact output, and class defaults.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the Blueprint asset.',
-        ),
+        asset_path: z.string().describe('UE content path.'),
         scope: scopeEnum.default('Variables').describe(
-          'Extraction depth. Use Full only for graph or node details.',
+          'Extraction depth. Use Full for graph details.',
         ),
         graph_filter: z.array(z.string()).optional().describe(
-          'Filter to specific graph names. Omit to extract all graphs.',
+          'Filter to specific graph names.',
         ),
-        compact: z.boolean().default(true).describe(
-          'Return compact output (set false for raw).',
-        ),
+        compact: z.boolean().default(true).describe('Compact output.'),
         include_class_defaults: z.boolean().default(false).describe(
-          'Include generated-class default values that differ from the parent class.',
+          'Include class defaults.',
         ),
         verbose: z.boolean().default(false).describe(
-          'When true, skip budget enforcement and return full data regardless of size.',
+          'Skip budget enforcement; return full data.',
         ),
+        fields: z.array(z.string()).optional().describe('Return only these top-level keys.'),
       },
       annotations: readOnlyAnnotations('Extract Blueprint'),
     },
-    async ({ asset_path, scope, graph_filter, compact, include_class_defaults, verbose: rawVerbose }) => {
+    async ({ asset_path, scope, graph_filter, compact, include_class_defaults, verbose: rawVerbose, fields }) => {
       const verbose = rawVerbose ?? false;
       try {
         let parsed = await callSubsystemJson('ExtractBlueprint', {
@@ -155,6 +152,14 @@ export function registerExtractionTools({
         });
         if (compact) {
           parsed = compactBlueprint(parsed) as Record<string, unknown>;
+        }
+        if (fields && fields.length > 0) {
+          const filtered: Record<string, unknown> = {};
+          for (const key of fields) {
+            if (key in parsed) filtered[key] = parsed[key];
+          }
+          if ('success' in parsed) filtered.success = parsed.success;
+          parsed = filtered as Record<string, unknown>;
         }
         const text = compact ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2);
         const extraContent: Array<{ type: 'text'; text: string }> = [];
@@ -192,15 +197,9 @@ export function registerExtractionTools({
       title: 'Extract Asset',
       description: 'Extract one supported UE asset family to structured JSON through a single routed tool.',
       inputSchema: {
-        asset_type: extractAssetTypeSchema.describe(
-          'Asset family to extract.',
-        ),
-        asset_path: z.string().describe(
-          'UE content path to the asset.',
-        ),
-        compact: z.boolean().default(true).describe(
-          'Return compact output (set false for raw).',
-        ),
+        asset_type: extractAssetTypeSchema.describe('Asset family to extract.'),
+        asset_path: z.string().describe('UE content path.'),
+        compact: z.boolean().default(true).describe('Compact output.'),
       },
       annotations: readOnlyAnnotations('Extract Asset'),
     },
@@ -255,18 +254,14 @@ export function registerExtractionTools({
       title: 'Extract Material',
       description: 'Extract a compact material graph snapshot for a material, material function, layer, or layer blend asset.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the material-family asset.',
-        ),
+        asset_path: z.string().describe('UE content path.'),
         asset_kind: z.enum(['material', 'function', 'layer', 'layer_blend']).default('material').describe(
           'Material asset subtype.',
         ),
         verbose: z.boolean().default(false).describe(
-          'Include more authored property detail for expressions and comments.',
+          'Include detailed expression properties.',
         ),
-        compact: z.boolean().default(true).describe(
-          'Return compact output (set false for raw).',
-        ),
+        compact: z.boolean().default(true).describe('Compact output.'),
       },
       annotations: readOnlyAnnotations('Extract Material'),
     },
@@ -297,20 +292,18 @@ export function registerExtractionTools({
       description: 'Extract multiple asset types with dependency-chain reference following and return a manifest summary.',
       inputSchema: {
         asset_paths: z.array(z.string()).describe(
-          'Array of UE content paths to extract (e.g. ["/Game/Blueprints/BP_Character", "/Game/Blueprints/BP_Weapon"])',
+          'UE content paths to extract.',
         ),
         scope: scopeEnum.default('Full').describe(
-          'Extraction depth applied to all assets. Full is the default since cascade is typically used for deep analysis.',
+          'Extraction depth for all assets.',
         ),
         max_depth: z.number().int().min(0).max(10).default(3).describe(
-          'How many levels deep to follow references (0 = only the listed assets, 3 = default)',
+          'Reference-follow depth (0 = listed only).',
         ),
         graph_filter: z.array(z.string()).optional().describe(
-          'Filter to specific graph names. Omit to extract all graphs.',
+          'Filter to specific graph names.',
         ),
-        compact: z.boolean().default(true).describe(
-          'Return compact output (set false for raw).',
-        ),
+        compact: z.boolean().default(true).describe('Compact output.'),
       },
       outputSchema: cascadeResultSchema,
       annotations: {
@@ -368,24 +361,16 @@ export function registerExtractionTools({
       title: 'Search Assets',
       description: 'Search for UE5 assets by name with an optional class filter.',
       inputSchema: {
-        query: z.string().describe(
-          'Search term to match against asset names. Partial matches work (e.g. "Player" finds "BP_PlayerCharacter").',
-        ),
+        query: z.string().describe('Asset name search term.'),
         class_filter: z.string().default('Blueprint').describe(
-          'Filter by asset class. Use an empty string to search all asset types.',
+          'Asset class filter. Empty string for all types.',
         ),
         max_results: z.number().int().min(1).max(200).default(50).describe(
-          'Maximum number of results to return. Lower values keep the response small and the query fast.',
+          'Max results to return.',
         ),
-        page: z.number().int().min(1).default(1).describe(
-          'Page number for paginated results.',
-        ),
-        per_page: z.number().int().min(1).max(200).default(50).describe(
-          'Number of results per page.',
-        ),
-        sort_by: z.enum(['path', 'name', 'class']).default('path').describe(
-          'Sort results by the specified field.',
-        ),
+        page: z.number().int().min(1).default(1),
+        per_page: z.number().int().min(1).max(200).default(50),
+        sort_by: z.enum(['path', 'name', 'class']).default('path'),
       },
       outputSchema: SearchAssetsResultSchema,
       annotations: readOnlyAnnotations('Search Assets'),
@@ -451,23 +436,15 @@ export function registerExtractionTools({
       description: 'List UE5 assets under a package path, optionally recursively.',
       inputSchema: {
         package_path: z.string().describe(
-          'UE package path to list (e.g. /Game/Blueprints, /Game/AI). Use /Game to list from the Content root.',
+          'UE package path (e.g. /Game/Blueprints).',
         ),
-        recursive: z.boolean().default(true).describe(
-          'Whether to include assets in subdirectories.',
-        ),
+        recursive: z.boolean().default(true).describe('Include subdirectories.'),
         class_filter: z.string().default('').describe(
-          'Filter by asset class (e.g. "Blueprint", "StateTree"). Empty string returns all asset types.',
+          'Asset class filter. Empty for all types.',
         ),
-        page: z.number().int().min(1).default(1).describe(
-          'Page number for paginated results.',
-        ),
-        per_page: z.number().int().min(1).max(200).default(50).describe(
-          'Number of results per page.',
-        ),
-        sort_by: z.enum(['path', 'name', 'class']).default('path').describe(
-          'Sort results by the specified field.',
-        ),
+        page: z.number().int().min(1).default(1),
+        per_page: z.number().int().min(1).max(200).default(50),
+        sort_by: z.enum(['path', 'name', 'class']).default('path'),
       },
       outputSchema: ListAssetsResultSchema,
       annotations: readOnlyAnnotations('List Assets'),
@@ -531,9 +508,7 @@ export function registerExtractionTools({
       title: 'Check Asset Exists',
       description: 'Check whether a UE asset exists at the given path. Returns existence status, asset class, and package path.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to check (e.g. /Game/Blueprints/BP_Player).',
-        ),
+        asset_path: z.string().describe('UE content path to check.'),
       },
       outputSchema: CheckAssetExistsResultSchema,
       annotations: readOnlyAnnotations('Check Asset Exists'),

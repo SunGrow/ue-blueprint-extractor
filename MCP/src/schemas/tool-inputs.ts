@@ -3,13 +3,13 @@ import { toolResultSchema } from './tool-results.js';
 
 // Recursive schema for widget tree nodes (used by build_widget_tree)
 export const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
-  class: z.string().describe('Widget class name (e.g. CanvasPanel, TextBlock, CommonButtonBase, VerticalBox)'),
-  name: z.string().describe('Widget instance name (used for BindWidget matching)'),
-  display_label: z.string().optional().describe('Optional display label used by the editor for named slots or readable hierarchy labels.'),
-  is_variable: z.boolean().default(false).describe('Mark as variable for BindWidget access from C++'),
-  slot: z.record(z.string(), z.unknown()).optional().describe('Slot properties (type depends on parent panel)'),
-  properties: z.record(z.string(), z.unknown()).optional().describe('Widget UPROPERTY values to set'),
-  children: z.array(WidgetNodeSchema).optional().describe('Child widgets (only valid for panel widgets)'),
+  class: z.string().describe('Widget class (e.g. CanvasPanel, TextBlock).'),
+  name: z.string(),
+  display_label: z.string().optional().describe('Editor display label for named slots.'),
+  is_variable: z.boolean().default(false).describe('Expose as BindWidget variable.'),
+  slot: z.record(z.string(), z.unknown()).optional().describe('Slot properties (parent-panel-dependent).'),
+  properties: z.record(z.string(), z.unknown()).optional(),
+  children: z.array(WidgetNodeSchema).optional().describe('Child widgets (panels only).'),
 }));
 
 export const WidgetBlueprintMutationOperationSchema = z.enum([
@@ -31,15 +31,13 @@ export const PropertyEntrySchema = z.object({
 });
 
 export const DataTableRowSchema = z.object({
-  rowName: z.string().describe('Row name/key in the table.'),
-  values: z.record(z.string(), z.unknown()).optional().describe(
-    'Optional row values object keyed by property name.',
-  ),
+  rowName: z.string(),
+  values: z.record(z.string(), z.unknown()).optional(),
   properties: z.union([
     z.record(z.string(), z.unknown()),
     z.array(PropertyEntrySchema),
   ]).optional().describe(
-    'Optional row property payload. Accepts either a property map or the extractor-style [{name, value}] array.',
+    'Property map or [{name, value}] array.',
   ),
 });
 
@@ -499,13 +497,13 @@ export const StateTreeTransitionSelectorSchema = z.object({
 });
 
 export const PropertyPathBindingSchema = z.object({
-  sourcePath: z.string().describe('Property path string: "structGuid:Property.SubProp[ArrayIndex]"'),
-  targetPath: z.string().describe('Property path string: "structGuid:Property.SubProp[ArrayIndex]"'),
+  sourcePath: z.string().describe('Path: "structGuid:Property.SubProp[Index]".'),
+  targetPath: z.string().describe('Path: "structGuid:Property.SubProp[Index]".'),
 });
 
 export const StateTreeBindingsObjectSchema = z.object({
   propertyBindings: z.array(PropertyPathBindingSchema),
-}).describe('StateTree property bindings container matching C++ bindings.propertyBindings structure');
+}).describe('StateTree property bindings container.');
 
 export const AnimationNotifySelectorSchema = z.object({
   notifyId: z.string().optional(),

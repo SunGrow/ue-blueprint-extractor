@@ -30,16 +30,16 @@ export function registerCommonUIButtonStyleTools({
       description: 'Create a Blueprint-based CommonUI button style asset from a normalized style payload.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new CommonUI button style Blueprint.',
+          'UE content path for the new asset.',
         ),
         asset_class_path: z.string().describe(
-          'Blueprint parent class path. It must inherit from UCommonButtonStyle.',
+          'Parent class (must inherit UCommonButtonStyle).',
         ),
         style: jsonObjectSchema.optional().default({}).describe(
-          'Optional normalized CommonUI button style payload.',
+          'Normalized style payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -80,7 +80,7 @@ export function registerCommonUIButtonStyleTools({
       description: 'Extract a Blueprint-based CommonUI button style into the normalized public schema.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the CommonUI button style Blueprint.',
+          'UE content path.',
         ),
       },
       annotations: {
@@ -118,13 +118,13 @@ export function registerCommonUIButtonStyleTools({
       description: 'Patch a Blueprint-based CommonUI button style via a normalized style payload.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the CommonUI button style Blueprint.',
+          'UE content path.',
         ),
         style: jsonObjectSchema.describe(
-          'Normalized CommonUI button style payload.',
+          'Normalized style payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -165,13 +165,13 @@ export function registerCommonUIButtonStyleTools({
       description: 'Apply a CommonUI button style to a CommonButtonBase-derived WidgetBlueprint.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the CommonButtonBase-derived WidgetBlueprint.',
+          'UE content path to the CommonButtonBase widget.',
         ),
         style_asset_path: z.string().describe(
-          'UE content or object path to the CommonUI button style Blueprint or generated class.',
+          'Style asset path or generated class path.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {

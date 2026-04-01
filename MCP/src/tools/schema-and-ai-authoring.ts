@@ -210,13 +210,13 @@ export function registerSchemaAndAiAuthoringTools({
       description: 'Create a UE5 UserDefinedStruct asset from extractor-shaped field definitions.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new UserDefinedStruct asset.',
+          'UE content path for the new asset.',
         ),
         payload: jsonObjectSchema.default({}).describe(
-          'Extractor-shaped UserDefinedStruct payload. Accepts either { fields: [...] } or { userDefinedStruct: { fields: [...] } }.',
+          'Extractor-shaped struct payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -253,10 +253,10 @@ export function registerSchemaAndAiAuthoringTools({
       description: 'Modify a UE5 UserDefinedStruct with field-level authoring operations.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the UserDefinedStruct to modify.',
+          'UE content path.',
         ),
         operation: userDefinedStructMutationOperationSchema.describe(
-          'Field-level mutation operation to apply.',
+          'Field-level mutation operation.',
         ),
         payload: z.object({
           userDefinedStruct: z.object({
@@ -270,10 +270,10 @@ export function registerSchemaAndAiAuthoringTools({
           newName: z.string().optional(),
           fieldOrder: z.array(z.string()).optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Field selectors accept guid or name.',
+          'Payload. Selectors: guid or name.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -312,7 +312,7 @@ export function registerSchemaAndAiAuthoringTools({
       description: 'Create a UE5 UserDefinedEnum asset from extractor-shaped entry payloads.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new UserDefinedEnum asset.',
+          'UE content path for the new asset.',
         ),
         payload: z.object({
           userDefinedEnum: z.object({
@@ -320,10 +320,10 @@ export function registerSchemaAndAiAuthoringTools({
           }).passthrough().optional(),
           entries: z.array(userDefinedEnumEntrySchema).optional(),
         }).passthrough().default({}).describe(
-          'Extractor-shaped UserDefinedEnum payload.',
+          'Extractor-shaped enum payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -360,10 +360,10 @@ export function registerSchemaAndAiAuthoringTools({
       description: 'Modify a UE5 UserDefinedEnum with entry-level authoring operations.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the UserDefinedEnum to modify.',
+          'UE content path.',
         ),
         operation: userDefinedEnumMutationOperationSchema.describe(
-          'Entry-level mutation operation to apply.',
+          'Entry-level mutation operation.',
         ),
         payload: z.object({
           userDefinedEnum: z.object({
@@ -375,10 +375,10 @@ export function registerSchemaAndAiAuthoringTools({
           newName: z.string().optional(),
           displayName: z.string().optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Entry selectors use name.',
+          'Payload. Selectors: name.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -417,7 +417,7 @@ export function registerSchemaAndAiAuthoringTools({
       description: 'Create a UE5 BlackboardData asset from extractor-shaped key payloads.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new BlackboardData asset.',
+          'UE content path for the new asset.',
         ),
         payload: z.object({
           blackboard: z.object({
@@ -430,7 +430,7 @@ export function registerSchemaAndAiAuthoringTools({
           'Extractor-shaped Blackboard payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -467,10 +467,10 @@ export function registerSchemaAndAiAuthoringTools({
       description: 'Modify a UE5 BlackboardData asset with declarative key operations.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the BlackboardData asset to modify.',
+          'UE content path.',
         ),
         operation: blackboardMutationOperationSchema.describe(
-          'Blackboard mutation operation to apply.',
+          'Blackboard mutation operation.',
         ),
         payload: z.object({
           blackboard: z.object({
@@ -483,10 +483,10 @@ export function registerSchemaAndAiAuthoringTools({
           name: z.string().optional(),
           key: blackboardKeySchema.optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Key selectors use entryName.',
+          'Payload. Selectors: entryName.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -525,7 +525,7 @@ export function registerSchemaAndAiAuthoringTools({
       description: 'Create a UE5 BehaviorTree asset from extractor-shaped tree payloads.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new BehaviorTree asset.',
+          'UE content path for the new asset.',
         ),
         payload: z.object({
           behaviorTree: jsonObjectSchema.optional(),
@@ -535,7 +535,7 @@ export function registerSchemaAndAiAuthoringTools({
           'Extractor-shaped BehaviorTree payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -581,10 +581,10 @@ export function registerSchemaAndAiAuthoringTools({
         + '  }',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the BehaviorTree asset to modify.',
+          'UE content path.',
         ),
         operation: behaviorTreeMutationOperationSchema.describe(
-          'BehaviorTree mutation operation to apply.',
+          'BehaviorTree mutation operation.',
         ),
         payload: z.object({
           behaviorTree: jsonObjectSchema.optional(),
@@ -596,10 +596,10 @@ export function registerSchemaAndAiAuthoringTools({
           attachment: jsonObjectSchema.optional(),
           properties: jsonObjectSchema.optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Targeted edits use nodePath.',
+          'Payload. Targeted edits use nodePath.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -650,27 +650,27 @@ export function registerSchemaAndAiAuthoringTools({
         + '  }',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new StateTree asset.',
+          'UE content path for the new asset.',
         ),
         payload: z.object({
           stateTree: jsonObjectSchema.optional(),
           schema: z.string().optional().describe(
-            'UE class path of the StateTree schema. Required by the editor. E.g. /Script/GameplayStateTreeModule.StateTreeComponentSchema',
+            'StateTree schema class path (required).',
           ),
           states: z.array(jsonObjectSchema).optional(),
           evaluators: z.array(jsonObjectSchema).optional(),
           globalTasks: z.array(jsonObjectSchema).optional(),
           bindings: stateTreeBindingsObjectSchema.optional().describe(
-            'Task output-to-input property bindings. Use extract_asset on an existing StateTree to discover structIds and property names.',
+            'Task property bindings.',
           ),
         }).passthrough().default({}).describe(
           'Extractor-shaped StateTree payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate and compile without creating the asset.',
+          'Dry-run validation only.',
         ),
         timeout_seconds: z.number().positive().optional().describe(
-          'Timeout in seconds for the subsystem call. Default 120. Complex payloads may need more time.',
+          'Subsystem call timeout. Default 120.',
         ),
       },
       annotations: {
@@ -753,10 +753,10 @@ export function registerSchemaAndAiAuthoringTools({
         + '  }',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the StateTree asset to modify.',
+          'UE content path.',
         ),
         operation: stateTreeMutationOperationSchema.describe(
-          'StateTree mutation operation to apply.',
+          'StateTree mutation operation.',
         ),
         payload: z.object({
           stateTree: jsonObjectSchema.optional(),
@@ -774,25 +774,25 @@ export function registerSchemaAndAiAuthoringTools({
           editorNodeId: z.string().optional(),
           transitionId: z.string().optional(),
           bindings: stateTreeBindingsObjectSchema.optional().describe(
-            'Task output-to-input property bindings. Use extract_asset on an existing StateTree to discover structIds and property names.',
+            'Task property bindings.',
           ),
           propertyBindings: z.array(jsonObjectSchema).optional().describe(
-            'Property bindings array for set_bindings/add_binding operations (shorthand — placed directly in payload).',
+            'Bindings array shorthand for set/add_binding.',
           ),
           sourcePath: jsonObjectSchema.optional().describe(
-            'Source property path for add_binding operation (single binding shorthand).',
+            'Source path for add_binding.',
           ),
           targetPath: jsonObjectSchema.optional().describe(
-            'Target property path for add_binding/remove_binding operations.',
+            'Target path for add/remove_binding.',
           ),
         }).passthrough().default({}).describe(
-          'Operation payload. State selectors and targetState references support stateId/statePath/stateName (slash statePath from extract_asset is canonical; dotted paths remain supported). Editor-node and transition selectors use editorNodeId and transitionId. Binding operations accept propertyBindings array, or sourcePath/targetPath for single bindings.',
+          'Payload. State selectors: stateId/statePath/stateName. Binding: propertyBindings or sourcePath/targetPath.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate and compile without changing the asset.',
+          'Dry-run validation only.',
         ),
         timeout_seconds: z.number().positive().optional().describe(
-          'Timeout in seconds for the subsystem call. Default 90. Complex payloads may need more time.',
+          'Subsystem call timeout. Default 90.',
         ),
       },
       annotations: {

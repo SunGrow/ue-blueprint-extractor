@@ -30,16 +30,16 @@ export function registerWidgetAnimationAuthoringTools({
       description: 'Create a named widget animation on an existing WidgetBlueprint.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint.',
+          'UE content path.',
         ),
         animation_name: z.string().describe(
-          'Name for the new animation.',
+          'Animation name.',
         ),
         payload: jsonObjectSchema.optional().describe(
-          'Optional initial animation payload. timeline.tracks should use widget_path where possible.',
+          'Initial animation payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the widget asset.',
+          'Dry-run validation only.',
         ),
       },
       outputSchema: createModifyWidgetAnimationResultSchema,
@@ -73,19 +73,19 @@ export function registerWidgetAnimationAuthoringTools({
       description: 'Modify widget animation timelines or metadata with replace-oriented payloads.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint.',
+          'UE content path.',
         ),
         animation_name: z.string().describe(
-          'Animation name or display label to modify.',
+          'Animation name or display label.',
         ),
         operation: z.enum(['replace_timeline', 'patch_metadata', 'rename_animation', 'remove_animation', 'compile']).describe(
-          'Widget animation mutation operation to apply.',
+          'Animation mutation operation.',
         ),
         payload: jsonObjectSchema.optional().describe(
-          'Optional payload for the selected operation.',
+          'Operation payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       outputSchema: createModifyWidgetAnimationResultSchema,

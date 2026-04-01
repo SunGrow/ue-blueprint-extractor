@@ -205,39 +205,39 @@ export function registerWindowUiTools({
       outputSchema: applyWindowUiChangesResultSchema,
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint to update.',
+          'UE content path.',
         ),
         variable_widgets: z.array(widgetSelectorFieldsSchema.extend({
           is_variable: z.boolean().default(true),
         }).refine((value) => Boolean(value.widget_name || value.widget_path), {
           message: 'widget_name or widget_path is required',
         })).default([]).describe(
-          'Optional widget selectors to toggle as variables before the compile/save pass.',
+          'Widget selectors to toggle as variables.',
         ),
         class_defaults: z.record(z.string(), z.unknown()).optional().describe(
-          'Optional widget Blueprint generated-class defaults to patch.',
+          'Class defaults to patch.',
         ),
         font_import: z.object({
           destination_path: z.string(),
           font_asset_path: z.string().optional(),
           items: z.array(fontImportItemSchema).min(1),
         }).optional().describe(
-          'Optional explicit-file-path font import payload passed through to ImportFonts.',
+          'Font import payload.',
         ),
         font_applications: z.array(windowFontApplicationSchema).optional().describe(
-          'Optional compact font applications passed through to ApplyWidgetFonts.',
+          'Font applications.',
         ),
         compile_after: z.boolean().default(true).describe(
-          'When true, compile the widget Blueprint after the requested mutations.',
+          'Compile after mutations.',
         ),
         save_after: z.boolean().default(false).describe(
-          'When true, save the widget asset and any explicit extra save paths after a successful compile. Leave false to keep visual verification ahead of final persistence.',
+          'Save assets after compile.',
         ),
         checkpoint_after_mutation_steps: z.boolean().default(false).describe(
-          'When true, save checkpoint assets after each successful mutation step so multi-step UI flows can recover from later interruptions.',
+          'Save checkpoints after each step.',
         ),
         save_asset_paths: z.array(z.string()).optional().describe(
-          'Optional extra asset paths to save with the widget asset.',
+          'Extra asset paths to save.',
         ),
         sync_project_code: z.object({
           changed_paths: z.array(z.string()).min(1),
@@ -255,7 +255,7 @@ export function registerWindowUiTools({
           clear_uht_cache: z.boolean().default(false).optional(),
           restart_first: z.boolean().default(false).optional(),
         }).optional().describe(
-          'Optional project-code sync step to run after the widget asset work succeeds.',
+          'Project-code sync step.',
         ),
       },
       annotations: {

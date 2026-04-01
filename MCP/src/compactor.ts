@@ -28,6 +28,46 @@ function shouldStripField(key: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(key));
 }
 
+function stripNullsInPlace(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) stripNullsInPlace(entry);
+    return;
+  }
+  if (!isPlainObject(value)) return;
+  for (const key of Object.keys(value)) {
+    if (value[key] === null) {
+      delete value[key];
+      continue;
+    }
+    stripNullsInPlace(value[key]);
+  }
+}
+
+const WIDGET_DEFAULT_STRIP_PATTERNS: [string, unknown][] = [
+  ['bIsVariable', false],
+  ['Visibility', 'Visible'],
+  ['Visibility', 'SelfHitTestInvisible'],
+  ['RenderOpacity', 1.0],
+  ['RenderOpacity', 1],
+  ['IsEnabled', true],
+];
+
+function stripWidgetDefaultsInPlace(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) stripWidgetDefaultsInPlace(entry);
+    return;
+  }
+  if (!isPlainObject(value)) return;
+  for (const [field, defaultValue] of WIDGET_DEFAULT_STRIP_PATTERNS) {
+    if (field in value && value[field] === defaultValue) {
+      delete value[field];
+    }
+  }
+  for (const key of Object.keys(value)) {
+    stripWidgetDefaultsInPlace(value[key]);
+  }
+}
+
 function stripFieldsInPlace(value: unknown, fieldPatterns: readonly RegExp[]): void {
   if (Array.isArray(value)) {
     for (const entry of value) {
@@ -58,6 +98,7 @@ export function stripFields<T>(data: T, fieldPatterns: readonly RegExp[]): T {
 }
 
 export function compactGenericExtraction(data: unknown): unknown {
+  stripNullsInPlace(data);
   return stripFields(data, GUID_AND_POSITION_PATTERNS);
 }
 
@@ -70,6 +111,7 @@ export function compactGenericExtraction(data: unknown): unknown {
  */
 export function compactBlueprint(data: unknown): unknown {
   if (!isPlainObject(data)) return data;
+  stripNullsInPlace(data);
   const root = data;
 
   const bp = root.blueprint as AnyObject | undefined;
@@ -94,6 +136,15 @@ export function compactBlueprint(data: unknown): unknown {
 
 export function compactWidgetBlueprint(data: unknown): unknown {
   if (!isPlainObject(data)) return data;
+
+  // Strip nulls and widget defaults inside sub-trees, not at data root
+  // (top-level nulls like rootWidget: null carry semantic meaning)
+  for (const key of Object.keys(data)) {
+    if (data[key] !== null) {
+      stripNullsInPlace(data[key]);
+    }
+  }
+  stripWidgetDefaultsInPlace(data);
 
   const rootWidget = data.rootWidget;
   if (isPlainObject(rootWidget)) {
@@ -123,6 +174,7 @@ export function compactWidgetBlueprint(data: unknown): unknown {
 
 export function compactBehaviorTree(data: unknown): unknown {
   if (!isPlainObject(data)) return data;
+  stripNullsInPlace(data);
 
   delete data.schemaVersion;
 
@@ -141,6 +193,7 @@ export function compactBehaviorTree(data: unknown): unknown {
 
 export function compactStateTree(data: unknown): unknown {
   if (!isPlainObject(data)) return data;
+  stripNullsInPlace(data);
 
   delete data.schemaVersion;
 
@@ -169,6 +222,7 @@ export function compactMaterial(data: unknown): unknown {
   if (!isPlainObject(data)) {
     return data;
   }
+  stripNullsInPlace(data);
 
   const graph = findMaterialGraphRoot(data);
   if (!graph) {

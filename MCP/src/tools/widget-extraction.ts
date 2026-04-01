@@ -5,6 +5,8 @@ import {
   jsonToolError,
   jsonToolSuccess,
 } from '../helpers/subsystem.js';
+import { formatAsRecipe } from '../helpers/widget-recipe-formatter.js';
+import { limitWidgetTreeDepth } from '../helpers/widget-utils.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -38,19 +40,16 @@ export function registerWidgetExtractionTools({
       title: 'Extract Widget Blueprint',
       description: 'Read a compact widget snapshot with tree, bindings, animations, compile status, and optional class defaults.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint.',
-        ),
-        include_class_defaults: z.boolean().default(false).describe(
-          'When true, also include Blueprint generated-class defaults so widget-template state and class defaults can be distinguished.',
-        ),
-        compact: z.boolean().default(true).describe(
-          'Return compact output (set false for raw).',
-        ),
+        asset_path: z.string().describe('UE content path.'),
+        include_class_defaults: z.boolean().default(false).describe('Include class defaults.'),
+        compact: z.boolean().default(true).describe('Compact output.'),
+        fields: z.array(z.string()).optional().describe('Return only these top-level keys.'),
+        depth: z.number().int().min(1).optional().describe('Max tree depth.'),
+        format: z.enum(['json', 'recipe']).default('json').describe('Output format.'),
       },
       annotations: readOnlyAnnotations('Extract Widget Blueprint'),
     },
-    async ({ asset_path, include_class_defaults, compact }) => {
+    async ({ asset_path, include_class_defaults, compact, fields, depth, format }) => {
       try {
         let parsed = await callSubsystemJson('ExtractWidgetBlueprint', {
           AssetPath: asset_path,
@@ -58,6 +57,23 @@ export function registerWidgetExtractionTools({
         });
         if (compact) {
           parsed = compactWidgetBlueprint(parsed) as Record<string, unknown>;
+        }
+        if (fields && fields.length > 0) {
+          const filtered: Record<string, unknown> = {};
+          for (const key of fields) {
+            if (key in parsed) filtered[key] = parsed[key];
+          }
+          if ('success' in parsed) filtered.success = parsed.success;
+          parsed = filtered as Record<string, unknown>;
+        }
+        if (depth !== undefined) {
+          limitWidgetTreeDepth(parsed, depth);
+        }
+        if (format === 'recipe') {
+          const recipeText = formatAsRecipe(asset_path, parsed, {
+            includeClassDefaults: include_class_defaults,
+          });
+          return { content: [{ type: 'text' as const, text: recipeText }] };
         }
         return jsonToolSuccess(parsed);
       } catch (error) {
@@ -72,15 +88,9 @@ export function registerWidgetExtractionTools({
       title: 'Extract Widget Animation',
       description: 'Return one authored widget animation timeline, bindings, supported tracks, checkpoints, duration, and playback metadata.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint.',
-        ),
-        animation_name: z.string().describe(
-          'Animation name or display label to extract.',
-        ),
-        compact: z.boolean().default(true).describe(
-          'Return compact output (set false for raw).',
-        ),
+        asset_path: z.string().describe('UE content path.'),
+        animation_name: z.string().describe('Animation name or display label.'),
+        compact: z.boolean().default(true).describe('Compact output.'),
       },
       outputSchema: extractWidgetAnimationResultSchema,
       annotations: readOnlyAnnotations('Extract Widget Animation'),

@@ -1,13 +1,11 @@
 import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
-import { aliasMap } from './alias-registration.js';
 import { isPlainObject } from './formatting.js';
-import { NEXT_STEP_HINTS_REGISTRY } from './next-step-hints.js';
 
 type RecoverableToolFailure = {
   code: string;
   recoverable: boolean;
   retry_after_ms?: number;
-  next_steps: string[];
+  next_steps?: string[];
 };
 
 type ToolFailureClassifier = (
@@ -38,43 +36,6 @@ export function createToolResultNormalizers({
     ));
   }
 
-  function defaultNextSteps(toolName: string, payload?: Record<string, unknown>): string[] {
-    const resolvedName = aliasMap.get(toolName) ?? toolName;
-
-    if (resolvedName === 'wait_for_editor') {
-      return [
-        'Retry wait_for_editor if the editor is still restarting.',
-        'Once connected=true, rerun the blocked editor-backed tool.',
-      ];
-    }
-
-    if (resolvedName === 'compile_widget_blueprint') {
-      return [
-        'Inspect compile.messages and diagnostics for the first failing widget or property.',
-        'Re-extract the widget blueprint before applying the next structural patch.',
-        'Check BindWidget names/types and any abstract classes referenced by the widget tree.',
-      ];
-    }
-
-    if (taskAwareTools.has(resolvedName)) {
-      return [
-        'Inspect the returned execution.status and diagnostics before retrying.',
-        'Poll the task-oriented status tool again if the operation is still running.',
-      ];
-    }
-
-    if (payload?.validateOnly === true) {
-      return [
-        'Fix the reported validation issues and rerun the same call.',
-      ];
-    }
-
-    return [
-      'Inspect diagnostics and validation details, then retry the same operation.',
-      'Use validate_only=true first if the tool supports it and you need more actionable failures.',
-    ];
-  }
-
   function inferExecutionMetadata(toolName: string, payload?: Record<string, unknown>) {
     const taskSupport = taskAwareTools.has(toolName) ? 'optional' : 'forbidden';
     const mode = taskSupport === 'optional' ? 'task_aware' : 'immediate';
@@ -97,15 +58,6 @@ export function createToolResultNormalizers({
       status,
       ...(progressMessage ? { progress_message: progressMessage } : {}),
     };
-  }
-
-  function getHints(toolName: string, kind: 'on_success' | 'on_error'): string[] | undefined {
-    const resolvedName = aliasMap.get(toolName) ?? toolName;
-    const config = NEXT_STEP_HINTS_REGISTRY.get(resolvedName);
-    if (!config) return undefined;
-    const hints = config[kind];
-    // Return at most 3 hints
-    return hints.length > 0 ? hints.slice(0, 3) : undefined;
   }
 
   function normalizeToolError(
@@ -184,10 +136,7 @@ export function createToolResultNormalizers({
       recoverable: typeof payload.recoverable === 'boolean'
         ? payload.recoverable
         : classification?.recoverable ?? true,
-      next_steps: Array.isArray(payload.next_steps)
-        ? payload.next_steps
-        : classification?.next_steps ?? defaultNextSteps(toolName, payload),
-      execution: inferExecutionMetadata(toolName, payload),
+      ...(taskAwareTools.has(toolName) ? { execution: inferExecutionMetadata(toolName, payload) } : {}),
     };
 
     if (typeof payload.retry_after_ms === 'number' && Number.isFinite(payload.retry_after_ms)) {
@@ -198,11 +147,6 @@ export function createToolResultNormalizers({
 
     if (diagnostics.length > 0) {
       envelope.diagnostics = diagnostics;
-    }
-
-    const errorHints = getHints(toolName, 'on_error');
-    if (errorHints) {
-      envelope._hints = errorHints;
     }
 
     return {
@@ -232,13 +176,8 @@ export function createToolResultNormalizers({
       ...basePayload,
       success: true,
       operation: typeof basePayload.operation === 'string' ? basePayload.operation : toolName,
-      execution: inferExecutionMetadata(toolName, basePayload),
+      ...(taskAwareTools.has(toolName) ? { execution: inferExecutionMetadata(toolName, basePayload) } : {}),
     };
-
-    const successHints = getHints(toolName, 'on_success');
-    if (successHints) {
-      envelope._hints = successHints;
-    }
 
     return {
       content: extraContent,

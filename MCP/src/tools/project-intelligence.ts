@@ -364,7 +364,7 @@ export function registerProjectIntelligenceTools({
       description: 'Refresh the in-memory project index from asset metadata plus published docs, prompts, and resources.',
       inputSchema: {
         package_path: z.string().default('/Game').describe(
-          'UE package path to index for asset metadata.',
+          'UE package path to index.',
         ),
       },
       outputSchema: RefreshProjectIndexResultSchema,
@@ -418,19 +418,19 @@ export function registerProjectIntelligenceTools({
       description: 'Search indexed asset metadata plus published docs, prompts, and resources with snippet-first results.',
       inputSchema: {
         query: z.string().describe(
-          'Search term to match against indexed project context.',
+          'Search term.',
         ),
         package_path: z.string().optional().describe(
-          'Optional package path to refresh/index if no cache exists for the current search scope.',
+          'Package path to refresh if uncached.',
         ),
         source_types: z.array(z.enum(['asset', 'doc', 'prompt', 'resource'])).optional().describe(
-          'Optional source-type filter.',
+          'Source-type filter.',
         ),
         page: z.number().int().min(1).default(1).describe(
-          'Page number for paginated results.',
+          'Page number.',
         ),
         per_page: z.number().int().min(1).max(50).default(10).describe(
-          'Number of search results per page.',
+          'Results per page.',
         ),
       },
       outputSchema: SearchProjectContextResultSchema,

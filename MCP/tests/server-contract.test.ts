@@ -285,7 +285,7 @@ describe('createBlueprintExtractorServer', () => {
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
     expect(resources.resources).toHaveLength(38);
-    expect(tools.tools).toHaveLength(106);
+    expect(tools.tools).toHaveLength(112);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');

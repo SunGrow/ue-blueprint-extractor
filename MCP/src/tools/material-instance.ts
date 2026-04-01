@@ -34,15 +34,9 @@ export function registerMaterialInstanceTools({
       title: 'Create MaterialInstance',
       description: 'Create a UE5 MaterialInstanceConstant from a parent material or material instance.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path for the new material instance (e.g. /Game/Materials/MI_NewSurface).',
-        ),
-        parent_material_path: z.string().describe(
-          'UE content path to the parent material or material instance.',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
-        ),
+        asset_path: z.string().describe('UE content path for the new asset.'),
+        parent_material_path: z.string().describe('Parent material path.'),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Create MaterialInstance',
@@ -79,39 +73,17 @@ export function registerMaterialInstanceTools({
         + '    "textureParameters": [{ "name": "Albedo", "value": "/Game/Textures/T_Albedo" }]\n'
         + '  }',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the MaterialInstanceConstant to modify.',
-        ),
-        parentMaterial: z.string().optional().describe(
-          'Optional new parent material or material instance path.',
-        ),
-        scalarParameters: z.array(materialScalarParameterSchema).optional().describe(
-          'Optional scalar override list.',
-        ),
-        vectorParameters: z.array(materialVectorParameterSchema).optional().describe(
-          'Optional vector override list.',
-        ),
-        textureParameters: z.array(materialTextureParameterSchema).optional().describe(
-          'Optional texture override list. Set value to null to clear an override.',
-        ),
-        runtimeVirtualTextureParameters: z.array(materialTextureParameterSchema).optional().describe(
-          'Optional runtime virtual texture override list.',
-        ),
-        sparseVolumeTextureParameters: z.array(materialTextureParameterSchema).optional().describe(
-          'Optional sparse volume texture override list.',
-        ),
-        fontParameters: z.array(materialFontParameterSchema).optional().describe(
-          'Optional font override list. Set value to null to clear an override.',
-        ),
-        staticSwitchParameters: z.array(materialStaticSwitchParameterSchema).optional().describe(
-          'Optional static switch override list.',
-        ),
-        layerStack: materialLayerStackSchema.optional().describe(
-          'Optional full replacement payload for the classic material layer stack override.',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
-        ),
+        asset_path: z.string().describe('UE content path.'),
+        parentMaterial: z.string().optional().describe('New parent material path.'),
+        scalarParameters: z.array(materialScalarParameterSchema).optional().describe('Scalar overrides.'),
+        vectorParameters: z.array(materialVectorParameterSchema).optional().describe('Vector overrides.'),
+        textureParameters: z.array(materialTextureParameterSchema).optional().describe('Texture overrides. Null clears.'),
+        runtimeVirtualTextureParameters: z.array(materialTextureParameterSchema).optional().describe('RVT overrides.'),
+        sparseVolumeTextureParameters: z.array(materialTextureParameterSchema).optional().describe('SVT overrides.'),
+        fontParameters: z.array(materialFontParameterSchema).optional().describe('Font overrides. Null clears.'),
+        staticSwitchParameters: z.array(materialStaticSwitchParameterSchema).optional().describe('Static switch overrides.'),
+        layerStack: materialLayerStackSchema.optional().describe('Full layer stack replacement.'),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Modify MaterialInstance',

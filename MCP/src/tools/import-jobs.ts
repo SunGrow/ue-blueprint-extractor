@@ -48,13 +48,13 @@ export function registerImportJobTools({
       description: 'Enqueue an async asset import job. Supports generic, texture, mesh, and reimport modes via optional fields. Set reimport=true to reimport existing assets. Add texture_options or mesh_options to items for type-specific imports.',
       inputSchema: {
         payload: consolidatedPayloadSchema.describe(
-          'Subsystem passthrough payload object. Requires an items array. Add texture_options or mesh_options to items for type-specific imports.',
+          'Import payload with items array.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without importing.',
+          'Dry-run validation only.',
         ),
         reimport: z.boolean().default(false).describe(
-          'Re-import existing assets instead of importing new ones.',
+          'Reimport existing assets.',
         ),
       },
       outputSchema: importJobSchema,
@@ -126,7 +126,7 @@ export function registerImportJobTools({
       description: 'Retrieve the current status for one async import job by id.',
       inputSchema: {
         job_id: z.string().describe(
-          'Job id returned by an import tool.',
+          'Import job id.',
         ),
       },
       outputSchema: importJobSchema,
@@ -157,7 +157,7 @@ export function registerImportJobTools({
       description: 'List async import jobs known to the subsystem.',
       inputSchema: {
         include_completed: z.boolean().default(false).describe(
-          'When true, include completed terminal jobs in the listing.',
+          'Include completed jobs.',
         ),
       },
       outputSchema: importJobListSchema,

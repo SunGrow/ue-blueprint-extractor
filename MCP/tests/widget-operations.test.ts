@@ -627,7 +627,7 @@ describe('modify_widget_blueprint dispatch alias', () => {
     });
 
     expect((result as { isError?: boolean }).isError).toBe(true);
-    expect(getTextContent(result as any)).toContain('root_widget is required');
+    expect(getTextContent(result as any)).toContain('root_widget or dsl is required');
   });
 });
 

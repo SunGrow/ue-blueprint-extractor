@@ -339,10 +339,10 @@ export function registerProjectControlTools({
       description: 'Set the active editor for this MCP session by instance_id or process_id.',
       inputSchema: {
         instance_id: z.string().optional().describe(
-          'Preferred canonical editor instance id returned by list_running_editors.',
+          'Editor instance id.',
         ),
         process_id: z.number().int().positive().optional().describe(
-          'Optional OS process id for selecting a running editor when instance_id is not available.',
+          'OS process id.',
         ),
       },
       annotations: {
@@ -477,16 +477,16 @@ export function registerProjectControlTools({
       description: 'Launch a new Unreal Editor process for the resolved project and bind it as the active editor for this MCP session.',
       inputSchema: {
         engine_root: z.string().optional().describe(
-          'Optional Unreal Engine root. Falls back to the workspace project association or UE_ENGINE_ROOT.',
+          'UE root. Falls back to UE_ENGINE_ROOT.',
         ),
         project_path: z.string().optional().describe(
-          'Optional .uproject path. Falls back to the workspace project or UE_PROJECT_PATH.',
+          '.uproject path. Falls back to UE_PROJECT_PATH.',
         ),
         target: z.string().optional().describe(
-          'Optional editor target such as MyGameEditor.',
+          'Editor target name.',
         ),
         reconnect_timeout_seconds: z.number().int().positive().default(180).describe(
-          'Maximum seconds to wait for the launched editor to register and become the active editor.',
+          'Max seconds to wait for editor.',
         ),
       },
       annotations: {
@@ -543,7 +543,7 @@ export function registerProjectControlTools({
       description: 'Request a Play-In-Editor session from the active editor.',
       inputSchema: {
         simulate: z.boolean().default(false).describe(
-          'When true, start Simulate-In-Editor instead of Play-In-Editor.',
+          'Use Simulate-In-Editor.',
         ),
       },
       annotations: {
@@ -597,7 +597,7 @@ export function registerProjectControlTools({
       description: 'Restart the current Play-In-Editor session by stopping it and scheduling a fresh launch.',
       inputSchema: {
         simulate: z.boolean().default(false).describe(
-          'When true, relaunch into Simulate-In-Editor instead of Play-In-Editor.',
+          'Use Simulate-In-Editor.',
         ),
       },
       annotations: {
@@ -627,7 +627,7 @@ export function registerProjectControlTools({
       description: 'Poll the editor connection once per second until Remote Control responds again or the timeout elapses.',
       inputSchema: {
         timeout_seconds: z.number().int().positive().default(180).describe(
-          'Maximum number of seconds to wait for the editor connection to return.',
+          'Max seconds to wait.',
         ),
       },
       annotations: {
@@ -738,28 +738,28 @@ export function registerProjectControlTools({
       description: 'Run an external UBT build from the MCP host for the current project/editor target.',
       inputSchema: {
         engine_root: z.string().optional().describe(
-          'Optional Unreal Engine root. Falls back to UE_ENGINE_ROOT.',
+          'UE root. Falls back to UE_ENGINE_ROOT.',
         ),
         project_path: z.string().optional().describe(
-          'Optional .uproject path. Falls back to UE_PROJECT_PATH.',
+          '.uproject path. Falls back to UE_PROJECT_PATH.',
         ),
         target: z.string().optional().describe(
-          'Optional build target such as MyGameEditor. Falls back to UE_PROJECT_TARGET or UE_EDITOR_TARGET.',
+          'Build target. Falls back to UE_PROJECT_TARGET.',
         ),
         platform: buildPlatformSchema.optional().describe(
-          'Optional build platform. Defaults from the host OS.',
+          'Build platform.',
         ),
         configuration: buildConfigurationSchema.optional().describe(
-          'Optional build configuration. Defaults to Development.',
+          'Build config. Default: Development.',
         ),
         build_timeout_seconds: z.number().int().positive().optional().describe(
-          'Optional build timeout in seconds. Defaults to 1800.',
+          'Build timeout seconds. Default: 1800.',
         ),
         include_output: z.boolean().default(false).describe(
-          'When true, include full stdout and stderr in the result. Failure cases include output automatically.',
+          'Include full build output.',
         ),
         clear_uht_cache: z.boolean().default(false).describe(
-          'When true, delete UHT cache files (.uhtpath, .uhtsettings) from Intermediate/ before building so that Unreal Header Tool regenerates headers for any new or changed UPROPERTYs.',
+          'Delete UHT cache before building.',
         ),
       },
       annotations: {
@@ -810,10 +810,10 @@ export function registerProjectControlTools({
       description: 'Request an editor-side Live Coding compile. Unsupported host platforms return a structured unsupported result.',
       inputSchema: {
         changed_paths: z.array(z.string()).optional().describe(
-          'Optional explicit changed paths to pass through to the editor-side automation surface.',
+          'Changed file paths.',
         ),
         wait_for_completion: z.boolean().default(true).describe(
-          'When true, request a synchronous/terminal Live Coding result from the editor-side method.',
+          'Wait for synchronous result.',
         ),
       },
       annotations: {
@@ -859,19 +859,19 @@ export function registerProjectControlTools({
       description: 'Request an editor restart, then wait for Remote Control to disconnect and reconnect.',
       inputSchema: {
         save_dirty_assets: z.boolean().default(true).describe(
-          'When true, ask the editor-side restart path to save dirty assets before relaunching.',
+          'Save dirty assets before restart.',
         ),
         force_kill: z.boolean().default(false).describe(
-          'Use process termination (taskkill /F) instead of graceful shutdown. Use when graceful restart fails due to Rider IDE locks or dirty package prompts.',
+          'Force-kill instead of graceful shutdown.',
         ),
         wait_for_reconnect: z.boolean().default(true).describe(
-          'When true, wait for the editor to disconnect and reconnect before returning.',
+          'Wait for reconnect.',
         ),
         disconnect_timeout_seconds: z.number().int().positive().default(60).describe(
-          'Maximum seconds to wait for the editor to disconnect after the restart request.',
+          'Disconnect timeout seconds.',
         ),
         reconnect_timeout_seconds: z.number().int().positive().default(180).describe(
-          'Maximum seconds to wait for Remote Control to return after the editor restarts.',
+          'Reconnect timeout seconds.',
         ),
       },
       annotations: {
@@ -1044,49 +1044,49 @@ export function registerProjectControlTools({
         + '  }',
       inputSchema: {
         changed_paths: z.array(z.string()).min(1).describe(
-          'Explicit changed file paths. This tool does not infer them from source control.',
+          'Changed file paths (explicit).',
         ),
         force_rebuild: z.boolean().default(false).describe(
-          'When true, force the build-and-restart path regardless of changed_paths.',
+          'Force build-and-restart.',
         ),
         engine_root: z.string().optional().describe(
-          'Optional Unreal Engine root. Falls back to UE_ENGINE_ROOT.',
+          'UE root. Falls back to UE_ENGINE_ROOT.',
         ),
         project_path: z.string().optional().describe(
-          'Optional .uproject path. Falls back to UE_PROJECT_PATH.',
+          '.uproject path. Falls back to UE_PROJECT_PATH.',
         ),
         target: z.string().optional().describe(
-          'Optional build target such as MyGameEditor. Falls back to UE_PROJECT_TARGET or UE_EDITOR_TARGET.',
+          'Build target. Falls back to UE_PROJECT_TARGET.',
         ),
         platform: buildPlatformSchema.optional().describe(
-          'Optional build platform. Defaults from the host OS.',
+          'Build platform.',
         ),
         configuration: buildConfigurationSchema.optional().describe(
-          'Optional build configuration. Defaults to Development.',
+          'Build config. Default: Development.',
         ),
         save_dirty_assets: z.boolean().default(true).describe(
-          'When true, ask the editor restart path to save dirty assets before relaunching.',
+          'Save dirty assets before restart.',
         ),
         save_asset_paths: z.array(z.string()).optional().describe(
-          'Optional explicit asset paths to save through save_assets before the editor restart.',
+          'Extra asset paths to save.',
         ),
         build_timeout_seconds: z.number().int().positive().optional().describe(
-          'Optional external build timeout in seconds. Defaults to 1800.',
+          'Build timeout seconds. Default: 1800.',
         ),
         disconnect_timeout_seconds: z.number().int().positive().default(60).describe(
-          'Maximum seconds to wait for the editor to disconnect after a restart request.',
+          'Disconnect timeout seconds.',
         ),
         reconnect_timeout_seconds: z.number().int().positive().default(180).describe(
-          'Maximum seconds to wait for Remote Control to return after the editor restarts.',
+          'Reconnect timeout seconds.',
         ),
         include_output: z.boolean().default(false).describe(
-          'When true, include full build stdout and stderr in the result. Failure cases include output automatically.',
+          'Include full build output.',
         ),
         clear_uht_cache: z.boolean().default(false).describe(
-          'When true, delete UHT cache files (.uhtpath, .uhtsettings) from Intermediate/ before building so that Unreal Header Tool regenerates headers for any new or changed UPROPERTYs.',
+          'Delete UHT cache before building.',
         ),
         restart_first: z.boolean().default(false).describe(
-          'When true, shut the editor down before building to release locked DLLs, then launch it from the MCP host after the build finishes. Use this when a previous build failed due to a locked DLL (errorCategory: locked_file).',
+          'Shut down editor before building.',
         ),
       },
       annotations: {

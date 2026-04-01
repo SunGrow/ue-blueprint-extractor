@@ -1,5 +1,34 @@
 # Changelog
 
+## 7.0.0 — Code-Over-JSON
+LLMs are better at generating code than constructing large JSON payloads. This release redesigns how the MCP server exposes capabilities to exploit that strength — DSL inputs, compressed outputs, composite workflows, and intent-level tools.
+
+### DSL-based authoring
+- **Widget Tree DSL** — `replace_widget_tree` and `build_widget_tree` accept an indentation-based `dsl` string as an alternative to nested JSON. Supports class aliases (`text`, `button`, `vbox`), slot presets (`[anchor=center]`), dotted property paths (`Font.Size: 24`), and `[var]` attribute shorthand. ~60-70% input token reduction for typical widget trees.
+- **Widget Diff DSL** — new `apply_widget_diff` tool accepts unified-diff-style DSL patches, computes minimal structural operations (remove/insert/patch), and executes them as a batch. Replaces manual operation planning.
+- **Blueprint Graph DSL** — `modify_blueprint_graphs` accepts pseudocode-style graph descriptions (`Event BeginPlay -> GetPlayerController -> CastTo(APlayerController) as PC`) and converts them to `upsert_function_graphs` payloads with auto-generated node IDs and connections.
+- **Material Graph DSL** — `modify_material` accepts a declarative DSL for material settings, parameter declarations, and expression wiring (`BaseColor <- Lerp(Color, Multiply(Color, 1.3), HoverAlpha)`), converting to batch operations with correct expression classes and pin connections.
+
+### Intent-level composite tools
+- **`create_menu_screen`** — one call to create a widget blueprint, build its tree from DSL, patch class defaults, compile, and save.
+- **`apply_widget_patch`** — extract current widget state, apply a DSL diff, compile, and re-extract to return final state.
+- **`create_material_setup`** — create a material with settings, apply graph operations, compile, and save.
+- **`scaffold_blueprint`** — create a blueprint with variables and function stubs in one call.
+
+### Markdown widget recipes
+- **`execute_widget_recipe`** — accepts a markdown document describing the desired widget end state (asset path, parent class, widget tree DSL, class defaults, after-steps) and executes the full create-build-patch-compile-save pipeline.
+- **`extract_widget_blueprint format: 'recipe'`** — extraction can output in recipe format, enabling extract → edit markdown → re-execute round-trips.
+
+### Response compression
+- **Slimmed response envelopes** — `execution` metadata only on task-aware tools; removed `_hints` and `next_steps` from all envelopes (~300-500 tokens saved per response).
+- **Schema token budget** — trimmed `.describe()` strings across all 22 tool files; average description now under 100 characters (enforced by test).
+- **Extraction enhancements** — `extract_widget_blueprint` gains `depth` (limit tree levels) and `fields` (select specific top-level keys) parameters. Compactor now strips null values and default widget properties (`bIsVariable: false`, `Visibility: Visible`, `RenderOpacity: 1.0`, `IsEnabled: true`).
+
+### Presets and aliases
+- **Slot presets** — `center`, `fill`, `top-left`, `top-right`, `bottom-left`, `bottom-right`, `top-stretch`, `bottom-stretch`, `left-stretch`, `right-stretch` resolve to full anchor/alignment configs.
+- **Widget class aliases** — 21 short names (`button` → `CommonButtonBase`, `text` → `TextBlock`, `vbox` → `VerticalBox`, etc.) accepted in all widget tree inputs.
+- **Property path shorthand** — dotted keys like `Font.Size: 24` auto-expand to nested objects in widget properties.
+
 ## 6.3.0
 - **AnimGraph K2Node_VariableGet support** — `add_animgraph_nodes` now accepts `K2Node_VariableGet` with a `variableName` field, resolving inherited native properties via `SetFromField` with a manual `CreatePin` fallback when the skeleton class is not yet compiled.
 - **Struct property field-by-field fallback** — `PropertySerializer` now falls back to recursive per-field application when `FJsonObjectConverter::JsonObjectToUStruct` fails, enabling partial property updates on complex structs like `FAnimNode_ModifyBone` (e.g. setting `BoneToModify`, `RotationMode`, `RotationSpace` individually).

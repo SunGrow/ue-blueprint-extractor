@@ -37,7 +37,7 @@ export function registerAnimationAuthoringTools({
       description: 'Create a UE5 AnimSequence asset from extractor-shaped metadata payloads.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new AnimSequence asset.',
+          'UE content path for the new asset.',
         ),
         payload: z.object({
           animSequence: jsonObjectSchema.optional(),
@@ -52,7 +52,7 @@ export function registerAnimationAuthoringTools({
           'Extractor-shaped AnimSequence payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -89,10 +89,10 @@ export function registerAnimationAuthoringTools({
       description: 'Modify a UE5 AnimSequence by replacing or patching notifies, sync markers, and curve metadata.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the AnimSequence asset to modify.',
+          'UE content path.',
         ),
         operation: animSequenceMutationOperationSchema.describe(
-          'AnimSequence mutation operation to apply.',
+          'AnimSequence mutation operation.',
         ),
         payload: z.object({
           animSequence: jsonObjectSchema.optional(),
@@ -107,10 +107,10 @@ export function registerAnimationAuthoringTools({
           trackIndex: z.number().int().min(0).optional(),
           trackName: z.string().optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Notify selectors prefer notifyId or notifyGuid and fall back to notifyIndex/track metadata.',
+          'Payload. Selectors: notifyId, notifyGuid, notifyIndex.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -149,7 +149,7 @@ export function registerAnimationAuthoringTools({
       description: 'Create a UE5 AnimMontage asset from extractor-shaped metadata payloads.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new AnimMontage asset.',
+          'UE content path for the new asset.',
         ),
         payload: z.object({
           animMontage: jsonObjectSchema.optional(),
@@ -166,7 +166,7 @@ export function registerAnimationAuthoringTools({
           'Extractor-shaped AnimMontage payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -203,10 +203,10 @@ export function registerAnimationAuthoringTools({
       description: 'Modify a UE5 AnimMontage by replacing or patching notifies, sections, and slot tracks.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the AnimMontage asset to modify.',
+          'UE content path.',
         ),
         operation: animMontageMutationOperationSchema.describe(
-          'AnimMontage mutation operation to apply.',
+          'AnimMontage mutation operation.',
         ),
         payload: z.object({
           animMontage: jsonObjectSchema.optional(),
@@ -221,10 +221,10 @@ export function registerAnimationAuthoringTools({
           trackIndex: z.number().int().min(0).optional(),
           trackName: z.string().optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Notify selectors prefer notifyId or notifyGuid and fall back to notifyIndex/track metadata.',
+          'Payload. Selectors: notifyId, notifyGuid, notifyIndex.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -263,7 +263,7 @@ export function registerAnimationAuthoringTools({
       description: 'Create a UE5 BlendSpace or BlendSpace1D asset from extractor-shaped sample and axis payloads.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new BlendSpace asset.',
+          'UE content path for the new asset.',
         ),
         payload: z.object({
           blendSpace: jsonObjectSchema.optional(),
@@ -279,7 +279,7 @@ export function registerAnimationAuthoringTools({
           'Extractor-shaped BlendSpace payload.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -316,10 +316,10 @@ export function registerAnimationAuthoringTools({
       description: 'Modify a UE5 BlendSpace by replacing or patching samples and axis definitions.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the BlendSpace asset to modify.',
+          'UE content path.',
         ),
         operation: blendSpaceMutationOperationSchema.describe(
-          'BlendSpace mutation operation to apply.',
+          'BlendSpace mutation operation.',
         ),
         payload: z.object({
           blendSpace: jsonObjectSchema.optional(),
@@ -332,10 +332,10 @@ export function registerAnimationAuthoringTools({
           axisX: blendParameterSchema.optional(),
           axisY: blendParameterSchema.optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Sample selectors use sampleIndex.',
+          'Payload. Selectors: sampleIndex.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {

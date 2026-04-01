@@ -89,7 +89,8 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
       'replace_widget_class', 'insert_widget_child', 'remove_widget',
       'move_widget', 'wrap_widget', 'patch_widget', 'patch_widget_class_defaults',
       'modify_widget', 'modify_widget_blueprint', 'batch_widget_operations',
-      'find_and_extract',
+      'apply_widget_diff', 'create_menu_screen', 'apply_widget_patch',
+      'execute_widget_recipe', 'find_and_extract',
     ],
   },
   widget_authoring_visual: {
@@ -125,6 +126,7 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
       'create_material', 'material_graph_operation', 'modify_material',
       'compile_material_asset',
       'create_material_instance', 'modify_material_instance',
+      'create_material_setup',
       'find_and_extract',
     ],
   },
@@ -135,6 +137,7 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     tools: [
       'create_blueprint', 'modify_blueprint_members', 'modify_blueprint_graphs',
       'trigger_live_coding',
+      'scaffold_blueprint',
       'find_and_extract',
     ],
   },

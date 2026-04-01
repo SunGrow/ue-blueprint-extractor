@@ -29,16 +29,16 @@ export function registerDataAndInputTools({
       description: 'Create a concrete UE5 DataAsset asset and optionally initialize top-level editable properties.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new DataAsset (e.g. /Game/Data/DA_NewItem)',
+          'UE content path for the new asset.',
         ),
         asset_class_path: z.string().describe(
-          'Concrete UDataAsset subclass path or class object path (e.g. /Script/MyModule.MyDataAssetClass or /Game/Blueprints/BP_MyDataAssetClass.BP_MyDataAssetClass_C).',
+          'UDataAsset subclass path.',
         ),
         properties: z.record(z.string(), z.unknown()).optional().describe(
-          'Optional top-level editable property payload to apply after creation.',
+          'Initial properties.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -71,13 +71,13 @@ export function registerDataAndInputTools({
       description: 'Apply a reflected property patch to an existing UE5 DataAsset.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the DataAsset to modify.',
+          'UE content path.',
         ),
         properties: z.record(z.string(), z.unknown()).describe(
-          'Top-level editable property patch payload.',
+          'Property patch.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -109,16 +109,16 @@ export function registerDataAndInputTools({
       description: 'Create an Enhanced InputAction asset with a friendly value_type and optional properties.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new InputAction asset.',
+          'UE content path for the new asset.',
         ),
         value_type: enhancedInputValueTypeSchema.default('boolean').describe(
-          'Human-friendly input value type.',
+          'Input value type.',
         ),
         properties: jsonObjectSchema.optional().describe(
-          'Optional editable InputAction properties such as action_description, consume_input, trigger_when_paused, or reserve_all_mappings.',
+          'InputAction properties.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -151,16 +151,16 @@ export function registerDataAndInputTools({
       description: 'Modify a dedicated Enhanced InputAction asset without using the generic DataAsset reflection path.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the InputAction asset.',
+          'UE content path.',
         ),
         value_type: enhancedInputValueTypeSchema.optional().describe(
-          'Optional human-friendly input value type override.',
+          'Input value type override.',
         ),
         properties: jsonObjectSchema.optional().describe(
-          'Optional editable InputAction properties such as action_description, consume_input, trigger_when_paused, or reserve_all_mappings.',
+          'InputAction properties.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -193,16 +193,16 @@ export function registerDataAndInputTools({
       description: 'Create an Enhanced InputMappingContext with dedicated mapping authoring.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new InputMappingContext asset.',
+          'UE content path for the new asset.',
         ),
         properties: jsonObjectSchema.optional().describe(
-          'Optional editable InputMappingContext properties such as context_description or registration_tracking_mode.',
+          'InputMappingContext properties.',
         ),
         mappings: z.array(inputMappingSchema).default([]).describe(
-          'Optional initial action/key mappings.',
+          'Initial action/key mappings.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -235,19 +235,19 @@ export function registerDataAndInputTools({
       description: 'Modify an Enhanced InputMappingContext with explicit mappings.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the InputMappingContext asset.',
+          'UE content path.',
         ),
         properties: jsonObjectSchema.optional().describe(
-          'Optional editable InputMappingContext properties such as context_description or registration_tracking_mode.',
+          'InputMappingContext properties.',
         ),
         replace_mappings: z.boolean().default(false).describe(
-          'When true, clear existing mappings before applying the provided mappings.',
+          'Clear existing mappings first.',
         ),
         mappings: z.array(inputMappingSchema).default([]).describe(
-          'Mappings to add to the context.',
+          'Mappings to add.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {

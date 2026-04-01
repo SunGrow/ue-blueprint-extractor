@@ -205,7 +205,7 @@ describe('alias-delegation', () => {
     expect(aliasMap.get('old_name')).toBe('new_name');
   });
 
-  it('defaultNextSteps resolves alias to target', () => {
+  it('defaultNextSteps resolves alias to target (next_steps removed from envelope in Phase 3B)', () => {
     const { normalizeToolError } = createToolResultNormalizers({
       taskAwareTools: new Set(['run_automation_tests']),
       classifyRecoverableToolFailure: () => null,
@@ -216,10 +216,9 @@ describe('alias-delegation', () => {
 
     const result = normalizeToolError('wait_for_ue', new Error('timeout'));
     const structured = result.structuredContent as Record<string, unknown>;
-    const nextSteps = structured.next_steps as string[];
 
-    // Should resolve to wait_for_editor's next_steps
-    expect(nextSteps).toContain('Retry wait_for_editor if the editor is still restarting.');
+    // Phase 3B: next_steps no longer appears in the error envelope
+    expect(structured).not.toHaveProperty('next_steps');
   });
 
   it('throws when target tool is not in toolHelpRegistry', () => {

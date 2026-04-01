@@ -2,6 +2,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { maybeBoolean } from '../helpers/formatting.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+import { preprocessWidgetNode } from '../helpers/widget-utils.js';
+import { resolveSlotPreset } from '../helpers/slot-presets.js';
+import { expandDottedProperties } from '../helpers/property-shorthand.js';
+import { parseWidgetDsl } from '../helpers/widget-dsl-parser.js';
+import { parseWidgetDiff } from '../helpers/widget-diff-parser.js';
+import type { WidgetDiffOperation } from '../helpers/widget-diff-parser.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -63,6 +69,42 @@ async function callMutationWithOptionalCompile(
 }
 
 // ---------------------------------------------------------------------------
+// Diff operation -> batch operation converter
+// ---------------------------------------------------------------------------
+
+function convertDiffOp(op: WidgetDiffOperation): Record<string, unknown> {
+  switch (op.type) {
+    case 'remove':
+      return { operation: 'remove_widget', widget_name: op.target };
+
+    case 'insert':
+      return {
+        operation: 'insert_child',
+        parent_widget_name: op.parent,
+        child_widget: op.node,
+        ...(op.index !== undefined ? { index: op.index } : {}),
+      };
+
+    case 'patch':
+      return buildMutationPayload({
+        operation: 'patch_widget',
+        widget_name: op.target,
+        properties: op.properties,
+        slot: op.slot,
+        ...(op.is_variable !== undefined ? { is_variable: op.is_variable } : {}),
+      });
+
+    case 'replace':
+      // Replace is decomposed into remove + insert at the diff level,
+      // but handle it here as a fallback: emit remove.
+      return { operation: 'remove_widget', widget_name: op.target };
+
+    default:
+      return { operation: 'unknown', target: op.target };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -81,11 +123,9 @@ export function registerWidgetStructureTools({
       title: 'Create Widget Blueprint',
       description: 'Create a WidgetBlueprint asset with an optional parent class.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path for the new WidgetBlueprint (e.g. /Game/UI/WBP_MyWidget)',
-        ),
+        asset_path: z.string().describe('UE content path for the new asset.'),
         parent_class_path: z.string().default('UserWidget').describe(
-          'Parent widget class path or short loaded class name.',
+          'Parent class path or short name.',
         ),
       },
       annotations: {
@@ -130,16 +170,19 @@ export function registerWidgetStructureTools({
         + '```',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to an existing WidgetBlueprint',
+          'UE content path.',
         ),
-        root_widget: widgetNodeSchema.describe(
-          'Root widget of the tree hierarchy',
+        root_widget: widgetNodeSchema.optional().describe(
+          'Root widget node (provide this OR dsl, not both).',
+        ),
+        dsl: z.string().optional().describe(
+          'Widget tree in indentation-based DSL format (alternative to root_widget).',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -150,11 +193,29 @@ export function registerWidgetStructureTools({
         openWorldHint: false,
       },
     },
-    async ({ asset_path, root_widget, validate_only, compile_after }) => {
+    async ({ asset_path, root_widget, dsl, validate_only, compile_after }) => {
       try {
+        if (dsl && root_widget) {
+          return jsonToolError(new Error('Provide either dsl or root_widget, not both'));
+        }
+        let processed: Record<string, unknown>;
+
+        if (dsl) {
+          const parseResult = parseWidgetDsl(dsl);
+          if (parseResult.nodes.length === 0) {
+            return jsonToolError(new Error('DSL produced no widget nodes'));
+          }
+          // DSL preprocessWidgetNode is called inside parseWidgetDsl, so result is already processed
+          processed = parseResult.nodes[0] as unknown as Record<string, unknown>;
+        } else if (root_widget) {
+          processed = preprocessWidgetNode(root_widget as Record<string, unknown>);
+        } else {
+          return jsonToolError(new Error('root_widget or dsl is required'));
+        }
+
         const mutation = await callSubsystemJson('BuildWidgetTree', {
           AssetPath: asset_path,
-          WidgetTreeJson: JSON.stringify(root_widget),
+          WidgetTreeJson: JSON.stringify(processed),
           bValidateOnly: validate_only,
         });
 
@@ -184,28 +245,28 @@ export function registerWidgetStructureTools({
       description: 'Patch properties, slot, or variable flag on a single widget by name or path.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         widget_name: z.string().optional().describe(
-          'Widget name to patch.',
+          'Widget name.',
         ),
         widget_path: z.string().optional().describe(
-          'Slash-delimited widget path to patch. Safer than widget_name after structural edits.',
+          'Slash-delimited widget path.',
         ),
         properties: z.record(z.string(), z.unknown()).optional().describe(
-          'Widget UPROPERTY values to set.',
+          'UPROPERTY values to set.',
         ),
         slot: z.record(z.string(), z.unknown()).optional().describe(
-          'Slot properties to set.',
+          'Slot properties.',
         ),
         is_variable: z.boolean().optional().describe(
-          'Toggle the widget variable flag.',
+          'Toggle variable flag.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -221,11 +282,15 @@ export function registerWidgetStructureTools({
         return jsonToolError(new Error('widget_name or widget_path is required'));
       }
       const variableFlag = maybeBoolean(is_variable);
+      const resolvedSlot = slot !== undefined ? resolveSlotPreset(slot) : undefined;
+      const resolvedProperties = properties && typeof properties === 'object' && !Array.isArray(properties)
+        ? expandDottedProperties(properties as Record<string, unknown>)
+        : properties;
       const payload = buildMutationPayload({
         widget_name,
         widget_path,
-        properties,
-        slot,
+        properties: resolvedProperties,
+        slot: resolvedSlot,
         ...(typeof variableFlag === 'boolean' ? { is_variable: variableFlag } : {}),
       });
       return callMutationWithOptionalCompile(
@@ -244,16 +309,16 @@ export function registerWidgetStructureTools({
       description: 'Patch the generated-class defaults of a WidgetBlueprint.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         class_defaults: z.record(z.string(), z.unknown()).describe(
-          'Generated-class default property patch.',
+          'Class default property patch.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -282,25 +347,25 @@ export function registerWidgetStructureTools({
       description: 'Insert a child widget under a parent widget by name or path.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         parent_widget_name: z.string().optional().describe(
-          'Parent widget selector by name.',
+          'Parent widget name.',
         ),
         parent_widget_path: z.string().optional().describe(
-          'Parent widget selector by path.',
+          'Parent widget path.',
         ),
         child_widget: widgetNodeSchema.describe(
-          'Child widget node to insert.',
+          'Child widget node.',
         ),
         index: z.number().int().min(0).optional().describe(
-          'Optional child insertion index.',
+          'Insertion index.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -315,10 +380,11 @@ export function registerWidgetStructureTools({
       if (!parent_widget_name && !parent_widget_path) {
         return jsonToolError(new Error('parent_widget_name or parent_widget_path is required'));
       }
+      const processedChild = preprocessWidgetNode(child_widget as Record<string, unknown>);
       const payload = buildMutationPayload({
         parent_widget_name,
         parent_widget_path,
-        child_widget,
+        child_widget: processedChild,
         index,
       });
       return callMutationWithOptionalCompile(
@@ -337,19 +403,19 @@ export function registerWidgetStructureTools({
       description: 'Remove a widget from the widget tree by name or path.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         widget_name: z.string().optional().describe(
-          'Widget name to remove.',
+          'Widget name.',
         ),
         widget_path: z.string().optional().describe(
-          'Slash-delimited widget path to remove.',
+          'Slash-delimited widget path.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -381,28 +447,28 @@ export function registerWidgetStructureTools({
       description: 'Move a widget to a new parent within the widget tree.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         widget_name: z.string().optional().describe(
-          'Widget name to move.',
+          'Widget name.',
         ),
         widget_path: z.string().optional().describe(
-          'Slash-delimited widget path to move.',
+          'Slash-delimited widget path.',
         ),
         new_parent_widget_name: z.string().optional().describe(
-          'Destination parent selector by name.',
+          'New parent name.',
         ),
         new_parent_widget_path: z.string().optional().describe(
-          'Destination parent selector by path.',
+          'New parent path.',
         ),
         index: z.number().int().min(0).optional().describe(
-          'Optional insertion index at the new parent.',
+          'Insertion index at new parent.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -437,22 +503,22 @@ export function registerWidgetStructureTools({
       description: 'Wrap an existing widget inside a new panel widget.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         widget_name: z.string().optional().describe(
-          'Widget name to wrap.',
+          'Widget name.',
         ),
         widget_path: z.string().optional().describe(
-          'Slash-delimited widget path to wrap.',
+          'Slash-delimited widget path.',
         ),
         wrapper_widget: widgetNodeSchema.describe(
-          'Wrapper widget node. Must be a panel widget.',
+          'Wrapper panel widget node.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -464,7 +530,8 @@ export function registerWidgetStructureTools({
       },
     },
     async ({ asset_path, widget_name, widget_path, wrapper_widget, validate_only, compile_after }) => {
-      const payload = buildMutationPayload({ widget_name, widget_path, wrapper_widget });
+      const processedWrapper = preprocessWidgetNode(wrapper_widget as Record<string, unknown>);
+      const payload = buildMutationPayload({ widget_name, widget_path, wrapper_widget: processedWrapper });
       return callMutationWithOptionalCompile(
         callSubsystemJson, asset_path, 'wrap_widget', payload, validate_only, compile_after,
       );
@@ -481,25 +548,25 @@ export function registerWidgetStructureTools({
       description: 'Replace the class of a widget in-place, optionally preserving properties.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         widget_name: z.string().optional().describe(
-          'Widget name to replace.',
+          'Widget name.',
         ),
         widget_path: z.string().optional().describe(
-          'Slash-delimited widget path to replace.',
+          'Slash-delimited widget path.',
         ),
         replacement_class: z.string().describe(
-          'Concrete replacement widget class.',
+          'Replacement widget class.',
         ),
         preserve_properties: z.boolean().optional().describe(
-          'When false, clear existing widget properties.',
+          'Clear existing properties if false.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -533,16 +600,16 @@ export function registerWidgetStructureTools({
       description: 'Execute multiple widget mutation operations in a single transactional batch.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
         operations: z.array(z.record(z.string(), z.unknown())).describe(
-          'Array of operation objects to execute in order.',
+          'Ordered operations array.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
         compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
+          'Compile after mutation.',
         ),
       },
       annotations: {
@@ -562,7 +629,81 @@ export function registerWidgetStructureTools({
   );
 
   // -----------------------------------------------------------------------
-  // 10. compile_widget
+  // 10. apply_widget_diff
+  // -----------------------------------------------------------------------
+  server.registerTool(
+    'apply_widget_diff',
+    {
+      title: 'Apply Widget Diff',
+      description:
+        'Apply a unified-diff-style DSL patch to a widget blueprint. '
+        + 'Computes and executes minimal operations (remove, insert, patch) from the diff.\n\n'
+        + 'Diff format: lines without prefix = context (unchanged), '
+        + '`-` prefix = removed, `+` prefix = added.\n\n'
+        + 'Example:\n'
+        + '```\n'
+        + 'CanvasPanel "Root"\n'
+        + '  VerticalBox "MainContent"\n'
+        + '-   TextBlock "OldTitle" {Text: "Old"}\n'
+        + '+   TextBlock "NewTitle" {Text: "New"} [var]\n'
+        + '```',
+      inputSchema: {
+        asset_path: z.string().describe('UE content path.'),
+        diff: z.string().describe('Widget tree diff in unified-diff DSL format.'),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
+        compile_after: z.boolean().default(true).describe('Compile after mutations.'),
+      },
+      annotations: {
+        title: 'Apply Widget Diff',
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ asset_path, diff, validate_only, compile_after }) => {
+      try {
+        const diffResult = parseWidgetDiff(diff);
+
+        if (diffResult.operations.length === 0) {
+          return jsonToolSuccess({
+            message: 'No changes detected',
+            diff_operations: 0,
+            warnings: diffResult.warnings,
+          });
+        }
+
+        // Convert diff operations to batch operations
+        const batchOps = diffResult.operations.map((op) => convertDiffOp(op));
+
+        // Execute as batch via ModifyWidgetBlueprintStructure
+        const mutation = await callSubsystemJson('ModifyWidgetBlueprintStructure', {
+          AssetPath: asset_path,
+          Operation: 'batch',
+          PayloadJson: JSON.stringify({ operations: batchOps }),
+          bValidateOnly: validate_only,
+        });
+
+        // Optional compile
+        let compileResult: Record<string, unknown> | null = null;
+        if (compile_after && !validate_only && mutation.success === true) {
+          compileResult = await callSubsystemJson('CompileWidgetBlueprint', { AssetPath: asset_path });
+        }
+
+        return jsonToolSuccess({
+          ...mutation,
+          diff_operations: diffResult.operations.length,
+          warnings: diffResult.warnings,
+          ...(compileResult ? { compile: compileResult.compile ?? compileResult } : {}),
+        });
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // 11. compile_widget
   // -----------------------------------------------------------------------
   server.registerTool(
     'compile_widget',
@@ -571,7 +712,7 @@ export function registerWidgetStructureTools({
       description: 'Compile a WidgetBlueprint and return compile diagnostics without saving.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint to compile',
+          'UE content path.',
         ),
       },
       annotations: {
@@ -606,68 +747,29 @@ export function registerWidgetStructureTools({
         + 'batch_widget_operations, or compile_widget based on the operation field.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
-        operation: widgetBlueprintMutationOperationSchema.describe(
-          'WidgetBlueprint mutation mode.',
-        ),
-        root_widget: widgetNodeSchema.optional().describe(
-          'Required for operation="replace_tree".',
-        ),
-        widget_name: z.string().optional().describe(
-          'Optional widget selector by name.',
-        ),
-        widget_path: z.string().optional().describe(
-          'Optional widget selector by slash-delimited path.',
-        ),
-        parent_widget_name: z.string().optional().describe(
-          'Parent widget selector by name for insert_child.',
-        ),
-        parent_widget_path: z.string().optional().describe(
-          'Parent widget selector by path for insert_child.',
-        ),
-        new_parent_widget_name: z.string().optional().describe(
-          'Destination parent selector by name for move_widget.',
-        ),
-        new_parent_widget_path: z.string().optional().describe(
-          'Destination parent selector by path for move_widget.',
-        ),
-        child_widget: widgetNodeSchema.optional().describe(
-          'Child widget payload for insert_child.',
-        ),
-        wrapper_widget: widgetNodeSchema.optional().describe(
-          'Wrapper widget payload for wrap_widget. Must be a panel widget.',
-        ),
-        replacement_class: z.string().optional().describe(
-          'Concrete replacement class for replace_widget_class.',
-        ),
-        preserve_properties: z.boolean().optional().describe(
-          'When false, clear existing widget properties during replace_widget_class.',
-        ),
-        index: z.number().int().min(0).optional().describe(
-          'Optional child insertion or move index.',
-        ),
-        properties: z.record(z.string(), z.unknown()).optional().describe(
-          'Property patch for patch_widget or replace_widget_class.',
-        ),
-        slot: z.record(z.string(), z.unknown()).optional().describe(
-          'Slot patch for patch_widget or move_widget.',
-        ),
-        class_defaults: z.record(z.string(), z.unknown()).optional().describe(
-          'Generated-class default patch for operation="patch_class_defaults".',
-        ),
-        is_variable: z.boolean().optional().describe(
-          'Toggle the widget variable flag during patch_widget.',
-        ),
-        operations: z.array(z.record(z.string(), z.unknown())).optional().describe(
-          'Nested operations for operation="batch".',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate only and return diagnostics without changing the asset.',
-        ),
-        compile_after: z.boolean().default(false).describe(
-          'Compile after a successful mutation and include compile results.',
-        ),
+        operation: widgetBlueprintMutationOperationSchema.describe('Mutation mode.'),
+        root_widget: widgetNodeSchema.optional().describe('For replace_tree.'),
+        dsl: z.string().optional().describe('Widget tree DSL for replace_tree (alternative to root_widget).'),
+        widget_name: z.string().optional(),
+        widget_path: z.string().optional(),
+        parent_widget_name: z.string().optional().describe('For insert_child.'),
+        parent_widget_path: z.string().optional().describe('For insert_child.'),
+        new_parent_widget_name: z.string().optional().describe('For move_widget.'),
+        new_parent_widget_path: z.string().optional().describe('For move_widget.'),
+        child_widget: widgetNodeSchema.optional().describe('For insert_child.'),
+        wrapper_widget: widgetNodeSchema.optional().describe('Panel widget for wrap_widget.'),
+        replacement_class: z.string().optional().describe('For replace_widget_class.'),
+        preserve_properties: z.boolean().optional().describe('Clear properties if false.'),
+        index: z.number().int().min(0).optional().describe('Insertion or move index.'),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        slot: z.record(z.string(), z.unknown()).optional(),
+        class_defaults: z.record(z.string(), z.unknown()).optional().describe('For patch_class_defaults.'),
+        is_variable: z.boolean().optional().describe('Toggle variable flag.'),
+        operations: z.array(z.record(z.string(), z.unknown())).optional().describe('For batch.'),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
+        compile_after: z.boolean().default(false).describe('Compile after mutation.'),
       },
       annotations: {
         title: 'Modify Widget Blueprint',
@@ -681,6 +783,7 @@ export function registerWidgetStructureTools({
       asset_path,
       operation,
       root_widget,
+      dsl,
       widget_name,
       widget_path,
       parent_widget_name,
@@ -704,12 +807,24 @@ export function registerWidgetStructureTools({
         let mutation: Record<string, unknown>;
 
         if (operation === 'replace_tree') {
-          if (!root_widget) {
-            return jsonToolError(new Error('root_widget is required for operation="replace_tree"'));
+          if (dsl && root_widget) {
+            return jsonToolError(new Error('Provide either dsl or root_widget, not both'));
+          }
+          let processedRoot: Record<string, unknown>;
+          if (dsl) {
+            const parseResult = parseWidgetDsl(dsl);
+            if (parseResult.nodes.length === 0) {
+              return jsonToolError(new Error('DSL produced no widget nodes'));
+            }
+            processedRoot = parseResult.nodes[0] as unknown as Record<string, unknown>;
+          } else if (root_widget) {
+            processedRoot = preprocessWidgetNode(root_widget as Record<string, unknown>);
+          } else {
+            return jsonToolError(new Error('root_widget or dsl is required for operation="replace_tree"'));
           }
           mutation = await callSubsystemJson('BuildWidgetTree', {
             AssetPath: asset_path,
-            WidgetTreeJson: JSON.stringify(root_widget),
+            WidgetTreeJson: JSON.stringify(processedRoot),
             bValidateOnly: validate_only,
           });
         } else if (operation === 'compile') {
@@ -724,13 +839,17 @@ export function registerWidgetStructureTools({
           if (parent_widget_path) payload.parent_widget_path = parent_widget_path;
           if (new_parent_widget_name) payload.new_parent_widget_name = new_parent_widget_name;
           if (new_parent_widget_path) payload.new_parent_widget_path = new_parent_widget_path;
-          if (child_widget) payload.child_widget = child_widget;
-          if (wrapper_widget) payload.wrapper_widget = wrapper_widget;
+          if (child_widget) payload.child_widget = preprocessWidgetNode(child_widget as Record<string, unknown>);
+          if (wrapper_widget) payload.wrapper_widget = preprocessWidgetNode(wrapper_widget as Record<string, unknown>);
           if (replacement_class) payload.replacement_class = replacement_class;
           if (typeof preserve_properties === 'boolean') payload.preserve_properties = preserve_properties;
           if (typeof index === 'number') payload.index = index;
-          if (properties) payload.properties = properties;
-          if (slot) payload.slot = slot;
+          if (properties) {
+            payload.properties = (typeof properties === 'object' && !Array.isArray(properties))
+              ? expandDottedProperties(properties as Record<string, unknown>)
+              : properties;
+          }
+          if (slot) payload.slot = resolveSlotPreset(slot);
           if (class_defaults) payload.classDefaults = class_defaults;
           const variableFlag = maybeBoolean(is_variable);
           if (typeof variableFlag === 'boolean') payload.is_variable = variableFlag;
@@ -774,13 +893,16 @@ export function registerWidgetStructureTools({
       description: '[DEPRECATED: use replace_widget_tree] Destructively replace the full widget tree of an existing WidgetBlueprint.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to an existing WidgetBlueprint',
+          'UE content path.',
         ),
-        root_widget: widgetNodeSchema.describe(
-          'Root widget of the tree hierarchy',
+        root_widget: widgetNodeSchema.optional().describe(
+          'Root widget node (provide this OR dsl, not both).',
+        ),
+        dsl: z.string().optional().describe(
+          'Widget tree in indentation-based DSL format (alternative to root_widget).',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -791,11 +913,28 @@ export function registerWidgetStructureTools({
         openWorldHint: false,
       },
     },
-    async ({ asset_path, root_widget, validate_only }) => {
+    async ({ asset_path, root_widget, dsl, validate_only }) => {
       try {
+        if (dsl && root_widget) {
+          return jsonToolError(new Error('Provide either dsl or root_widget, not both'));
+        }
+        let processed: Record<string, unknown>;
+
+        if (dsl) {
+          const parseResult = parseWidgetDsl(dsl);
+          if (parseResult.nodes.length === 0) {
+            return jsonToolError(new Error('DSL produced no widget nodes'));
+          }
+          processed = parseResult.nodes[0] as unknown as Record<string, unknown>;
+        } else if (root_widget) {
+          processed = preprocessWidgetNode(root_widget as Record<string, unknown>);
+        } else {
+          return jsonToolError(new Error('root_widget or dsl is required'));
+        }
+
         const parsed = await callSubsystemJson('BuildWidgetTree', {
           AssetPath: asset_path,
-          WidgetTreeJson: JSON.stringify(root_widget),
+          WidgetTreeJson: JSON.stringify(processed),
           bValidateOnly: validate_only,
         });
         return jsonToolSuccess(parsed);
@@ -813,25 +952,17 @@ export function registerWidgetStructureTools({
       description: '[DEPRECATED: use patch_widget] Patch one widget by widget_name or widget_path using snake_case payload fields.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint',
+          'UE content path.',
         ),
-        widget_name: z.string().optional().describe(
-          'Widget name to modify.',
-        ),
-        widget_path: z.string().optional().describe(
-          'Slash-delimited widget_path to modify. Safer than widget_name after structural edits.',
-        ),
-        properties: z.record(z.string(), z.unknown()).optional().describe(
-          'Widget UPROPERTY values to set',
-        ),
-        slot: z.record(z.string(), z.unknown()).optional().describe(
-          'Slot properties to set',
-        ),
+        widget_name: z.string().optional(),
+        widget_path: z.string().optional().describe('Slash-delimited widget path.'),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        slot: z.record(z.string(), z.unknown()).optional(),
         is_variable: z.boolean().optional().describe(
-          'Toggle the widget variable flag.',
+          'Toggle variable flag.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -878,7 +1009,7 @@ export function registerWidgetStructureTools({
       description: '[DEPRECATED: use compile_widget] Compile a WidgetBlueprint and return compile diagnostics without saving.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the WidgetBlueprint to compile',
+          'UE content path.',
         ),
       },
       annotations: {

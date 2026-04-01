@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+import { parseMaterialDsl, materialDslToOperations } from '../helpers/material-dsl-parser.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -64,21 +65,13 @@ export function registerMaterialAuthoringTools({
       title: 'Create Material',
       description: 'Create a material, material function, material layer, or material layer blend asset.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path for the new material-family asset.',
-        ),
+        asset_path: z.string().describe('UE content path for the new asset.'),
         asset_kind: z.enum(['material', 'function', 'layer', 'layer_blend']).default('material').describe(
           'Material asset subtype.',
         ),
-        initial_texture_path: z.string().optional().describe(
-          'Optional texture path for the factory\'s initial texture slot (material only).',
-        ),
-        settings: jsonObjectSchema.optional().describe(
-          'Optional material settings payload.',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
-        ),
+        initial_texture_path: z.string().optional().describe('Initial texture (material only).'),
+        settings: jsonObjectSchema.optional().describe('Material settings.'),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Create Material',
@@ -127,34 +120,16 @@ export function registerMaterialAuthoringTools({
         + '    "node_position": { "x": -480, "y": -120 }\n'
         + '  }',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the Material asset.',
-        ),
-        operation: materialGraphOperationKindSchema.describe(
-          'Operation to execute.',
-        ),
-        settings: jsonObjectSchema.optional().describe(
-          'Top-level settings for set_material_settings.',
-        ),
-        expression_class: z.string().optional().describe(
-          'Loaded class path for add_expression.',
-        ),
-        expression_name: z.string().optional().describe(
-          'Temporary id for the created expression within this authoring session.',
-        ),
-        expression_properties: jsonObjectSchema.optional().describe(
-          'Optional reflected property patch for add_expression.',
-        ),
-        node_position: materialNodePositionSchema.optional().describe(
-          'Editor graph position for add_expression.',
-        ),
+        asset_path: z.string().describe('UE content path.'),
+        operation: materialGraphOperationKindSchema.describe('Operation to execute.'),
+        settings: jsonObjectSchema.optional().describe('For set_material_settings.'),
+        expression_class: z.string().optional().describe('Class path for add_expression.'),
+        expression_name: z.string().optional().describe('Temp id for the expression.'),
+        expression_properties: jsonObjectSchema.optional().describe('Property patch for add_expression.'),
+        node_position: materialNodePositionSchema.optional().describe('Graph position.'),
         ...materialConnectionSelectorFieldsSchema.shape,
-        material_property: z.string().optional().describe(
-          'Material property enum name for connect_material_property.',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the material.',
-        ),
+        material_property: z.string().optional().describe('For connect_material_property.'),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Material Graph Operation',
@@ -297,27 +272,16 @@ export function registerMaterialAuthoringTools({
       title: 'Modify Material',
       description: 'Apply compact graph and settings operations to a material, material function, layer, or layer blend asset.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the material-family asset.',
-        ),
+        asset_path: z.string().describe('UE content path.'),
         asset_kind: z.enum(['material', 'function', 'layer', 'layer_blend']).default('material').describe(
           'Material asset subtype.',
         ),
-        settings: jsonObjectSchema.optional().describe(
-          'Optional settings applied before operations.',
-        ),
-        compile_after: z.boolean().optional().describe(
-          'Override the default compile-after-mutate behavior.',
-        ),
-        layout_after: z.boolean().optional().describe(
-          'When true, run the editor layout pass after mutations.',
-        ),
-        operations: z.array(materialGraphOperationSchema).default([]).describe(
-          'Ordered material graph operations.',
-        ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
-        ),
+        dsl: z.string().optional().describe('Material graph DSL (alternative to operations payload).'),
+        settings: jsonObjectSchema.optional().describe('Settings applied before operations.'),
+        compile_after: z.boolean().optional().describe('Override compile-after-mutate.'),
+        layout_after: z.boolean().optional().describe('Run editor layout after mutations.'),
+        operations: z.array(materialGraphOperationSchema).default([]).describe('Ordered graph operations.'),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Modify Material',
@@ -327,8 +291,41 @@ export function registerMaterialAuthoringTools({
         openWorldHint: false,
       },
     },
-    async ({ asset_path, asset_kind = 'material', validate_only, ...payload }) => {
+    async ({ asset_path, asset_kind = 'material', validate_only, dsl, ...payload }) => {
       try {
+        if (typeof dsl === 'string' && dsl.length > 0) {
+          const dslResult = parseMaterialDsl(dsl);
+          const dslOperations = materialDslToOperations(dslResult);
+          const dslPayload: Record<string, unknown> = {};
+
+          // Merge DSL-generated settings with explicit settings
+          if (Object.keys(dslResult.settings).length > 0) {
+            dslPayload.settings = {
+              ...dslResult.settings,
+              ...(payload.settings && typeof payload.settings === 'object' ? payload.settings as Record<string, unknown> : {}),
+            };
+          } else if (payload.settings) {
+            dslPayload.settings = payload.settings;
+          }
+
+          if (payload.compile_after !== undefined) dslPayload.compile_after = payload.compile_after;
+          if (payload.layout_after !== undefined) dslPayload.layout_after = payload.layout_after;
+
+          // DSL operations come first, then any explicit operations
+          dslPayload.operations = [
+            ...dslOperations,
+            ...(Array.isArray(payload.operations) ? payload.operations as Record<string, unknown>[] : []),
+          ];
+
+          const method = asset_kind === 'material' ? 'ModifyMaterial' : 'ModifyMaterialFunction';
+          const parsed = await callSubsystemJson(method, {
+            AssetPath: asset_path,
+            PayloadJson: JSON.stringify(dslPayload),
+            bValidateOnly: validate_only,
+          });
+          return jsonToolSuccess(parsed);
+        }
+
         const method = asset_kind === 'material' ? 'ModifyMaterial' : 'ModifyMaterialFunction';
         const parsed = await callSubsystemJson(method, {
           AssetPath: asset_path,
@@ -348,9 +345,7 @@ export function registerMaterialAuthoringTools({
       title: 'Compile Material Asset',
       description: 'Recompile or refresh a material, material function-family asset, or material instance without saving it.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the material-family asset.',
-        ),
+        asset_path: z.string().describe('UE content path.'),
       },
       annotations: {
         title: 'Compile Material Asset',

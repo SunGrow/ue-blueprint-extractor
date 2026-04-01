@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { validateInheritedComponents } from '../helpers/blueprint-validation.js';
+import { parseBlueprintDsl, blueprintDslToPayload } from '../helpers/blueprint-dsl-parser.js';
 import { checkDenyList } from '../helpers/operation-deny-list.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
 
@@ -31,10 +32,10 @@ export function registerBlueprintAuthoringTools({
       description: 'Create a UE5 Blueprint asset with optional variables, component templates, function stubs, class defaults, and compile.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new Blueprint asset.',
+          'UE content path for the new asset.',
         ),
         parent_class_path: z.string().describe(
-          'Parent class path for the new Blueprint (e.g. /Script/Engine.Actor or /Game/Blueprints/BP_BaseActor.BP_BaseActor_C).',
+          'Parent class (e.g. /Script/Engine.Actor).',
         ),
         payload: z.object({
           blueprint: jsonObjectSchema.optional(),
@@ -44,11 +45,9 @@ export function registerBlueprintAuthoringTools({
           functions: z.array(jsonObjectSchema).optional(),
           classDefaults: jsonObjectSchema.optional(),
         }).passthrough().default({}).describe(
-          'Optional extractor-shaped Blueprint member payload.',
+          'Extractor-shaped Blueprint member payload.',
         ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
-        ),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Create Blueprint',
@@ -93,12 +92,8 @@ export function registerBlueprintAuthoringTools({
         + '    }\n'
         + '  }',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the Blueprint asset to modify.',
-        ),
-        operation: blueprintMemberMutationOperationSchema.describe(
-          'Blueprint member mutation operation to apply.',
-        ),
+        asset_path: z.string().describe('UE content path.'),
+        operation: blueprintMemberMutationOperationSchema.describe('Member mutation operation.'),
         payload: z.object({
           blueprint: jsonObjectSchema.optional(),
           variables: z.array(jsonObjectSchema).optional(),
@@ -116,11 +111,9 @@ export function registerBlueprintAuthoringTools({
           classDefaults: jsonObjectSchema.optional(),
           properties: jsonObjectSchema.optional(),
         }).passthrough().default({}).describe(
-          'Operation payload. Selectors use variableName, componentName, and functionName.',
+          'Payload. Selectors: variableName, componentName, functionName.',
         ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
-        ),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Modify Blueprint Members',
@@ -192,13 +185,13 @@ export function registerBlueprintAuthoringTools({
     'modify_blueprint_graphs',
     {
       title: 'Modify Blueprint Graphs',
-      description: 'Modify explicit Blueprint graph authoring surfaces with rollback-safe apply semantics.',
+      description: 'Modify explicit Blueprint graph authoring surfaces with rollback-safe apply semantics.\n\n'
+        + 'Accepts either a JSON payload or a pseudocode-style DSL via the `dsl` parameter.\n'
+        + 'When `dsl` is provided, it is parsed into an `upsert_function_graphs` payload automatically.',
       inputSchema: {
-        asset_path: z.string().describe(
-          'UE content path to the Blueprint asset to modify.',
-        ),
-        operation: blueprintGraphMutationOperationSchema.describe(
-          'Blueprint graph mutation operation to apply.',
+        asset_path: z.string().describe('UE content path.'),
+        operation: blueprintGraphMutationOperationSchema.optional().describe(
+          'Graph mutation operation. Auto-set to upsert_function_graphs when dsl is provided.',
         ),
         payload: z.object({
           functionGraphs: z.array(jsonObjectSchema).optional(),
@@ -209,12 +202,13 @@ export function registerBlueprintAuthoringTools({
           sequenceNodeTitle: z.string().optional(),
           posX: z.number().optional(),
           posY: z.number().optional(),
-        }).passthrough().default({}).describe(
-          'Operation payload. Function-graph upserts accept extractor-adjacent graph objects keyed by graphName/functionName/name.',
+        }).passthrough().optional().default({}).describe(
+          'Payload. Graphs keyed by graphName/functionName.',
         ),
-        validate_only: z.boolean().default(false).describe(
-          'Validate without changing the asset.',
+        dsl: z.string().optional().describe(
+          'Blueprint graph DSL (alternative to payload). Pseudocode-style syntax that is parsed into an upsert_function_graphs payload.',
         ),
+        validate_only: z.boolean().default(false).describe('Dry-run validation only.'),
       },
       annotations: {
         title: 'Modify Blueprint Graphs',
@@ -226,10 +220,11 @@ export function registerBlueprintAuthoringTools({
     },
     async (args) => {
       try {
-        const { asset_path, operation, payload, validate_only } = args as {
+        const { asset_path, operation, payload, dsl, validate_only } = args as {
           asset_path: string;
-          operation: string;
+          operation?: string;
           payload?: Record<string, unknown>;
+          dsl?: string;
           validate_only: boolean;
         };
 
@@ -239,13 +234,45 @@ export function registerBlueprintAuthoringTools({
           return { content: [{ type: 'text' as const, text: denied.message }], structuredContent: denied, isError: true as const };
         }
 
+        let resolvedOperation = operation;
+        let resolvedPayload = payload ?? {};
+
+        // When DSL is provided, parse and convert to upsert_function_graphs payload
+        if (dsl) {
+          const dslResult = parseBlueprintDsl(dsl);
+          const dslWarnings = dslResult.warnings;
+          const dslPayload = blueprintDslToPayload(dslResult.graphs);
+          resolvedOperation = 'upsert_function_graphs';
+          resolvedPayload = dslPayload as unknown as Record<string, unknown>;
+
+          if (dslWarnings.length > 0) {
+            // Still proceed, but include warnings in the response later
+            (resolvedPayload as Record<string, unknown>)._dslWarnings = dslWarnings;
+          }
+        }
+
+        if (!resolvedOperation) {
+          return { content: [{ type: 'text' as const, text: 'Either operation or dsl must be provided.' }], isError: true as const };
+        }
+
+        // Strip internal _dslWarnings before sending to subsystem
+        const dslWarnings = (resolvedPayload as Record<string, unknown>)._dslWarnings as string[] | undefined;
+        const subsystemPayload = { ...resolvedPayload };
+        delete subsystemPayload._dslWarnings;
+
         const parsed = await callSubsystemJson('ModifyBlueprintGraphs', {
           AssetPath: asset_path,
-          Operation: operation,
-          PayloadJson: JSON.stringify(payload ?? {}),
+          Operation: resolvedOperation,
+          PayloadJson: JSON.stringify(subsystemPayload),
           bValidateOnly: validate_only,
         });
-        return jsonToolSuccess(parsed);
+
+        const extraContent: Array<{ type: 'text'; text: string }> = [];
+        if (dslWarnings && dslWarnings.length > 0) {
+          extraContent.push({ type: 'text', text: `DSL warnings:\n${dslWarnings.join('\n')}` });
+        }
+
+        return jsonToolSuccess(parsed, { extraContent });
       } catch (error) {
         return jsonToolError(error);
       }

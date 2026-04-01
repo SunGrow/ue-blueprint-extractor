@@ -133,8 +133,8 @@ export function registerCompositeTools({
       title: 'Find and Extract',
       description: 'Search for an asset by name and extract it in one step. Auto-extracts when a single result is found.',
       inputSchema: {
-        query: z.string().describe('Asset name search query'),
-        class_filter: z.string().default('Blueprint').describe('Asset class filter for search'),
+        query: z.string().describe('Asset name search term.'),
+        class_filter: z.string().default('Blueprint').describe('Asset class filter.'),
         max_search_results: z.number().int().min(1).max(50).default(10),
         extract_type: z.enum([
           'blueprint', 'asset', 'material', 'widget_blueprint',
@@ -151,7 +151,7 @@ export function registerCompositeTools({
         animation_name: z.string().optional(),
         max_depth: z.number().int().min(0).max(10).optional(),
         asset_paths: z.array(z.string()).optional().describe(
-          'Override: extract these paths directly instead of searching',
+          'Extract these paths directly; skip search.',
         ),
       },
       annotations: {

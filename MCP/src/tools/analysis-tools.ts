@@ -527,13 +527,13 @@ export function registerAnalysisTools({
       description: 'Run deterministic read-only Blueprint review checks over extracted graph and variable data.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the Blueprint asset.',
+          'UE content path.',
         ),
         graph_filter: z.array(z.string()).optional().describe(
-          'Optional graph-name filter passed through to extraction.',
+          'Graph-name filter.',
         ),
         include_class_defaults: z.boolean().default(false).describe(
-          'Include generated-class defaults in the underlying extraction when needed for evidence gathering.',
+          'Include class defaults.',
         ),
       },
       outputSchema: ReviewBlueprintResultSchema,
@@ -586,10 +586,10 @@ export function registerAnalysisTools({
       description: 'Audit project asset metadata for low-noise naming, package hygiene, and asset-family coverage issues.',
       inputSchema: {
         package_path: z.string().default('/Game').describe(
-          'UE package path to audit.',
+          'UE package path.',
         ),
         class_filter: z.string().default('').describe(
-          'Optional asset class filter. Empty string audits all asset classes.',
+          'Asset class filter. Empty for all.',
         ),
       },
       outputSchema: AuditProjectAssetsResultSchema,

@@ -43,7 +43,7 @@ export function registerUtilityTools({
       description: 'Persist dirty UE asset packages explicitly.',
       inputSchema: {
         asset_paths: z.array(z.string()).describe(
-          'Array of UE content paths to save (e.g. ["/Game/UI/WBP_MainMenu", "/Game/Data/DA_Items"]).',
+          'UE content paths to save.',
         ),
       },
       annotations: {
@@ -73,7 +73,7 @@ export function registerUtilityTools({
       description: 'Return help for one registered tool, including parameter summaries and related resources.',
       inputSchema: {
         tool_name: z.string().describe(
-          'Registered tool name to inspect.',
+          'Tool name to inspect.',
         ),
       },
       annotations: {

@@ -98,7 +98,7 @@ describe('registerWidgetStructureTools', () => {
     expect(callSubsystemJson).not.toHaveBeenCalled();
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
-      'root_widget is required for operation="replace_tree"',
+      'root_widget or dsl is required for operation="replace_tree"',
     );
   });
 

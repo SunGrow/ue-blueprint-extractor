@@ -95,6 +95,8 @@ import { registerAnalysisTools } from './tools/analysis-tools.js';
 import { registerAutomationRunTools } from './tools/automation-runs.js';
 import { registerBlueprintAuthoringTools } from './tools/blueprint-authoring.js';
 import { registerCompositeTools } from './tools/composite-tools.js';
+import { registerCompositeWorkflowTools } from './tools/composite-workflows.js';
+import { registerRecipeTools } from './tools/recipe-tools.js';
 import { registerCommonUIButtonStyleTools } from './tools/commonui-button-style.js';
 import { registerDataAndInputTools } from './tools/data-and-input.js';
 import { registerExtractionTools } from './tools/extraction.js';
@@ -373,6 +375,18 @@ export function registerServerTools({
   });
 
   registerCompositeTools({
+    server,
+    callSubsystemJson,
+    toolHelpRegistry,
+  });
+
+  registerCompositeWorkflowTools({
+    server,
+    callSubsystemJson,
+    toolHelpRegistry,
+  });
+
+  registerRecipeTools({
     server,
     callSubsystemJson,
     toolHelpRegistry,

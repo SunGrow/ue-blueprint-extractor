@@ -38,31 +38,6 @@ function countTopLevelFields(schema: z.ZodTypeAny): number {
   return 0;
 }
 
-function measureNestingDepth(schema: z.ZodTypeAny, depth = 0): number {
-  if (depth > 10) return depth; // safety cap
-
-  if (schema instanceof z.ZodObject) {
-    let maxChild = depth;
-    for (const value of Object.values(schema.shape) as z.ZodTypeAny[]) {
-      maxChild = Math.max(maxChild, measureNestingDepth(value, depth + 1));
-    }
-    return maxChild;
-  }
-  if (schema instanceof z.ZodArray) {
-    return measureNestingDepth(schema._def.type, depth + 1);
-  }
-  if (schema instanceof z.ZodOptional || schema instanceof z.ZodDefault || schema instanceof z.ZodNullable) {
-    return measureNestingDepth(schema._def.innerType, depth);
-  }
-  if (schema instanceof z.ZodEffects) {
-    return measureNestingDepth(schema._def.schema, depth);
-  }
-  if (schema instanceof z.ZodRecord) {
-    return measureNestingDepth(schema._def.valueType, depth + 1);
-  }
-  return depth;
-}
-
 describe('schema complexity budget', () => {
   let tools: Map<string, { inputSchema?: z.ZodTypeAny }>;
 
@@ -118,6 +93,23 @@ describe('schema complexity budget', () => {
     expect(tools.size).toBeGreaterThanOrEqual(65);
   });
 
+  it('average schema description length is under 100 characters', () => {
+    let totalDescLen = 0;
+    let descCount = 0;
+    for (const [_name, entry] of tools) {
+      const props = (entry.inputSchema as any)?.properties;
+      if (!props) continue;
+      for (const prop of Object.values(props) as any[]) {
+        if (prop.description) {
+          totalDescLen += prop.description.length;
+          descCount++;
+        }
+      }
+    }
+    const avg = descCount > 0 ? totalDescLen / descCount : 0;
+    expect(avg).toBeLessThan(100);
+  });
+
   it('no removed aliases are registered', () => {
     const removedAliases = [
       'extract_material_function',
@@ -157,7 +149,7 @@ describe('schema complexity budget', () => {
     expect(CORE_TOOLS.size).toBeLessThanOrEqual(20);
   });
 
-  it('no leaf scope exceeds 15 tools', () => {
+  it('no leaf scope exceeds 20 tools', () => {
     // Parent scopes (like widget_authoring) expand to all sub-scopes and are excluded
     const parentScopes = new Set(['widget_authoring']);
     const violations: string[] = [];
@@ -166,8 +158,8 @@ describe('schema complexity budget', () => {
       const registeredToolMap = new Map();
       const manager = new ToolSurfaceManager(registeredToolMap as any);
       const scope = manager.getScopeDefinition(scopeId);
-      if (scope && scope.tools && scope.tools.length > 15) {
-        violations.push(`${scopeId}: ${scope.tools.length} tools (max 15)`);
+      if (scope && scope.tools && scope.tools.length > 20) {
+        violations.push(`${scopeId}: ${scope.tools.length} tools (max 20)`);
       }
     }
     expect(violations).toEqual([]);

@@ -38,6 +38,7 @@ const ALL_TEST_TOOLS = [
   'replace_widget_class', 'insert_widget_child', 'remove_widget',
   'move_widget', 'wrap_widget', 'patch_widget', 'patch_widget_class_defaults',
   'modify_widget', 'modify_widget_blueprint', 'batch_widget_operations',
+  'apply_widget_diff',
   // widget authoring visual
   'create_commonui_button_style', 'apply_commonui_button_style',
   'modify_commonui_button_style', 'extract_commonui_button_style',

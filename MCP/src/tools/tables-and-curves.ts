@@ -37,16 +37,16 @@ export function registerTablesAndCurvesTools({
       description: 'Create a UE5 DataTable with a concrete row struct and optional initial rows.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new DataTable (e.g. /Game/Data/DT_Items).',
+          'UE content path for the new asset.',
         ),
         row_struct_path: z.string().describe(
-          'Script struct path for the row type (e.g. /Script/MyModule.MyTableRow).',
+          'Row struct script path.',
         ),
         rows: z.array(dataTableRowSchema).default([]).describe(
-          'Optional initial rows. Each row accepts either values or properties.',
+          'Initial rows.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -79,19 +79,19 @@ export function registerTablesAndCurvesTools({
       description: 'Modify a UE5 DataTable by upserting rows, deleting rows, or replacing the full row set.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the DataTable to modify.',
+          'UE content path.',
         ),
         rows: z.array(dataTableRowSchema).optional().describe(
-          'Optional row upsert payload.',
+          'Rows to upsert.',
         ),
         delete_rows: z.array(z.string()).optional().describe(
-          'Optional row names to delete.',
+          'Row names to delete.',
         ),
         replace_rows: z.boolean().default(false).describe(
-          'When true, clear the table before applying rows.',
+          'Clear table before applying rows.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -127,16 +127,16 @@ export function registerTablesAndCurvesTools({
       description: 'Create a UE5 curve asset (Float, Vector, or LinearColor) and optionally initialize channel data.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new curve asset.',
+          'UE content path for the new asset.',
         ),
         curve_type: curveTypeSchema.describe(
-          'Concrete curve asset type to create.',
+          'Curve asset type.',
         ),
         channels: z.record(z.string(), curveChannelSchema).default({}).describe(
-          'Optional channel payload keyed by channel name.',
+          'Channel data by name.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -169,19 +169,19 @@ export function registerTablesAndCurvesTools({
       description: 'Modify a UE5 curve asset by patching channels and upserting or deleting individual keys.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the curve asset to modify.',
+          'UE content path.',
         ),
         channels: z.record(z.string(), curveChannelSchema).optional().describe(
-          'Optional channel patch payload.',
+          'Channel patch.',
         ),
         delete_keys: z.array(curveKeyDeleteSchema).optional().describe(
-          'Optional key deletions by channel and time.',
+          'Key deletions by channel+time.',
         ),
         upsert_keys: z.array(curveKeyUpsertSchema).optional().describe(
-          'Optional key upserts by channel.',
+          'Key upserts by channel.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -217,16 +217,16 @@ export function registerTablesAndCurvesTools({
       description: 'Create a UE5 CurveTable in RichCurves or SimpleCurves mode and optionally initialize rows.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path for the new CurveTable.',
+          'UE content path for the new asset.',
         ),
         curve_table_mode: curveTableModeSchema.describe(
-          'CurveTable storage mode.',
+          'Storage mode.',
         ),
         rows: z.array(curveTableRowSchema).default([]).describe(
-          'Optional initial curve rows.',
+          'Initial curve rows.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without creating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {
@@ -259,19 +259,19 @@ export function registerTablesAndCurvesTools({
       description: 'Modify a UE5 CurveTable by upserting rows, deleting rows, or replacing the full row set.',
       inputSchema: {
         asset_path: z.string().describe(
-          'UE content path to the CurveTable to modify.',
+          'UE content path.',
         ),
         rows: z.array(curveTableRowSchema).optional().describe(
-          'Optional curve row upsert payload.',
+          'Curve rows to upsert.',
         ),
         delete_rows: z.array(z.string()).optional().describe(
-          'Optional row names to delete.',
+          'Row names to delete.',
         ),
         replace_rows: z.boolean().default(false).describe(
-          'When true, clear the table before applying rows.',
+          'Clear table before applying rows.',
         ),
         validate_only: z.boolean().default(false).describe(
-          'Validate without mutating the asset.',
+          'Dry-run validation only.',
         ),
       },
       annotations: {

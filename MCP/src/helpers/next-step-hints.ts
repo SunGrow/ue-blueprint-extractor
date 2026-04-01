@@ -1053,4 +1053,78 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
     ],
     scope_suggestion: 'automation_testing',
   })],
+
+  // =========================================================================
+  // Composite workflow tools
+  // =========================================================================
+
+  ['create_menu_screen', {
+    on_success: [
+      'Use extract_widget_blueprint to inspect the created widget.',
+      'Use capture_widget_preview for visual verification.',
+      'Use apply_widget_patch to iterate on the widget tree.',
+    ],
+    on_error: [
+      'Review the steps array to identify which step failed.',
+      'Check partial_state for what was completed.',
+      'Use the individual tools to retry the failed step.',
+    ],
+    scope_suggestion: 'widget_authoring',
+  }],
+
+  ['apply_widget_patch', {
+    on_success: [
+      'Review extract_result in the final step for the updated widget tree.',
+      'Use capture_widget_preview for visual verification.',
+      'Use save_assets if save=false was used and you want to persist.',
+    ],
+    on_error: [
+      'Review the steps array to identify which step failed.',
+      'Use extract_widget_blueprint to inspect the current state.',
+      'Use apply_widget_diff directly for finer control.',
+    ],
+    scope_suggestion: 'widget_authoring',
+  }],
+
+  ['execute_widget_recipe', {
+    on_success: [
+      'Review the extract step for the final widget state.',
+      'Use capture_widget_preview for visual verification.',
+      'Use apply_widget_patch to iterate on the widget tree.',
+    ],
+    on_error: [
+      'Review the steps array to identify which step failed.',
+      'Check partial_state for what was completed.',
+      'Retry the failed step individually with the corresponding tool.',
+    ],
+    scope_suggestion: 'widget_authoring',
+  }],
+
+  ['create_material_setup', {
+    on_success: [
+      'Use extract_material to inspect the created material.',
+      'Use material_graph_operation to add more nodes.',
+      'Use create_material_instance to create instances of this material.',
+    ],
+    on_error: [
+      'Review the steps array to identify which step failed.',
+      'Check partial_state for what was completed.',
+      'Use the individual material tools to retry the failed step.',
+    ],
+    scope_suggestion: 'material_authoring',
+  }],
+
+  ['scaffold_blueprint', {
+    on_success: [
+      'Use extract_blueprint to verify the scaffolded blueprint.',
+      'Use modify_blueprint_graphs to add function logic.',
+      'Use modify_blueprint_members to add more members.',
+    ],
+    on_error: [
+      'Review the steps array to identify which step failed.',
+      'Check partial_state for what was completed.',
+      'Use create_blueprint and modify_blueprint_members individually for finer control.',
+    ],
+    scope_suggestion: 'blueprint_authoring',
+  }],
 ]);
