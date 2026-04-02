@@ -17,13 +17,13 @@
 
 ## Overview
 
-Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that bridges AI coding assistants (Claude Code, Codex, etc.) to a running Unreal Editor instance via the Remote Control HTTP API.
+Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that bridges AI coding assistants (Claude Code, Codex, OpenCode, etc.) to a running Unreal Editor instance via the Remote Control HTTP API.
 
 ```
  AI Assistant         stdio           MCP Server         HTTP :30010        Unreal Editor
  ─────────────  ◄────────────►  ─────────────────  ◄──────────────────►  ─────────────────
   Claude Code                     Node.js process                         Remote Control API
-  Codex                           106 tools                               BlueprintExtractor
+  Codex / OpenCode                106 tools                               BlueprintExtractor
   ...                             38 resources                            plugin
                                   4 resource templates
                                   12 prompts
@@ -70,7 +70,7 @@ Connects to the editor at `127.0.0.1:30010` by default.
 ```bash
 claude mcp add -s user -t stdio blueprint-extractor \
   -e UE_REMOTE_CONTROL_PORT=30010 \
-  -- npx -y blueprint-extractor-mcp@6.1.1
+  -- npx -y blueprint-extractor-mcp@latest
 ```
 
 </td></tr>
@@ -79,7 +79,28 @@ claude mcp add -s user -t stdio blueprint-extractor \
 
 ```bash
 codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
-  blueprint-extractor -- npx -y blueprint-extractor-mcp@6.1.1
+  blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
+```
+
+</td></tr>
+<tr><td><b>OpenCode</b></td></tr>
+<tr><td>
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "blueprint-extractor": {
+      "type": "local",
+      "command": ["npx", "-y", "blueprint-extractor-mcp@latest"],
+      "enabled": true,
+      "environment": {
+        "UE_REMOTE_CONTROL_PORT": "30010"
+      }
+    }
+  }
+}
 ```
 
 </td></tr>

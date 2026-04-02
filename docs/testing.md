@@ -175,4 +175,4 @@ Recommended split:
   - repeat the headless and rendered split on UE 5.6 and UE 5.7
   - add the gated live MCP smoke path after the contract suite
 
-Do not run `install-mcp.*`, `install-codex-mcp.*`, `claude mcp add`, or `codex mcp add` in shared CI. Those commands mutate user-global client configuration.
+Do not run `install-mcp.*`, `install-codex-mcp.*`, `install-opencode-mcp.*`, `claude mcp add`, `codex mcp add`, or `opencode mcp add` in shared CI. Those commands mutate user-global client configuration.

@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `patch_state` not recognizing flat `propertyBindings` arrays in the payload. Bindings provided at the payload root (matching `set_bindings`/`add_binding` format) were silently ignored because `PatchState` only checked the nested `bindings.propertyBindings` path. Both formats are now accepted.
 - Added string binding path normalization for the flat `propertyBindings` format, consistent with the nested `bindings.propertyBindings` normalization.
 
+## [7.0.6] - 2026-04-02
+
+### Added
+
+- Added OpenCode install scripts for both shell and PowerShell environments to simplify MCP registration from the repository checkout.
+
+### Changed
+
+- Updated the repository and package READMEs to document OpenCode setup alongside Claude Code and Codex, and switched manual registration examples to `@latest`.
+- Added explicit git line-ending attributes so mixed Windows/Linux workflows stop producing repository-wide newline churn.
+- Tightened the shared property-path input schema to reject undeclared keys and keep the schema-budget contract green.
+
 ## [6.0.6] - 2026-03-30
 
 ### Added

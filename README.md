@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![UE 5.x](https://img.shields.io/badge/Unreal_Engine-5.6%20%7C%205.7-blue)](https://www.unrealengine.com/)
 
-Blueprint Extractor connects a running Unreal Editor to MCP clients such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://openai.com/index/codex/). It exposes a strict machine-friendly contract for extraction, authoring, visual verification, imports, project automation, and code sync.
+Blueprint Extractor connects a running Unreal Editor to MCP clients such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://openai.com/index/codex/), and [OpenCode](https://opencode.ai/). It exposes a strict machine-friendly contract for extraction, authoring, visual verification, imports, project automation, and code sync.
 
 **Current surface**
 
@@ -73,18 +73,39 @@ Use the included install scripts:
 # Codex
 ./install-codex-mcp.sh
 .\install-codex-mcp.ps1
+
+# OpenCode
+./install-opencode-mcp.sh
+.\install-opencode-mcp.ps1
 ```
 
 Manual registration is also supported:
 
 ```bash
 # Claude Code
-claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@6.1.1
-claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@6.1.1
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- npx -y blueprint-extractor-mcp@latest
+claude mcp add -s user -t stdio blueprint-extractor -e UE_REMOTE_CONTROL_PORT=30010 -- cmd /c npx -y blueprint-extractor-mcp@latest
 
 # Codex
-codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@6.1.1
-codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@6.1.1
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
+codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@latest
+```
+
+```jsonc
+// OpenCode global config (~/.config/opencode/opencode.json)
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "blueprint-extractor": {
+      "type": "local",
+      "command": ["npx", "-y", "blueprint-extractor-mcp@latest"],
+      "enabled": true,
+      "environment": {
+        "UE_REMOTE_CONTROL_PORT": "30010"
+      }
+    }
+  }
+}
 ```
 
 ### 3. Verify the connection

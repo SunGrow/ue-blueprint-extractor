@@ -505,7 +505,7 @@ const PropertyPathValueSchema = z.union([
       arrayIndex: z.number().int().optional(),
       instanceStruct: z.string().optional(),
     })),
-  }).passthrough().describe('Full path object with structId and segments.'),
+  }).describe('Full path object with structId and segments.'),
 ]);
 
 export const PropertyPathBindingSchema = z.object({
