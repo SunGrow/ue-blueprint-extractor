@@ -9,6 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 const execFileAsync = promisify(execFile);
 const cwd = process.cwd();
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const windowsShell = 'cmd.exe';
 
 async function main() {
@@ -21,6 +22,7 @@ async function main() {
     const entryPoint = await resolvePackagedEntryPoint(packageRoot);
     await verifyPackagedReadme(packageRoot);
     await smokeContractFromTarball(entryPoint, installRoot);
+    await smokeContractFromPackageBin(installRoot);
   } finally {
     await rm(installRoot, { recursive: true, force: true });
     await rm(tarballPath, { force: true });
@@ -141,6 +143,36 @@ async function smokeContractFromTarball(entryPoint, installRoot) {
 
     if (!templates.resourceTemplates.some((template) => template.uriTemplate === 'blueprint://widget-patterns/{pattern}')) {
       throw new Error('Packaged MCP server did not expose widget pattern templates');
+    }
+  } finally {
+    await Promise.allSettled([client.close(), transport.close()]);
+  }
+}
+
+async function smokeContractFromPackageBin(installRoot) {
+  const transport = new StdioClientTransport({
+    command: npxCmd,
+    args: ['--no-install', 'blueprint-extractor-mcp'],
+    cwd: installRoot,
+    env: {
+      ...process.env,
+      UE_REMOTE_CONTROL_HOST: process.env.UE_REMOTE_CONTROL_HOST ?? '127.0.0.1',
+      UE_REMOTE_CONTROL_PORT: process.env.UE_REMOTE_CONTROL_PORT ?? '30010',
+    },
+    stderr: 'pipe',
+  });
+
+  const client = new Client({
+    name: 'blueprint-extractor-pack-bin-smoke',
+    version: '1.0.0',
+  });
+
+  try {
+    await client.connect(transport);
+    const tools = await client.listTools();
+
+    if (!tools.tools.some((tool) => tool.name === 'extract_blueprint')) {
+      throw new Error('Package bin MCP server did not expose extract_blueprint');
     }
   } finally {
     await Promise.allSettled([client.close(), transport.close()]);
