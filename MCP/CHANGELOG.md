@@ -5,6 +5,13 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.8] - 2026-04-02
+
+### Fixed
+
+- Fixed MCP tool registrations with explicit `outputSchema` so normalized error envelopes validate cleanly instead of tripping structured-content schema mismatches on tools such as `search_assets`, `list_assets`, `review_blueprint`, and `search_project_context`.
+- Wired `both`-mode tools to a lazy commandlet fallback in the server factory, so read-only extraction and search flows can resolve project inputs and use commandlet execution when the live editor is unavailable.
+
 ## [7.0.7] - 2026-04-02
 
 ### Fixed

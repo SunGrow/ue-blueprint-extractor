@@ -197,6 +197,43 @@ describe('server bootstrap helpers', () => {
       await harness.close();
     }
   });
+
+  it('wraps strict explicit output schemas so normalized errors still validate at runtime', async () => {
+    const toolHelpRegistry = new Map<string, ToolHelpEntry>();
+    const { server } = createWrappedServer(toolHelpRegistry);
+    const strictOutputSchema = z.object({
+      results: z.array(z.string()),
+      page: z.number(),
+    });
+
+    server.registerTool('strict_failure_tool', {
+      title: 'Strict Failure Tool',
+      description: 'Returns a normalized failure against a success-only schema',
+      outputSchema: strictOutputSchema,
+    }, async () => ({
+      isError: true,
+      message: 'UE Editor not running or Remote Control not available',
+    }));
+
+    const harness = await connectInMemoryServer(server);
+
+    try {
+      const result = await harness.client.callTool({
+        name: 'strict_failure_tool',
+        arguments: {},
+      });
+
+      expect(toolHelpRegistry.get('strict_failure_tool')?.outputSchema).toBe(strictOutputSchema);
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        success: false,
+        code: 'editor_unavailable',
+        recoverable: true,
+      });
+    } finally {
+      await harness.close();
+    }
+  });
 });
 
 describe('normalizeToolError content and prefix stripping', () => {

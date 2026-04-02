@@ -5,6 +5,36 @@ import { rawHandlerRegistry } from './alias-registration.js';
 import type { ToolHelpEntry, ToolInputSchema } from './tool-help.js';
 import type { AdaptiveExecutor } from '../execution/adaptive-executor.js';
 
+const normalizedToolResultEnvelopeSchema = z.object({
+  success: z.boolean(),
+  operation: z.string(),
+  code: z.string().optional(),
+  message: z.string().optional(),
+  recoverable: z.boolean().optional(),
+  next_steps: z.array(z.string()).optional(),
+  _hints: z.array(z.string()).optional(),
+  diagnostics: z.array(z.object({
+    severity: z.string().optional(),
+    code: z.string().optional(),
+    message: z.string().optional(),
+    path: z.string().optional(),
+  })).optional(),
+  execution: z.object({
+    mode: z.enum(['immediate', 'task_aware']),
+    task_support: z.enum(['optional', 'required', 'forbidden']),
+    status: z.string().optional(),
+    progress_message: z.string().optional(),
+  }).optional(),
+}).passthrough();
+
+function wrapOutputSchemaWithNormalizedErrors(outputSchema: z.ZodTypeAny): z.ZodTypeAny {
+  if (outputSchema instanceof z.ZodObject) {
+    return normalizedToolResultEnvelopeSchema.extend(outputSchema.partial().shape).passthrough();
+  }
+
+  return normalizedToolResultEnvelopeSchema;
+}
+
 type ToolNormalizer = (...args: any[]) => unknown;
 
 type InstallNormalizedToolRegistrationOptions = {
@@ -28,13 +58,14 @@ export function installNormalizedToolRegistration({
 }: InstallNormalizedToolRegistrationOptions): void {
   const rawRegisterTool = server.registerTool.bind(server) as typeof server.registerTool;
   (server as typeof server & { registerTool: typeof server.registerTool }).registerTool = ((name, config, cb) => {
-    const outputSchema = (config.outputSchema ?? defaultOutputSchema) as z.ZodTypeAny;
+    const declaredOutputSchema = (config.outputSchema ?? defaultOutputSchema) as z.ZodTypeAny;
+    const outputSchema = wrapOutputSchemaWithNormalizedErrors(declaredOutputSchema);
     rawHandlerRegistry.set(name, cb as (args: Record<string, unknown>, extra: unknown) => Promise<unknown> | unknown);
     toolHelpRegistry.set(name, {
       title: config.title ?? name,
       description: config.description ?? '',
       inputSchema: (config.inputSchema ?? {}) as ToolInputSchema,
-      outputSchema,
+      outputSchema: declaredOutputSchema,
       annotations: config.annotations as Record<string, unknown> | undefined,
     });
 

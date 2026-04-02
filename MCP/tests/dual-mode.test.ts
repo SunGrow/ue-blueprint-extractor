@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ExecutionAdapter, ToolCapability, ExecutionMode } from '../src/execution/execution-adapter.js';
 import { ALL_CAPABILITIES, COMMANDLET_CAPABILITIES } from '../src/execution/execution-adapter.js';
 import { EditorAdapter } from '../src/execution/adapters/editor-adapter.js';
+import { LazyCommandletAdapter } from '../src/execution/adapters/lazy-commandlet-adapter.js';
 import { ExecutionModeDetector } from '../src/execution/execution-mode-detector.js';
 import { AdaptiveExecutor, ExecutorError } from '../src/execution/adaptive-executor.js';
 import { TOOL_MODE_ANNOTATIONS, classifyRecoverableToolFailure } from '../src/server-config.js';
@@ -64,6 +65,46 @@ describe('EditorAdapter', () => {
     expect(caps.has('write_simple')).toBe(true);
     expect(caps.has('write_complex')).toBe(true);
     expect(caps.has('interactive')).toBe(true);
+  });
+});
+
+describe('LazyCommandletAdapter', () => {
+  it('initializes the underlying commandlet adapter once and reuses it', async () => {
+    const initialize = vi.fn(async () => undefined);
+    const execute = vi.fn(async () => ({ success: true, from: 'commandlet' }));
+    const isAvailable = vi.fn(async () => true);
+    const createAdapter = vi.fn(() => ({
+      initialize,
+      execute,
+      isAvailable,
+      getMode: () => 'commandlet' as const,
+      getCapabilities: () => COMMANDLET_CAPABILITIES,
+    }));
+    const resolveInputs = vi.fn(async () => ({
+      engineRoot: 'C:/Program Files/Epic Games/UE_5.6',
+      projectPath: 'D:/Development/V2/CyberVolleyball6vs6.uproject',
+    }));
+
+    const adapter = new LazyCommandletAdapter({ resolveInputs, createAdapter });
+
+    expect(await adapter.isAvailable()).toBe(true);
+    await expect(adapter.execute('BlueprintExtractor', 'SearchAssets', { Query: 'Player' })).resolves.toEqual({
+      success: true,
+      from: 'commandlet',
+    });
+
+    expect(resolveInputs).toHaveBeenCalledTimes(1);
+    expect(createAdapter).toHaveBeenCalledTimes(1);
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith('BlueprintExtractor', 'SearchAssets', { Query: 'Player' });
+  });
+
+  it('reports unavailable when commandlet inputs cannot be resolved', async () => {
+    const adapter = new LazyCommandletAdapter({
+      resolveInputs: async () => ({ engineRoot: undefined, projectPath: undefined }),
+    });
+
+    await expect(adapter.isAvailable()).resolves.toBe(false);
   });
 });
 

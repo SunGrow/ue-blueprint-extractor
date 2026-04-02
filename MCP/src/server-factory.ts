@@ -42,6 +42,7 @@ import {
   type WorkflowScopeId,
 } from './tool-surface-manager.js';
 import { EditorAdapter } from './execution/adapters/editor-adapter.js';
+import { LazyCommandletAdapter } from './execution/adapters/lazy-commandlet-adapter.js';
 import { ExecutionModeDetector } from './execution/execution-mode-detector.js';
 import { AdaptiveExecutor } from './execution/adaptive-executor.js';
 import { ActiveEditorSession } from './active-editor-session.js';
@@ -85,6 +86,23 @@ export function createBlueprintExtractorServer(
   });
   const defaultOutputSchema = toolResultSchema.catchall(z.unknown());
 
+  // Direct editor path — preserves callSubsystemJson error-checking layer and
+  // avoids recursive executor routing while resolving commandlet fallback inputs.
+  const directCallSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
+    callSubsystemJsonWithClient(effectiveClient, method, params, options)
+  );
+
+  const getDirectProjectAutomationContext = async (forceRefresh = false): Promise<ProjectAutomationContext> => (
+    getProjectAutomationContextWithState({
+      forceRefresh,
+      cachedContext: cachedProjectAutomationContext,
+      setCachedContext: (value) => {
+        cachedProjectAutomationContext = value;
+      },
+      callSubsystemJson: directCallSubsystemJson,
+    })
+  );
+
   const {
     normalizeToolError,
     normalizeToolSuccess,
@@ -96,8 +114,23 @@ export function createBlueprintExtractorServer(
   // Dual-mode execution: create adapter + detector + executor BEFORE tool
   // registration so the executor is available for activeToolName tracking.
   const editorAdapter = new EditorAdapter(effectiveClient);
-  const modeDetector = new ExecutionModeDetector(editorAdapter, null);
-  const executor = new AdaptiveExecutor(editorAdapter, null, modeDetector);
+  const commandletAdapter = new LazyCommandletAdapter({
+    resolveInputs: async () => {
+      const resolved = await resolveProjectInputsWithDeps({}, {
+        getProjectAutomationContext: getDirectProjectAutomationContext,
+        firstDefinedString,
+        env: process.env,
+        workspaceProjectPath: await activeEditorSession?.getWorkspaceProjectPath(),
+      });
+
+      return {
+        engineRoot: resolved.engineRoot,
+        projectPath: resolved.projectPath,
+      };
+    },
+  });
+  const modeDetector = new ExecutionModeDetector(editorAdapter, commandletAdapter);
+  const executor = new AdaptiveExecutor(editorAdapter, commandletAdapter, modeDetector);
 
   // Apply tool mode annotations
   for (const [toolName, mode] of TOOL_MODE_ANNOTATIONS) {
@@ -114,11 +147,6 @@ export function createBlueprintExtractorServer(
     executor,
   });
 
-  // Direct editor path — preserves callSubsystemJson error-checking layer
-  const directCallSubsystemJson = (method: string, params: Record<string, unknown>, options?: SubsystemCallOptions) => (
-    callSubsystemJsonWithClient(effectiveClient, method, params, options)
-  );
-
   // Executor-routed callSubsystemJson: when a tool handler is active, routes
   // through the executor which checks mode annotations and can fall back to
   // commandlet. For editor mode (or when no tool context), delegates to the
@@ -132,14 +160,7 @@ export function createBlueprintExtractorServer(
   }
 
   async function getProjectAutomationContext(forceRefresh = false): Promise<ProjectAutomationContext> {
-    return await getProjectAutomationContextWithState({
-      forceRefresh,
-      cachedContext: cachedProjectAutomationContext,
-      setCachedContext: (value) => {
-        cachedProjectAutomationContext = value;
-      },
-      callSubsystemJson,
-    });
+    return await getDirectProjectAutomationContext(forceRefresh);
   }
 
   async function resolveProjectInputs(
