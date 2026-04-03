@@ -1,7 +1,13 @@
 import { execSync, spawn } from 'node:child_process';
 import { access, readdir, unlink } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import { dirname, resolve, win32 as win32Path } from 'node:path';
+import { posix as posixPath, win32 as win32Path } from 'node:path';
+import {
+  isWindowsStylePath,
+  isWslMountedWindowsPath,
+  toHostFilesystemPath,
+  toWindowsStylePath,
+} from './helpers/workspace-project.js';
 
 export type BuildPlatform = 'Win64' | 'Mac' | 'Linux';
 export type BuildConfiguration = 'Debug' | 'DebugGame' | 'Development' | 'Shipping' | 'Test';
@@ -113,6 +119,7 @@ export interface CommandRunner {
       cwd?: string;
       env?: NodeJS.ProcessEnv;
       timeoutMs: number;
+      platform?: NodeJS.Platform;
     },
   ): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
@@ -148,6 +155,37 @@ function defaultSleep(ms: number): Promise<void> {
 
 function isWindowsBatchScript(executable: string, platform: NodeJS.Platform): boolean {
   return platform === 'win32' && /\.(bat|cmd)$/iu.test(executable);
+}
+
+function getPlatformPath(platform: NodeJS.Platform) {
+  return platform === 'win32' ? win32Path : posixPath;
+}
+
+function resolvePathForPlatform(root: string, segments: string[], platform: NodeJS.Platform): string {
+  const normalizedRoot = platform === 'win32' ? toWindowsStylePath(root) : root;
+  return getPlatformPath(platform).resolve(normalizedRoot, ...segments);
+}
+
+function dirnameForPlatform(filePath: string, platform: NodeJS.Platform): string {
+  const normalizedPath = platform === 'win32' ? toWindowsStylePath(filePath) : filePath;
+  return getPlatformPath(platform).dirname(normalizedPath);
+}
+
+export function inferExecutionPlatform(
+  engineRoot: string | undefined,
+  projectPath: string | undefined,
+  hostPlatform: NodeJS.Platform = process.platform,
+): NodeJS.Platform {
+  if (hostPlatform !== 'linux') {
+    return hostPlatform;
+  }
+
+  const pathHints = [engineRoot, projectPath].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  if (pathHints.some((value) => isWindowsStylePath(value) || isWslMountedWindowsPath(value))) {
+    return 'win32';
+  }
+
+  return hostPlatform;
 }
 
 function quoteWindowsCommandArg(value: string): string {
@@ -193,27 +231,31 @@ export function resolveCommandInvocation(
 export function getBuildScriptCandidates(engineRoot: string, platform: NodeJS.Platform): string[] {
   if (platform === 'win32') {
     return [
-      resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat'),
+      resolvePathForPlatform(engineRoot, ['Engine', 'Build', 'BatchFiles', 'Build.bat'], platform),
     ];
   }
 
   if (platform === 'darwin') {
     return [
-      resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Mac', 'Build.sh'),
-      resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh'),
+      resolvePathForPlatform(engineRoot, ['Engine', 'Build', 'BatchFiles', 'Mac', 'Build.sh'], platform),
+      resolvePathForPlatform(engineRoot, ['Engine', 'Build', 'BatchFiles', 'Build.sh'], platform),
     ];
   }
 
   return [
-    resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh'),
-    resolve(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh'),
+    resolvePathForPlatform(engineRoot, ['Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh'], platform),
+    resolvePathForPlatform(engineRoot, ['Engine', 'Build', 'BatchFiles', 'Build.sh'], platform),
   ];
 }
 
-export async function resolveBuildScript(engineRoot: string, platform: NodeJS.Platform): Promise<string> {
+export async function resolveBuildScript(
+  engineRoot: string,
+  platform: NodeJS.Platform,
+  hostPlatform: NodeJS.Platform = process.platform,
+): Promise<string> {
   for (const candidate of getBuildScriptCandidates(engineRoot, platform)) {
     try {
-      await access(candidate, fsConstants.F_OK);
+      await access(toHostFilesystemPath(candidate, platform, hostPlatform), fsConstants.F_OK);
       return candidate;
     } catch {
       // Try the next platform-specific location.
@@ -227,17 +269,18 @@ export async function resolveEditorExecutable(
   engineRoot: string,
   platform: NodeJS.Platform,
   mode: 'editor' | 'commandlet' = 'editor',
+  hostPlatform: NodeJS.Platform = process.platform,
 ): Promise<string> {
   const executableName = mode === 'commandlet'
     ? (platform === 'win32' ? 'UnrealEditor-Cmd.exe' : 'UnrealEditor-Cmd')
     : (platform === 'win32' ? 'UnrealEditor.exe' : 'UnrealEditor');
   const executable = platform === 'win32'
-    ? resolve(engineRoot, 'Engine', 'Binaries', 'Win64', executableName)
+    ? resolvePathForPlatform(engineRoot, ['Engine', 'Binaries', 'Win64', executableName], platform)
     : platform === 'darwin'
-      ? resolve(engineRoot, 'Engine', 'Binaries', 'Mac', executableName)
-      : resolve(engineRoot, 'Engine', 'Binaries', 'Linux', executableName);
+      ? resolvePathForPlatform(engineRoot, ['Engine', 'Binaries', 'Mac', executableName], platform)
+      : resolvePathForPlatform(engineRoot, ['Engine', 'Binaries', 'Linux', executableName], platform);
 
-  await access(executable, fsConstants.F_OK);
+  await access(toHostFilesystemPath(executable, platform, hostPlatform), fsConstants.F_OK);
   return executable;
 }
 
@@ -248,20 +291,22 @@ async function defaultRunCommand(
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs: number;
+    platform?: NodeJS.Platform;
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return await new Promise((resolveRun, rejectRun) => {
+    const commandPlatform = options.platform ?? process.platform;
     const invocation = resolveCommandInvocation(
       executable,
       args,
-      process.platform,
+      commandPlatform,
       options.env ?? process.env,
     );
     const child = spawn(invocation.executable, invocation.args, {
       cwd: options.cwd,
       env: options.env,
       shell: false,
-      windowsVerbatimArguments: isWindowsBatchScript(executable, process.platform),
+      windowsVerbatimArguments: isWindowsBatchScript(executable, commandPlatform),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -355,7 +400,7 @@ function fileName(path: string): string {
 }
 
 function normalizeFilesystemPathForCommand(path: string, platform: NodeJS.Platform): string {
-  return platform === 'win32' ? win32Path.normalize(path) : path;
+  return platform === 'win32' ? win32Path.normalize(toWindowsStylePath(path)) : path;
 }
 
 export function classifyChangedPaths(changedPaths: string[], forceRebuild = false): SyncStrategyPlan {
@@ -419,6 +464,7 @@ export function classifyChangedPaths(changedPaths: string[], forceRebuild = fals
 const UHT_CACHE_PATTERN = /\.(uhtpath|uhtsettings)$/i;
 
 async function walkAndDeleteMatching(dir: string, pattern: RegExp, deleted: string[]): Promise<void> {
+  const hostPath = getPlatformPath(process.platform);
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -426,7 +472,7 @@ async function walkAndDeleteMatching(dir: string, pattern: RegExp, deleted: stri
     return;
   }
   for (const entry of entries) {
-    const fullPath = resolve(dir, entry.name);
+    const fullPath = hostPath.resolve(dir, entry.name);
     if (entry.isDirectory()) {
       await walkAndDeleteMatching(fullPath, pattern, deleted);
     } else if (pattern.test(entry.name)) {
@@ -442,7 +488,7 @@ async function walkAndDeleteMatching(dir: string, pattern: RegExp, deleted: stri
 
 async function clearUhtCacheFiles(projectDir: string): Promise<string[]> {
   const deleted: string[] = [];
-  const intermediateDir = resolve(projectDir, 'Intermediate');
+  const intermediateDir = getPlatformPath(process.platform).resolve(projectDir, 'Intermediate');
   await walkAndDeleteMatching(intermediateDir, UHT_CACHE_PATTERN, deleted);
   return deleted;
 }
@@ -572,6 +618,7 @@ export class ProjectController implements ProjectControllerLike {
     const projectPath = request.projectPath ?? this.env.UE_PROJECT_PATH;
     const target = request.target ?? this.env.UE_PROJECT_TARGET ?? this.env.UE_EDITOR_TARGET;
     const platform = parseBuildPlatform(request.platform ?? this.env.UE_BUILD_PLATFORM, this.platform);
+    const executionPlatform = inferExecutionPlatform(engineRoot, projectPath, this.platform);
     const configuration = parseConfiguration(request.configuration ?? this.env.UE_BUILD_CONFIGURATION);
     const includeOutput = request.includeOutput ?? false;
     const buildTimeoutMs = request.buildTimeoutMs ?? DEFAULT_BUILD_TIMEOUT_MS;
@@ -588,12 +635,14 @@ export class ProjectController implements ProjectControllerLike {
       throw new Error('compile_project_code requires target or UE_PROJECT_TARGET/UE_EDITOR_TARGET');
     }
 
-    const buildScript = await resolveBuildScript(engineRoot, this.platform);
-    const commandProjectPath = normalizeFilesystemPathForCommand(projectPath, this.platform);
+    const buildScript = await resolveBuildScript(engineRoot, executionPlatform, this.platform);
+    const commandProjectPath = normalizeFilesystemPathForCommand(projectPath, executionPlatform);
+    const projectDir = dirnameForPlatform(projectPath, executionPlatform);
+    const hostProjectDir = toHostFilesystemPath(projectDir, executionPlatform, this.platform);
 
     let uhtCacheFilesDeleted: string[] | undefined;
     if (request.clearUhtCache) {
-      uhtCacheFilesDeleted = await clearUhtCacheFiles(dirname(projectPath));
+      uhtCacheFilesDeleted = await clearUhtCacheFiles(hostProjectDir);
     }
 
     const args = [
@@ -607,9 +656,10 @@ export class ProjectController implements ProjectControllerLike {
 
     const startedAt = Date.now();
     const completed = await this.runCommand(buildScript, args, {
-      cwd: dirname(projectPath),
+      cwd: hostProjectDir,
       env: this.env,
       timeoutMs: buildTimeoutMs,
+      platform: executionPlatform,
     });
 
     const result: CompileProjectCodeResult = {
@@ -618,7 +668,7 @@ export class ProjectController implements ProjectControllerLike {
       strategy: 'external_build',
       engineRoot,
       projectPath,
-      projectDir: dirname(projectPath),
+      projectDir,
       target,
       platform,
       configuration,
@@ -705,6 +755,7 @@ export class ProjectController implements ProjectControllerLike {
     const engineRoot = request.engineRoot ?? this.env.UE_ENGINE_ROOT;
     const projectPath = request.projectPath ?? this.env.UE_PROJECT_PATH;
     const diagnostics: string[] = [];
+    const executionPlatform = inferExecutionPlatform(engineRoot, projectPath, this.platform);
 
     if (!engineRoot) {
       throw new Error('launch_editor requires engine_root or UE_ENGINE_ROOT');
@@ -714,19 +765,23 @@ export class ProjectController implements ProjectControllerLike {
       throw new Error('launch_editor requires project_path or UE_PROJECT_PATH');
     }
 
-    const executable = await resolveEditorExecutable(engineRoot, this.platform, 'editor');
+    const executable = await resolveEditorExecutable(engineRoot, executionPlatform, 'editor', this.platform);
+    const hostExecutable = toHostFilesystemPath(executable, executionPlatform, this.platform);
     const requestedArgs = request.additionalArgs ?? [];
+    const commandProjectPath = normalizeFilesystemPathForCommand(projectPath, executionPlatform);
     const args = [
-      projectPath,
+      commandProjectPath,
       ...DEFAULT_EDITOR_LAUNCH_ARGS.filter((arg) => !requestedArgs.includes(arg)),
       ...requestedArgs,
     ];
-    const invocation = resolveCommandInvocation(executable, args, this.platform, this.env);
+    const invocation = resolveCommandInvocation(hostExecutable, args, executionPlatform, this.env);
+    const projectDir = dirnameForPlatform(projectPath, executionPlatform);
+    const hostProjectDir = toHostFilesystemPath(projectDir, executionPlatform, this.platform);
     const child = this.spawnProcess(invocation.executable, invocation.args, {
-      cwd: dirname(projectPath),
+      cwd: hostProjectDir,
       env: this.env,
       shell: false,
-      windowsVerbatimArguments: isWindowsBatchScript(executable, this.platform),
+      windowsVerbatimArguments: isWindowsBatchScript(hostExecutable, executionPlatform),
       detached: true,
       stdio: 'ignore',
     });
@@ -738,7 +793,7 @@ export class ProjectController implements ProjectControllerLike {
       operation: 'launch_editor',
       engineRoot,
       projectPath,
-      projectDir: dirname(projectPath),
+      projectDir,
       processId: child.pid ?? undefined,
       command: {
         executable: invocation.executable,

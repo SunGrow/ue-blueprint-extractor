@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import {
   ProjectController,
   classifyChangedPaths,
   classifyBuildError,
+  inferExecutionPlatform,
   resolveBuildScript,
   resolveCommandInvocation,
   resolveEditorExecutable,
@@ -15,6 +16,10 @@ describe('ProjectController', () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.doUnmock('node:fs/promises');
+    vi.resetModules();
+    vi.restoreAllMocks();
+
     while (tempDirs.length > 0) {
       const directory = tempDirs.pop();
       if (!directory) {
@@ -94,23 +99,26 @@ describe('ProjectController', () => {
   });
 
   it('normalizes Windows project paths before passing them to the build script', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-win-build-'));
-    tempDirs.push(root);
+    vi.resetModules();
+    const access = vi.fn(async () => undefined);
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return {
+        ...actual,
+        access,
+      };
+    });
 
-    const engineRoot = join(root, 'UE_5.7');
-    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.bat');
-    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
-    await writeFile(buildScript, '@echo off\r\n');
-
+    const module = await import('../src/project-controller.js');
     let capturedExecutable = '';
     let capturedArgs: string[] = [];
     let capturedCwd = '';
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
-        UE_ENGINE_ROOT: engineRoot,
+        UE_ENGINE_ROOT: 'C:/Program Files/Epic Games/UE_5.7',
         UE_PROJECT_TARGET: 'MyGameEditor',
       },
-      platform: 'win32',
+      platform: 'linux',
       runCommand: async (executable, args, options) => {
         capturedExecutable = executable;
         capturedArgs = args;
@@ -125,10 +133,15 @@ describe('ProjectController', () => {
 
     const result = await controller.compileProjectCode({
       projectPath: 'C:/Projects/My Game/MyGame.uproject',
+      platform: 'Win64',
     });
 
     expect(result.success).toBe(true);
-    expect(capturedExecutable).toBe(buildScript);
+    expect(access).toHaveBeenCalledWith(
+      '/mnt/c/Program Files/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat',
+      expect.any(Number),
+    );
+    expect(capturedExecutable).toBe('C:\\Program Files\\Epic Games\\UE_5.7\\Engine\\Build\\BatchFiles\\Build.bat');
     expect(capturedArgs).toEqual([
       'MyGameEditor',
       'Win64',
@@ -137,8 +150,69 @@ describe('ProjectController', () => {
       '-WaitMutex',
       '-NoHotReloadFromIDE',
     ]);
-    expect(capturedCwd).toBe('C:/Projects/My Game');
+    expect(capturedCwd).toBe('/mnt/c/Projects/My Game');
     expect(result.projectPath).toBe('C:/Projects/My Game/MyGame.uproject');
+  });
+
+  it('infers Windows execution from WSL-mounted paths on Linux hosts', () => {
+    expect(inferExecutionPlatform(
+      'C:/Program Files/Epic Games/UE_5.6',
+      '/mnt/d/Projects/MyGame/MyGame.uproject',
+      'linux',
+    )).toBe('win32');
+  });
+
+  it('uses Windows command paths and WSL cwd when compiling from Linux against a Windows UE install', async () => {
+    vi.resetModules();
+    const access = vi.fn(async () => undefined);
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return {
+        ...actual,
+        access,
+      };
+    });
+
+    const module = await import('../src/project-controller.js');
+    const runCommand = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    }));
+    const controller = new module.ProjectController({
+      env: {
+        UE_ENGINE_ROOT: 'C:/Program Files/Epic Games/UE_5.6',
+        UE_PROJECT_PATH: '/mnt/d/Projects/MyGame/MyGame.uproject',
+        UE_PROJECT_TARGET: 'MyGameEditor',
+      },
+      platform: 'linux',
+      runCommand,
+    });
+
+    const result = await controller.compileProjectCode({
+      platform: 'Win64',
+    });
+
+    expect(result.success).toBe(true);
+    expect(access).toHaveBeenCalledWith(
+      '/mnt/c/Program Files/Epic Games/UE_5.6/Engine/Build/BatchFiles/Build.bat',
+      expect.any(Number),
+    );
+    expect(runCommand).toHaveBeenCalledWith(
+      'C:\\Program Files\\Epic Games\\UE_5.6\\Engine\\Build\\BatchFiles\\Build.bat',
+      [
+        'MyGameEditor',
+        'Win64',
+        'Development',
+        '-Project=D:\\Projects\\MyGame\\MyGame.uproject',
+        '-WaitMutex',
+        '-NoHotReloadFromIDE',
+      ],
+      expect.objectContaining({
+        cwd: '/mnt/d/Projects/MyGame',
+        platform: 'win32',
+      }),
+    );
   });
 
   it('wraps Windows batch files through cmd.exe to avoid spawn EINVAL', () => {

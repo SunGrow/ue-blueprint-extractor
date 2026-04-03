@@ -13,9 +13,53 @@ type ProjectDescriptor = {
 
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH = /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/;
+const WSL_MOUNT_PATH = /^\/mnt\/([a-zA-Z])(\/.*)?$/;
 
-function isWindowsStylePath(input: string): boolean {
+export function isWindowsStylePath(input: string): boolean {
   return WINDOWS_DRIVE_PATH.test(input) || WINDOWS_UNC_PATH.test(input);
+}
+
+export function isWslMountedWindowsPath(input: string): boolean {
+  return WSL_MOUNT_PATH.test(input);
+}
+
+export function toWindowsStylePath(input: string): string {
+  if (isWindowsStylePath(input)) {
+    return path.win32.normalize(input);
+  }
+
+  const match = input.replaceAll('\\', '/').match(WSL_MOUNT_PATH);
+  if (!match) {
+    return input;
+  }
+
+  const drive = match[1]?.toUpperCase();
+  const suffix = match[2] ?? '';
+  return path.win32.normalize(`${drive}:${suffix}`);
+}
+
+export function toHostFilesystemPath(
+  input: string,
+  targetPlatform: NodeJS.Platform,
+  hostPlatform: NodeJS.Platform = process.platform,
+): string {
+  if (targetPlatform !== 'win32' || hostPlatform === 'win32') {
+    return input;
+  }
+
+  if (isWslMountedWindowsPath(input)) {
+    return path.posix.normalize(input.replaceAll('\\', '/'));
+  }
+
+  const normalized = input.replaceAll('\\', '/');
+  const match = normalized.match(/^([A-Za-z]):(\/.*)?$/);
+  if (!match) {
+    return input;
+  }
+
+  const drive = match[1]?.toLowerCase();
+  const suffix = match[2] ?? '';
+  return path.posix.normalize(`/mnt/${drive}${suffix}`);
 }
 
 export function normalizeFilesystemPath(input: string | undefined): string | undefined {

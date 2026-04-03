@@ -1,9 +1,16 @@
 import { access } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import path, { resolve } from 'node:path';
+import path, { posix as posixPath, win32 as win32Path } from 'node:path';
 import type { CompileProjectCodeResult } from '../project-controller.js';
 import type { ProjectAutomationContext, ResolvedProjectInputs } from '../tool-context.js';
-import { buildEngineAssociationCandidates, readProjectEngineAssociation } from './workspace-project.js';
+import {
+  buildEngineAssociationCandidates,
+  isWindowsStylePath,
+  isWslMountedWindowsPath,
+  readProjectEngineAssociation,
+  toHostFilesystemPath,
+  toWindowsStylePath,
+} from './workspace-project.js';
 
 export type ProjectInputsRequest = {
   engine_root?: string;
@@ -66,7 +73,11 @@ export async function getProjectAutomationContext(
   return nextContext;
 }
 
-const cachedHeuristicEngineRoots = new Map<NodeJS.Platform, string>();
+const cachedHeuristicEngineRoots = new Map<string, string>();
+
+function getPathModule(platform: NodeJS.Platform) {
+  return platform === 'win32' ? win32Path : posixPath;
+}
 
 export function getHeuristicEngineCandidates(platform: NodeJS.Platform = process.platform): string[] {
   if (platform === 'win32') {
@@ -117,10 +128,18 @@ function getEngineMarkers(platform: NodeJS.Platform): string[] {
   ];
 }
 
-async function accessFirstMatchingMarker(root: string, markers: string[]): Promise<boolean> {
+async function accessFirstMatchingMarker(
+  root: string,
+  markers: string[],
+  targetPlatform: NodeJS.Platform,
+  hostPlatform: NodeJS.Platform,
+): Promise<boolean> {
+  const pathModule = getPathModule(targetPlatform);
+  const normalizedRoot = targetPlatform === 'win32' ? toWindowsStylePath(root) : root;
   for (const marker of markers) {
     try {
-      await access(resolve(root, marker), fsConstants.F_OK);
+      const candidate = pathModule.resolve(normalizedRoot, marker);
+      await access(toHostFilesystemPath(candidate, targetPlatform, hostPlatform), fsConstants.F_OK);
       return true;
     } catch {
       // try the next marker
@@ -130,27 +149,33 @@ async function accessFirstMatchingMarker(root: string, markers: string[]): Promi
   return false;
 }
 
-async function probeEngineRootHeuristic(platform: NodeJS.Platform): Promise<string | undefined> {
-  if (cachedHeuristicEngineRoots.has(platform)) {
-    return cachedHeuristicEngineRoots.get(platform) || undefined;
+async function probeEngineRootHeuristic(
+  targetPlatform: NodeJS.Platform,
+  hostPlatform: NodeJS.Platform,
+): Promise<string | undefined> {
+  const cacheKey = `${hostPlatform}:${targetPlatform}`;
+  if (cachedHeuristicEngineRoots.has(cacheKey)) {
+    return cachedHeuristicEngineRoots.get(cacheKey) || undefined;
   }
 
-  for (const candidate of getHeuristicEngineCandidates(platform)) {
-    if (await accessFirstMatchingMarker(candidate, getEngineMarkers(platform))) {
-      cachedHeuristicEngineRoots.set(platform, candidate);
+  for (const candidate of getHeuristicEngineCandidates(targetPlatform)) {
+    if (await accessFirstMatchingMarker(candidate, getEngineMarkers(targetPlatform), targetPlatform, hostPlatform)) {
+      cachedHeuristicEngineRoots.set(cacheKey, candidate);
       return candidate;
     }
   }
 
-  cachedHeuristicEngineRoots.set(platform, '');
+  cachedHeuristicEngineRoots.set(cacheKey, '');
   return undefined;
 }
 
-async function probePreferredEngineRoot(candidates: string[], platform: NodeJS.Platform): Promise<string | undefined> {
-  const markers = getEngineMarkers(platform);
+async function probePreferredEngineRoot(
+  candidates: Array<{ path: string; platform: NodeJS.Platform }>,
+  hostPlatform: NodeJS.Platform,
+): Promise<string | undefined> {
   for (const candidate of candidates) {
-    if (await accessFirstMatchingMarker(candidate, markers)) {
-      return candidate;
+    if (await accessFirstMatchingMarker(candidate.path, getEngineMarkers(candidate.platform), candidate.platform, hostPlatform)) {
+      return candidate.path;
     }
   }
 
@@ -193,7 +218,18 @@ export async function resolveProjectInputs(
   const projectPath = firstDefinedString(request.project_path, projectPathFromContext, projectPathFromWorkspace, projectPathFromEnv);
   const target = firstDefinedString(request.target, targetFromContext, targetFromWorkspace, targetFromEnv);
   const engineAssociation = projectPath ? await readProjectEngineAssociation(projectPath) : undefined;
-  const associationCandidates = buildEngineAssociationCandidates(engineAssociation, platform);
+  const windowsWorkspaceHint = [request.engine_root, request.project_path, projectPathFromWorkspace, projectPathFromEnv]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .some((value) => isWindowsStylePath(value) || isWslMountedWindowsPath(value));
+  const heuristicPlatforms: NodeJS.Platform[] = windowsWorkspaceHint && platform !== 'win32'
+    ? ['win32', platform]
+    : [platform];
+  const associationCandidates = heuristicPlatforms.flatMap((candidatePlatform) => (
+    buildEngineAssociationCandidates(engineAssociation, candidatePlatform).map((candidate) => ({
+      path: candidate,
+      platform: candidatePlatform,
+    }))
+  ));
 
   let engineRoot = firstDefinedString(request.engine_root, engineRootFromContext, engineRootFromEnv);
   let engineRootSource: 'explicit' | 'editor_context' | 'environment' | 'filesystem_heuristic' | 'missing';
@@ -206,7 +242,15 @@ export async function resolveProjectInputs(
     engineRootSource = 'environment';
   } else {
     const preferredCandidate = await probePreferredEngineRoot(associationCandidates, platform);
-    const heuristicRoot = preferredCandidate ?? await probeEngineRootHeuristic(platform);
+    let heuristicRoot = preferredCandidate;
+    if (!heuristicRoot) {
+      for (const candidatePlatform of heuristicPlatforms) {
+        heuristicRoot = await probeEngineRootHeuristic(candidatePlatform, platform);
+        if (heuristicRoot) {
+          break;
+        }
+      }
+    }
     if (heuristicRoot) {
       engineRoot = heuristicRoot;
       engineRootSource = 'filesystem_heuristic';

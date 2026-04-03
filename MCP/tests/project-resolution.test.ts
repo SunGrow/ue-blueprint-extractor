@@ -9,6 +9,8 @@ import {
 import {
   buildEngineAssociationCandidates,
   filesystemPathsEqual,
+  toHostFilesystemPath,
+  toWindowsStylePath,
 } from '../src/helpers/workspace-project.js';
 
 describe('rememberExternalBuild', () => {
@@ -247,6 +249,18 @@ describe('resolveProjectInputs', () => {
 
   it('normalizes Windows-style filesystem paths independently of the host platform', () => {
     expect(filesystemPathsEqual('C:/Proj/Proj.uproject', 'C:\\Proj\\Proj.uproject')).toBe(true);
+  });
+
+  it('converts WSL-mounted paths into Windows command paths', () => {
+    expect(toWindowsStylePath('/mnt/d/Development/V2/CyberVolleyball6vs6.uproject')).toBe(
+      'D:\\Development\\V2\\CyberVolleyball6vs6.uproject',
+    );
+  });
+
+  it('converts Windows command paths into host filesystem paths on Linux', () => {
+    expect(toHostFilesystemPath('C:/Program Files/Epic Games/UE_5.6', 'win32', 'linux')).toBe(
+      '/mnt/c/Program Files/Epic Games/UE_5.6',
+    );
   });
 
   it('builds engine association candidates for Windows and macOS installs', () => {
