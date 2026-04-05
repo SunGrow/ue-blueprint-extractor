@@ -49,9 +49,9 @@ jobs:
       run:
         working-directory: MCP
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -81,7 +81,7 @@ jobs:
       - ue-5.6
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: UE 5.6 headless gate
         shell: pwsh
@@ -100,7 +100,7 @@ jobs:
       - ue-5.6
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: UE 5.6 rendered PIE/editor/runtime screenshots
         shell: pwsh
@@ -141,7 +141,7 @@ jobs:
       - ue-5.7
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: UE 5.7 headless gate
         shell: pwsh
@@ -160,7 +160,7 @@ jobs:
       - ue-5.7
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: UE 5.7 rendered PIE/editor/runtime screenshots
         shell: pwsh
@@ -225,9 +225,9 @@ jobs:
       BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_ANIM_MONTAGE }}
       BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE: ${{ vars.BLUEPRINT_EXTRACTOR_TEST_BLEND_SPACE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 'lts/*'
           cache: npm
