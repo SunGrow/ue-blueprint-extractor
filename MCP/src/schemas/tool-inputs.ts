@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { toolResultSchema } from './tool-results.js';
 
-// Recursive schema for widget tree nodes (used by build_widget_tree)
+// Recursive schema for widget tree nodes (used by replace_widget_tree and nested widget mutations)
 export const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
   class: z.string().describe('Widget class (e.g. CanvasPanel, TextBlock).'),
   name: z.string(),
@@ -11,19 +11,6 @@ export const WidgetNodeSchema: z.ZodType<any> = z.lazy(() => z.object({
   properties: z.record(z.string(), z.unknown()).optional(),
   children: z.array(WidgetNodeSchema).optional().describe('Child widgets (panels only).'),
 }));
-
-export const WidgetBlueprintMutationOperationSchema = z.enum([
-  'replace_tree',
-  'patch_widget',
-  'patch_class_defaults',
-  'insert_child',
-  'remove_widget',
-  'move_widget',
-  'wrap_widget',
-  'replace_widget_class',
-  'batch',
-  'compile',
-]);
 
 export const PropertyEntrySchema = z.object({
   name: z.string(),

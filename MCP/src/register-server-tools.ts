@@ -65,7 +65,6 @@ import {
   UserDefinedEnumMutationOperationSchema,
   UserDefinedStructFieldSchema,
   UserDefinedStructMutationOperationSchema,
-  WidgetBlueprintMutationOperationSchema,
   WidgetNodeSchema,
   WidgetSelectorFieldsSchema,
   WindowFontApplicationSchema,
@@ -194,7 +193,6 @@ export function registerServerTools({
     server,
     callSubsystemJson,
     widgetNodeSchema: WidgetNodeSchema,
-    widgetBlueprintMutationOperationSchema: WidgetBlueprintMutationOperationSchema,
   });
 
   registerWidgetExtractionTools({

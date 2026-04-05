@@ -224,18 +224,18 @@ describe('AdaptiveExecutor', () => {
     });
     const detector = new ExecutionModeDetector(editorAdapter, cmdAdapter);
     const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);
-    executor.setToolMode('modify_widget', 'editor_only');
+    executor.setToolMode('patch_widget', 'editor_only');
 
     await expect(
-      executor.execute('modify_widget', 'sub', 'ModifyWidget', {}),
+      executor.execute('patch_widget', 'sub', 'ModifyWidgetBlueprintStructure', {}),
     ).rejects.toThrow(ExecutorError);
 
     try {
-      await executor.execute('modify_widget', 'sub', 'ModifyWidget', {});
+      await executor.execute('patch_widget', 'sub', 'ModifyWidgetBlueprintStructure', {});
     } catch (err) {
       const execErr = err as ExecutorError;
       expect(execErr.code).toBe('CAPABILITY_MISMATCH');
-      expect(execErr.toolName).toBe('modify_widget');
+      expect(execErr.toolName).toBe('patch_widget');
       expect(execErr.currentMode).toBe('commandlet');
       expect(execErr.message).toContain('requires the Unreal Editor');
     }
@@ -368,7 +368,7 @@ describe('TOOL_MODE_ANNOTATIONS', () => {
     expect(executor.getToolMode('list_assets')).toBe('both');
 
     // Spot-check: editor_only tools
-    expect(executor.getToolMode('modify_widget')).toBe('editor_only');
+    expect(executor.getToolMode('patch_widget')).toBe('editor_only');
     expect(executor.getToolMode('restart_editor')).toBe('editor_only');
     expect(executor.getToolMode('capture_widget_preview')).toBe('editor_only');
     expect(executor.getToolMode('start_pie')).toBe('editor_only');
@@ -396,8 +396,8 @@ describe('dual-mode error classification', () => {
 
   it('classifies CAPABILITY_MISMATCH errors', () => {
     const result = classifyRecoverableToolFailure(
-      'modify_widget',
-      "CAPABILITY_MISMATCH: Tool 'modify_widget' requires the Unreal Editor but only commandlet mode is available.",
+      'patch_widget',
+      "CAPABILITY_MISMATCH: Tool 'patch_widget' requires the Unreal Editor but only commandlet mode is available.",
     );
 
     expect(result).not.toBeNull();
@@ -405,7 +405,7 @@ describe('dual-mode error classification', () => {
       code: 'capability_mismatch',
       recoverable: true,
     });
-    expect(result!.next_steps.some((s: string) => s.includes('modify_widget'))).toBe(true);
+    expect(result!.next_steps.some((s: string) => s.includes('patch_widget'))).toBe(true);
     expect(result!.next_steps.some((s: string) => s.includes('Commandlet mode'))).toBe(true);
   });
 

@@ -442,13 +442,13 @@ export function registerWindowUiTools({
             AssetPath: asset_path,
           });
           steps.push({
-            step: 'compile_widget_blueprint',
+            step: 'compile_widget',
             result,
           });
           if (result.success === false) {
-            return buildStoppedResult('compile_widget_blueprint', steps);
+            return buildStoppedResult('compile_widget', steps);
           }
-          const checkpointResult = await checkpointMutationStep('compile_widget_blueprint');
+          const checkpointResult = await checkpointMutationStep('compile_widget');
           if (checkpointResult) {
             return checkpointResult;
           }

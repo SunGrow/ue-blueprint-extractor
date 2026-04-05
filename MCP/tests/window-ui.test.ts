@@ -173,7 +173,7 @@ describe('registerWindowUiTools', () => {
         { step: 'mark_widget_variable' },
         { step: 'patch_class_defaults' },
         { step: 'apply_widget_fonts' },
-        { step: 'compile_widget_blueprint' },
+        { step: 'compile_widget' },
         { step: 'save_assets' },
       ],
       verification: {
@@ -219,7 +219,7 @@ describe('registerWindowUiTools', () => {
     );
   });
 
-  it('stops early when compile_widget_blueprint fails and does not continue into save steps', async () => {
+  it('stops early when compile_widget fails and does not continue into save steps', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async (method) => {
       if (method === 'ModifyWidgetBlueprintStructure') {
@@ -266,10 +266,10 @@ describe('registerWindowUiTools', () => {
     expect(parseDirectToolResult(result)).toMatchObject({
       success: false,
       operation: 'apply_window_ui_changes',
-      stoppedAt: 'compile_widget_blueprint',
+      stoppedAt: 'compile_widget',
       steps: [
         { step: 'patch_class_defaults' },
-        { step: 'compile_widget_blueprint' },
+        { step: 'compile_widget' },
       ],
     });
   });

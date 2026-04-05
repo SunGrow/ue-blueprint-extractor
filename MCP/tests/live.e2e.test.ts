@@ -378,7 +378,7 @@ describeLive('live UE e2e', () => {
 
     await callToolJson(
       connection.client,
-      'build_widget_tree',
+      'replace_widget_tree',
       {
         asset_path: settingsOptionRowPath,
         root_widget: {
@@ -412,7 +412,7 @@ describeLive('live UE e2e', () => {
           ],
         },
       },
-      'build_widget_tree settings option row',
+      'replace_widget_tree settings option row',
     );
 
     const settingsWidgetCreate = await callToolJson<Record<string, unknown>>(
@@ -432,7 +432,7 @@ describeLive('live UE e2e', () => {
 
     await callToolJson(
       connection.client,
-      'build_widget_tree',
+      'replace_widget_tree',
       {
         asset_path: settingsWidgetPath,
         root_widget: {
@@ -456,15 +456,14 @@ describeLive('live UE e2e', () => {
           ],
         },
       },
-      'build_widget_tree settings widget',
+      'replace_widget_tree settings widget',
     );
 
     await callToolJson(
       connection.client,
-      'modify_widget_blueprint',
+      'batch_widget_operations',
       {
         asset_path: settingsWidgetPath,
-        operation: 'batch',
         operations: [
           {
             operation: 'insert_child',
@@ -487,12 +486,12 @@ describeLive('live UE e2e', () => {
         ],
         compile_after: true,
       },
-      'modify_widget_blueprint settings batch',
+      'batch_widget_operations settings batch',
     );
 
     await callToolJson(
       connection.client,
-      'modify_widget',
+      'patch_widget',
       {
         asset_path: settingsWidgetPath,
         widget_path: 'WindowRoot/ForcedRallyServeModeLabel',
@@ -501,7 +500,7 @@ describeLive('live UE e2e', () => {
         },
         is_variable: true,
       },
-      'modify_widget settings label',
+      'patch_widget settings label',
     );
 
     await callToolJson(
@@ -523,11 +522,11 @@ describeLive('live UE e2e', () => {
 
     await callToolJson(
       connection.client,
-      'compile_widget_blueprint',
+      'compile_widget',
       {
         asset_path: settingsWidgetPath,
       },
-      'compile_widget_blueprint settings widget',
+      'compile_widget settings widget',
     );
 
     const extractWidget = await callToolJson<Record<string, unknown>>(
@@ -591,7 +590,7 @@ describeLive('live UE e2e', () => {
 
     await callToolJson(
       connection.client,
-      'build_widget_tree',
+      'replace_widget_tree',
       {
         asset_path: widgetFailurePath,
         root_widget: {
@@ -607,7 +606,7 @@ describeLive('live UE e2e', () => {
           ],
         },
       },
-      'build_widget_tree widget failure',
+      'replace_widget_tree widget failure',
     );
 
     await callToolJson(
@@ -620,15 +619,15 @@ describeLive('live UE e2e', () => {
     );
 
     const invalidMutation = await connection.client.callTool({
-      name: 'modify_widget_blueprint',
+      name: 'insert_widget_child',
       arguments: {
         asset_path: widgetFailurePath,
-        operation: 'insert_child',
         parent_widget_path: 'WindowRoot/MissingParent',
         child_widget: {
           class: 'TextBlock',
           name: 'ShouldNotExist',
         },
+        compile_after: false,
       },
     });
     const invalidMutationText = getTextContent(invalidMutation);

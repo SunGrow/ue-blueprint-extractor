@@ -4,20 +4,21 @@ const SUBSYSTEM_UNAVAILABLE_MESSAGE_FRAGMENT = 'BlueprintExtractor subsystem not
 export const EDITOR_POLL_INTERVAL_MS = 1_000;
 
 export const serverInstructions = [
-  'Blueprint Extractor MCP uses a v2 public contract with workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
+  'Blueprint Extractor MCP uses a v2 public contract with tool profiles, workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
   // Tool discovery
-  'Only ~13 core tools are visible by default. Use activate_workflow_scope to load specialized tool families: widget_authoring (or sub-scopes: widget_authoring_structure, widget_authoring_visual, widget_verification), material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, automation_testing, verification, analysis, and project_intelligence.',
-  'Use find_and_extract for search+extract in one call (activate any authoring scope to access it). Use search_assets when you only need to locate assets.',
-  'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance. This may also auto-activate the relevant workflow scope.',
+  'Use activate_tool_profile with profile: "default" for the compact scoped surface or profile: "expert" for the full flat tool list. Clients with tool-list change support start in default; fallback clients start in expert.',
+  'A compact core tool set is visible in the default profile. Use activate_workflow_scope to load specialized tool families: widget_authoring (or sub-scopes: widget_authoring_structure, widget_authoring_visual, widget_verification), material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, project_control, automation_testing, verification, analysis, and project_intelligence.',
+  'Use find_and_extract for search+extract in one call from the default core surface. Use search_assets when you only need to locate assets.',
+  'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance. Use activate_workflow_scope explicitly when the tool family is not in the current profile.',
   // Deferred tool directory (tools available via activate_workflow_scope)
-  'Deferred tool families — widget_authoring_structure: create/replace/patch/insert/remove/move/wrap widgets. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create/modify material, material_graph_operation, material instances. blueprint_authoring: create/modify blueprint members and graphs, trigger_live_coding. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. automation_testing: run/get/list automation tests, project automation context, and PIE lifecycle control. verification: widget captures, editor screenshots, runtime screenshots, and comparisons. analysis: deterministic Blueprint review and asset audits. project_intelligence: editor context, project indexing, and metadata-first context search.',
+  'Deferred tool families — widget_authoring_structure: recipe-first widget authoring, tree replacement, diff/patch DSLs, and focused structural edits. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction, and preview capture. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create_material_setup, modify_material DSL/batch authoring, material_graph_operation, and material instances. blueprint_authoring: scaffold_blueprint, modify_blueprint_graphs DSL authoring, member edits, and Live Coding trigger. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. project_control: editor-session binding, launch/wait, project automation context, PIE lifecycle control, host build/restart/sync flows, and apply_window_ui_changes. automation_testing: run/get/list automation tests. verification: widget captures, editor screenshots, runtime screenshots, and comparisons. analysis: deterministic Blueprint review and asset audits. project_intelligence: editor context, project indexing, and metadata-first context search.',
   // Extraction
   'All extract_* tools default to compact: true. Pass compact: false for verbose output.',
   // Search
   'search_assets class_filter and list_assets class_filter accept project asset class names plus empty string for all types.',
   // Widget authoring
   'For UI redesign work, inspect the current HUD, transition widgets, and class defaults before replacing widget trees.',
-  'Use operation-specific widget tools (patch_widget, replace_widget_tree, insert_widget_child, etc.) instead of the deprecated modify_widget_blueprint.',
+  'Use execute_widget_recipe, create_menu_screen, apply_widget_patch, apply_widget_diff, or operation-specific widget tools. The deprecated widget aliases were removed.',
   // Material authoring
   'Use material_graph_operation for material settings, node creation, expression wiring, and root-property binding. Use extract_material/create_material/modify_material with asset_kind: "function" for MaterialFunctions.',
   // Design workflows
@@ -107,7 +108,6 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
 
   // ── Widget mutation tools (editor_only) ──
   ['create_widget_blueprint', 'editor_only'],
-  ['build_widget_tree', 'editor_only'],
   ['replace_widget_tree', 'editor_only'],
   ['replace_widget_class', 'editor_only'],
   ['insert_widget_child', 'editor_only'],
@@ -116,12 +116,9 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['wrap_widget', 'editor_only'],
   ['patch_widget', 'editor_only'],
   ['patch_widget_class_defaults', 'editor_only'],
-  ['modify_widget', 'editor_only'],
-  ['modify_widget_blueprint', 'editor_only'],
   ['batch_widget_operations', 'editor_only'],
   ['apply_widget_diff', 'editor_only'],
   ['compile_widget', 'editor_only'],
-  ['compile_widget_blueprint', 'editor_only'],
   ['create_menu_screen', 'editor_only'],
   ['apply_widget_patch', 'editor_only'],
   ['execute_widget_recipe', 'editor_only'],
@@ -209,6 +206,7 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['apply_window_ui_changes', 'editor_only'],
 
   // ── Meta tools (both — no subsystem call needed) ──
+  ['activate_tool_profile', 'both'],
   ['activate_workflow_scope', 'both'],
 ]);
 

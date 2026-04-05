@@ -12,6 +12,7 @@ BlueprintExtractor/Intermediate/
 MCP/dist/
 MCP/node_modules/
 MCP/*.tgz
+MCP/[A-Za-z]:/
 MCP/TEST_COVERAGE_AUDIT.md
 
 tests/fixtures/BlueprintExtractorFixture/Binaries/

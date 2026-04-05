@@ -39,6 +39,7 @@ import {
   ToolSurfaceManager,
   WORKFLOW_SCOPE_IDS,
   CORE_TOOLS,
+  type ToolProfileId,
   type WorkflowScopeId,
 } from './tool-surface-manager.js';
 import { EditorAdapter } from './execution/adapters/editor-adapter.js';
@@ -203,6 +204,45 @@ export function createBlueprintExtractorServer(
 
   const toolSurfaceManager = new ToolSurfaceManager(registeredToolMap);
 
+  server.registerTool(
+    'activate_tool_profile',
+    {
+      title: 'Activate Tool Profile',
+      description: [
+        'Switch the visible MCP tool profile.',
+        'default maps to the compact scoped surface.',
+        'expert maps to the full flat surface.',
+      ].join(' '),
+      inputSchema: {
+        profile: z.enum(['default', 'expert']).describe(
+          'The tool profile to activate.',
+        ),
+      },
+      annotations: {
+        title: 'Activate Tool Profile',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args: Record<string, unknown>) => {
+      const profile = args.profile as ToolProfileId;
+      toolSurfaceManager.activateProfile(profile);
+      const activeTools = toolSurfaceManager.getActiveTools();
+      return {
+        content: [],
+        structuredContent: {
+          profile,
+          mode: toolSurfaceManager.getMode(),
+          active_tool_count: activeTools.size,
+          core_tool_count: CORE_TOOLS.size,
+          active_scope: toolSurfaceManager.getActiveScope(),
+        },
+      };
+    },
+  );
+
   // Register the activate_workflow_scope tool
   server.registerTool(
     'activate_workflow_scope',
@@ -212,7 +252,8 @@ export function createBlueprintExtractorServer(
         'Switch the active tool surface to a workflow-specific scope.',
         `Available scopes: ${WORKFLOW_SCOPE_IDS.join(', ')}.`,
         'Use additive=true to merge the new scope with currently active tools.',
-        'Core tools (extraction, search, project control) are always available.',
+        'Core tools (search, extraction, save/help, and the profile/scope switches) are always available.',
+        'Use activate_tool_profile with expert to expose the full flat surface.',
       ].join(' '),
       inputSchema: {
         scope: z.enum(WORKFLOW_SCOPE_IDS as unknown as [string, ...string[]]).describe(
@@ -237,6 +278,8 @@ export function createBlueprintExtractorServer(
       const activeTools = toolSurfaceManager.getActiveTools();
       const scopeDef = toolSurfaceManager.getScopeDefinition(scopeId);
       const structuredContent = {
+        profile: toolSurfaceManager.getProfile(),
+        mode: toolSurfaceManager.getMode(),
         scope: scopeId,
         description: scopeDef.description,
         additive,
@@ -252,9 +295,9 @@ export function createBlueprintExtractorServer(
   (server as any).server.oninitialized = () => {
     const caps = (server as any).server.getClientCapabilities();
     if (caps?.tools?.listChanged) {
-      toolSurfaceManager.enableScopedMode();
+      toolSurfaceManager.activateProfile('default');
     } else {
-      toolSurfaceManager.enableFlatMode();
+      toolSurfaceManager.activateProfile('expert');
     }
   };
 

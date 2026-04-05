@@ -7,7 +7,6 @@ import { connectInMemoryServer } from './test-helpers.js';
 // Tools exempted from the 15-field budget (pre-existing tech debt, per TDD §3.6)
 const FIELD_EXEMPTED_TOOLS = new Set([
   'apply_window_ui_changes',    // 34+ fields, acknowledged tech debt
-  'modify_widget_blueprint',    // dispatch alias, retains old polymorphic schema
   'material_graph_operation',   // pre-existing 17-field polymorphic tool
 ]);
 
@@ -15,7 +14,6 @@ const FIELD_EXEMPTED_TOOLS = new Set([
 const NESTING_EXEMPTED_TOOLS = new Set([
   // Widget tools using recursive widgetNodeSchema (children contain children)
   'replace_widget_tree', 'insert_widget_child', 'wrap_widget',
-  'build_widget_tree', 'modify_widget_blueprint',
   // Pre-existing deep schemas (passthrough, nested payloads)
   'create_curve', 'modify_curve', 'create_curve_table', 'modify_curve_table',
   'modify_user_defined_struct', 'create_user_defined_enum', 'modify_user_defined_enum',
@@ -118,6 +116,10 @@ describe('schema complexity budget', () => {
       'import_textures',
       'import_meshes',
       'reimport_assets',
+      'build_widget_tree',
+      'modify_widget',
+      'modify_widget_blueprint',
+      'compile_widget_blueprint',
     ];
     const found = removedAliases.filter((alias) => tools.has(alias));
     expect(found).toEqual([]);

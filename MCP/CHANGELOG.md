@@ -5,6 +5,23 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.0.0] - 2026-04-05
+
+### Breaking
+
+- Added explicit MCP tool profiles via `activate_tool_profile`, with a compact `default` surface for clients that support dynamic tool-list updates and a full `expert` surface for flat compatibility sessions.
+- Reduced the default public surface so project-control and other specialist tool families must be activated explicitly through workflow scopes.
+- Removed the deprecated widget aliases `modify_widget_blueprint`, `build_widget_tree`, `modify_widget`, and `compile_widget_blueprint`. Use the operation-specific widget tools directly.
+
+### Changed
+
+- Curated widget, material, and Blueprint authoring scopes around recipe/composite/DSL-first entry points such as `execute_widget_recipe`, `create_menu_screen`, `apply_widget_patch`, `create_material_setup`, `modify_material`, `scaffold_blueprint`, and `modify_blueprint_graphs`.
+- Normalized widget tool result payloads so `structuredContent.operation` reflects the current public MCP tool names instead of legacy subsystem names.
+
+### Fixed
+
+- Ignored and cleaned up generated drive-letter artifact directories under `MCP/` that could appear on mixed Windows/Linux workflows.
+
 ## [7.0.8] - 2026-04-02
 
 ### Fixed

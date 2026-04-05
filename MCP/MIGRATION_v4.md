@@ -2,6 +2,8 @@
 
 This guide covers all breaking changes, new features, and migration paths for upgrading from v3 to v4.
 
+> Historical note: this document describes the original v4 rollout state. Current 7.x releases now use explicit `activate_tool_profile` switching for compact vs full surfaces, and the deprecated aliases mentioned below have been removed. Use the replacement tools directly.
+
 ---
 
 ## Breaking Changes Summary

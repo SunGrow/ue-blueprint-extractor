@@ -79,6 +79,7 @@ Task-aware families currently include:
 
 ## Project-Code Notes
 
+- `activate_tool_profile` switches between `default` (compact scoped surface) and `expert` (full flat surface).
 - `get_project_automation_context` surfaces the editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state used by project-control fallbacks and PIE guards.
 - `get_editor_context` is the separate read-only editor-state snapshot for selected assets, selected actors, open asset editors, active level, and PIE summary. It remains session-bound, bounded, and explicitly query-only.
 - `start_pie`, `stop_pie`, and `relaunch_pie` are the explicit PIE lifecycle controls. Use them for live editor state, not as a replacement for automation-backed runtime verification.
@@ -229,17 +230,15 @@ The v1 project index covers asset metadata plus published docs, prompts, and res
 
 ### Material Authoring
 
-Use `material_graph_operation` with the composable operation names first:
+Use the curated `material_authoring` scope in the default profile, starting with the higher-level flows first:
 
-1. `create_material`
-2. `material_graph_operation` with `operation: "set_material_settings"`
-3. `material_graph_operation` with `operation: "add_expression"`
-4. `material_graph_operation` with `operation: "connect_expressions"`
-5. `material_graph_operation` with `operation: "connect_material_property"`
-6. `compile_material_asset`
-7. `save_assets`
+1. `create_material_setup`
+2. `modify_material`
+3. `material_graph_operation` for low-level graph edits when needed
+4. `compile_material_asset`
+5. `save_assets`
 
-`modify_material` remains available as an advanced escape hatch when the composable tools are insufficient.
+`create_material` and direct `material_graph_operation` calls remain available when the higher-level flows are insufficient.
 
 ### Enhanced Input Authoring
 
@@ -264,8 +263,8 @@ Generic DataAsset reflection supports inline instanced `UObject` graphs for `UPR
 
 - Normalize multimodal design input into `design_spec_json` first when the redesign is fidelity-sensitive.
 - Inspect the current widget and any owning HUD/transition assets first.
-- Prefer operation-specific widget tools such as `patch_widget`, `insert_widget_child`, `remove_widget`, `move_widget`, `wrap_widget`, `replace_widget_class`, and `batch_widget_operations`.
-- Use `replace_widget_tree` only when replacing the full tree is justified. `modify_widget_blueprint`, `build_widget_tree`, and `compile_widget_blueprint` remain deprecated compatibility surfaces.
+- Prefer `execute_widget_recipe`, `create_menu_screen`, `apply_widget_patch`, `apply_widget_diff`, or operation-specific widget tools such as `patch_widget`, `insert_widget_child`, `remove_widget`, `move_widget`, `wrap_widget`, `replace_widget_class`, and `batch_widget_operations`.
+- Use `replace_widget_tree` only when replacing the full tree is justified. The deprecated widget aliases were removed; use `patch_widget`, `patch_widget_class_defaults`, `batch_widget_operations`, and `compile_widget` instead.
 - `extract_widget_blueprint` now always returns `rootWidget` as an object or `null`. If extraction degrades, inspect `widgetTreeStatus`, `widgetTreeError`, and `compile.errors` before rebuilding the tree.
 - Compile immediately after structural changes with `compile_widget`.
 - Run `capture_widget_preview` after compile is clean; compile/save alone is not treated as visual proof for user-facing widget work.

@@ -103,8 +103,8 @@ describe('AdaptiveExecutor.executeRouted', () => {
   it('throws CAPABILITY_MISMATCH for editor_only tool in commandlet mode', async () => {
     const detector = createMockDetector('commandlet', 'editor unavailable');
     const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);
-    executor.setActiveToolName('modify_widget');
-    executor.setToolMode('modify_widget', 'editor_only');
+    executor.setActiveToolName('patch_widget');
+    executor.setToolMode('patch_widget', 'editor_only');
 
     const fallback = createMockEditorFallback();
 
@@ -117,7 +117,7 @@ describe('AdaptiveExecutor.executeRouted', () => {
     } catch (err) {
       const execErr = err as ExecutorError;
       expect(execErr.code).toBe('CAPABILITY_MISMATCH');
-      expect(execErr.toolName).toBe('modify_widget');
+      expect(execErr.toolName).toBe('patch_widget');
       expect(execErr.currentMode).toBe('commandlet');
       expect(execErr.requiredCapability).toBe('write_complex');
       expect(execErr.message).toContain('requires the Unreal Editor');

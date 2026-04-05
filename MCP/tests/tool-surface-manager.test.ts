@@ -34,17 +34,17 @@ const ALL_TEST_TOOLS = [
   // core tools (includes check_asset_exists)
   ...CORE_TOOLS,
   // widget authoring structure
-  'create_widget_blueprint', 'build_widget_tree', 'replace_widget_tree',
+  'create_widget_blueprint', 'replace_widget_tree',
   'replace_widget_class', 'insert_widget_child', 'remove_widget',
   'move_widget', 'wrap_widget', 'patch_widget', 'patch_widget_class_defaults',
-  'modify_widget', 'modify_widget_blueprint', 'batch_widget_operations',
-  'apply_widget_diff',
+  'batch_widget_operations',
+  'apply_widget_diff', 'create_menu_screen', 'apply_widget_patch', 'execute_widget_recipe',
   // widget authoring visual
   'create_commonui_button_style', 'apply_commonui_button_style',
   'modify_commonui_button_style', 'extract_commonui_button_style',
   'extract_widget_blueprint',
   'create_widget_animation', 'modify_widget_animation', 'extract_widget_animation',
-  'compile_widget', 'compile_widget_blueprint',
+  'compile_widget',
   // widget verification
   'capture_widget_preview', 'capture_widget_motion_checkpoints',
   'compare_capture_to_reference', 'compare_motion_capture_bundle',
@@ -52,7 +52,7 @@ const ALL_TEST_TOOLS = [
   // generic verification captures
   'capture_editor_screenshot', 'capture_runtime_screenshot',
   // tools moved from core to scopes
-  'find_and_extract', 'trigger_live_coding', 'get_project_automation_context',
+  'trigger_live_coding',
   // material authoring
   'create_material', 'material_graph_operation', 'modify_material',
   'compile_material_asset',
@@ -79,6 +79,10 @@ const ALL_TEST_TOOLS = [
   'create_curve_table', 'modify_curve_table',
   // import
   'import_assets', 'get_import_job', 'list_import_jobs',
+  // project control
+  'list_running_editors', 'get_active_editor', 'select_editor', 'clear_editor_selection',
+  'launch_editor', 'wait_for_editor', 'compile_project_code', 'restart_editor', 'sync_project_code',
+  'get_project_automation_context', 'apply_window_ui_changes',
   // automation
   'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
   'start_pie', 'stop_pie', 'relaunch_pie',
@@ -140,10 +144,11 @@ describe('ToolSurfaceManager', () => {
       }
 
       // Structure sub-scope tools
+      expect(active.has('execute_widget_recipe')).toBe(true);
+      expect(active.has('apply_widget_patch')).toBe(true);
       expect(active.has('create_widget_blueprint')).toBe(true);
       expect(active.has('patch_widget')).toBe(true);
       expect(active.has('batch_widget_operations')).toBe(true);
-
       // Visual sub-scope tools
       expect(active.has('create_commonui_button_style')).toBe(true);
       expect(active.has('create_widget_animation')).toBe(true);
@@ -167,8 +172,10 @@ describe('ToolSurfaceManager', () => {
       manager.activateScope('widget_authoring_structure');
       const active = manager.getActiveTools();
 
+      expect(active.has('execute_widget_recipe')).toBe(true);
+      expect(active.has('create_menu_screen')).toBe(true);
+      expect(active.has('apply_widget_patch')).toBe(true);
       expect(active.has('create_widget_blueprint')).toBe(true);
-      expect(active.has('build_widget_tree')).toBe(true);
       expect(active.has('replace_widget_tree')).toBe(true);
       expect(active.has('patch_widget')).toBe(true);
       expect(active.has('find_and_extract')).toBe(true);
@@ -188,7 +195,6 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('find_and_extract')).toBe(true);
 
       // Structure tools should not be loaded
-      expect(active.has('build_widget_tree')).toBe(false);
       expect(active.has('replace_widget_tree')).toBe(false);
     });
 
@@ -212,6 +218,8 @@ describe('ToolSurfaceManager', () => {
       manager.activateScope('material_authoring');
       const active = manager.getActiveTools();
 
+      expect(active.has('create_material_setup')).toBe(true);
+      expect(active.has('modify_material')).toBe(true);
       expect(active.has('create_material')).toBe(true);
       expect(active.has('material_graph_operation')).toBe(true);
       expect(active.has('create_material_instance')).toBe(true);
@@ -225,6 +233,7 @@ describe('ToolSurfaceManager', () => {
       manager.activateScope('blueprint_authoring');
       const active = manager.getActiveTools();
 
+      expect(active.has('scaffold_blueprint')).toBe(true);
       expect(active.has('create_blueprint')).toBe(true);
       expect(active.has('modify_blueprint_members')).toBe(true);
       expect(active.has('modify_blueprint_graphs')).toBe(true);
@@ -261,10 +270,30 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('run_automation_tests')).toBe(true);
       expect(active.has('get_automation_test_run')).toBe(true);
       expect(active.has('list_automation_test_runs')).toBe(true);
+      expect(active.has('get_project_automation_context')).toBe(false);
+      expect(active.has('start_pie')).toBe(false);
+      expect(active.has('stop_pie')).toBe(false);
+      expect(active.has('relaunch_pie')).toBe(false);
+    });
+
+    it('project_control loads editor-session, PIE, and code-sync tools', () => {
+      manager.activateScope('project_control');
+      const active = manager.getActiveTools();
+
+      expect(active.has('list_running_editors')).toBe(true);
+      expect(active.has('get_active_editor')).toBe(true);
+      expect(active.has('select_editor')).toBe(true);
+      expect(active.has('clear_editor_selection')).toBe(true);
+      expect(active.has('launch_editor')).toBe(true);
+      expect(active.has('wait_for_editor')).toBe(true);
       expect(active.has('get_project_automation_context')).toBe(true);
       expect(active.has('start_pie')).toBe(true);
       expect(active.has('stop_pie')).toBe(true);
       expect(active.has('relaunch_pie')).toBe(true);
+      expect(active.has('compile_project_code')).toBe(true);
+      expect(active.has('restart_editor')).toBe(true);
+      expect(active.has('sync_project_code')).toBe(true);
+      expect(active.has('apply_window_ui_changes')).toBe(true);
     });
 
     it('verification loads verification tools', () => {
@@ -407,7 +436,7 @@ describe('ToolSurfaceManager', () => {
         'widget_authoring_structure', 'widget_authoring_visual', 'widget_verification',
         'material_authoring', 'blueprint_authoring',
         'schema_ai_authoring', 'animation_authoring', 'data_tables',
-        'import', 'automation_testing', 'verification',
+        'import', 'project_control', 'automation_testing', 'verification',
         'analysis', 'project_intelligence',
       ];
       expect(WORKFLOW_SCOPE_IDS).toEqual(expected);
@@ -448,10 +477,39 @@ describe('activate_workflow_scope tool integration', () => {
 
       expect(result.isError).not.toBe(true);
       const payload = result.structuredContent as Record<string, unknown>;
+      expect(payload.profile).toBe('expert');
+      expect(payload.mode).toBe('flat');
       expect(payload.scope).toBe('widget_authoring');
       expect(payload.additive).toBe(false);
       expect(typeof payload.active_tool_count).toBe('number');
       expect((payload.active_tool_count as number)).toBeGreaterThan(CORE_TOOLS.size);
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+describe('activate_tool_profile tool integration', () => {
+  it('activate_tool_profile switches to the compact default profile', async () => {
+    const { server } = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+    const harness = await connectInMemoryServer(server);
+
+    try {
+      const result = await harness.client.callTool({
+        name: 'activate_tool_profile',
+        arguments: { profile: 'default' },
+      });
+
+      expect(result.isError).not.toBe(true);
+      const payload = result.structuredContent as Record<string, unknown>;
+      expect(payload.profile).toBe('default');
+      expect(payload.mode).toBe('scoped');
+      expect(payload.core_tool_count).toBe(CORE_TOOLS.size);
+      expect(payload.active_tool_count).toBe(CORE_TOOLS.size);
     } finally {
       await harness.close();
     }

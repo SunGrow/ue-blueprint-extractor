@@ -1,5 +1,7 @@
 import type { RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 
+export type ToolProfileId = 'default' | 'expert';
+
 export type WorkflowScopeId =
   | 'widget_authoring'
   | 'widget_authoring_structure'
@@ -11,6 +13,7 @@ export type WorkflowScopeId =
   | 'animation_authoring'
   | 'data_tables'
   | 'import'
+  | 'project_control'
   | 'automation_testing'
   | 'verification'
   | 'analysis'
@@ -34,6 +37,7 @@ export const WORKFLOW_SCOPE_IDS: readonly WorkflowScopeId[] = [
   'animation_authoring',
   'data_tables',
   'import',
+  'project_control',
   'automation_testing',
   'verification',
   'analysis',
@@ -42,6 +46,7 @@ export const WORKFLOW_SCOPE_IDS: readonly WorkflowScopeId[] = [
 
 export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'search_assets',
+  'find_and_extract',
   'extract_blueprint',
   'extract_asset',
   'extract_material',
@@ -50,16 +55,8 @@ export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'check_asset_exists',
   'save_assets',
   'get_tool_help',
+  'activate_tool_profile',
   'activate_workflow_scope',
-  'list_running_editors',
-  'get_active_editor',
-  'select_editor',
-  'clear_editor_selection',
-  'launch_editor',
-  'wait_for_editor',
-  'compile_project_code',
-  'restart_editor',
-  'sync_project_code',
 ]);
 
 /**
@@ -85,12 +82,12 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     description: 'Widget tree structure and mutation tools',
     prompts: [],
     tools: [
-      'create_widget_blueprint', 'build_widget_tree', 'replace_widget_tree',
+      'execute_widget_recipe', 'create_menu_screen', 'apply_widget_patch',
+      'replace_widget_tree', 'apply_widget_diff',
+      'create_widget_blueprint',
       'replace_widget_class', 'insert_widget_child', 'remove_widget',
       'move_widget', 'wrap_widget', 'patch_widget', 'patch_widget_class_defaults',
-      'modify_widget', 'modify_widget_blueprint', 'batch_widget_operations',
-      'apply_widget_diff', 'create_menu_screen', 'apply_widget_patch',
-      'execute_widget_recipe', 'find_and_extract',
+      'batch_widget_operations',
     ],
   },
   widget_authoring_visual: {
@@ -102,9 +99,8 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
       'modify_commonui_button_style', 'extract_commonui_button_style',
       'extract_widget_blueprint',
       'create_widget_animation', 'modify_widget_animation', 'extract_widget_animation',
-      'compile_widget', 'compile_widget_blueprint',
+      'compile_widget',
       'capture_widget_preview',
-      'find_and_extract',
     ],
   },
   widget_verification: {
@@ -123,11 +119,10 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     description: 'Material authoring, material instances, and extraction tools',
     prompts: [],
     tools: [
-      'create_material', 'material_graph_operation', 'modify_material',
+      'create_material_setup', 'modify_material', 'material_graph_operation',
+      'create_material',
       'compile_material_asset',
       'create_material_instance', 'modify_material_instance',
-      'create_material_setup',
-      'find_and_extract',
     ],
   },
   blueprint_authoring: {
@@ -135,10 +130,9 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     description: 'Blueprint authoring and extraction tools',
     prompts: [],
     tools: [
-      'create_blueprint', 'modify_blueprint_members', 'modify_blueprint_graphs',
+      'scaffold_blueprint', 'modify_blueprint_graphs', 'modify_blueprint_members',
+      'create_blueprint',
       'trigger_live_coding',
-      'scaffold_blueprint',
-      'find_and_extract',
     ],
   },
   schema_ai_authoring: {
@@ -185,13 +179,25 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
       'import_assets', 'get_import_job', 'list_import_jobs',
     ],
   },
+  project_control: {
+    id: 'project_control',
+    description: 'Editor-session, build, restart, PIE, and project automation tools',
+    prompts: [],
+    tools: [
+      'list_running_editors', 'get_active_editor', 'select_editor', 'clear_editor_selection',
+      'launch_editor', 'wait_for_editor',
+      'get_project_automation_context',
+      'start_pie', 'stop_pie', 'relaunch_pie',
+      'compile_project_code', 'restart_editor', 'sync_project_code',
+      'apply_window_ui_changes',
+    ],
+  },
   automation_testing: {
     id: 'automation_testing',
     description: 'Automation test execution and result retrieval',
     prompts: [],
     tools: [
       'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
-      'get_project_automation_context', 'start_pie', 'stop_pie', 'relaunch_pie',
     ],
   },
   verification: {
@@ -235,12 +241,22 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
 
 export class ToolSurfaceManager {
   private registeredToolMap: Map<string, RegisteredTool>;
+  private activeProfile: ToolProfileId = 'default';
   private activeScope: WorkflowScopeId | null = null;
   private activeTools = new Set<string>();
   private mode: 'scoped' | 'flat' = 'scoped';
 
   constructor(registeredToolMap: Map<string, RegisteredTool>) {
     this.registeredToolMap = registeredToolMap;
+  }
+
+  activateProfile(profileId: ToolProfileId): void {
+    if (profileId === 'expert') {
+      this.enableFlatMode();
+      return;
+    }
+
+    this.enableScopedMode();
   }
 
   activateScope(scopeId: WorkflowScopeId, additive = false): void {
@@ -271,6 +287,11 @@ export class ToolSurfaceManager {
       for (const tool of this.activeTools) {
         targetTools.add(tool);
       }
+    }
+
+    if (this.mode === 'flat') {
+      this.activeScope = scopeId;
+      return;
     }
 
     this.applyToolSet(targetTools);
@@ -307,6 +328,7 @@ export class ToolSurfaceManager {
 
   enableFlatMode(): void {
     this.mode = 'flat';
+    this.activeProfile = 'expert';
     const allTools = new Set<string>();
     for (const name of this.registeredToolMap.keys()) {
       allTools.add(name);
@@ -318,11 +340,16 @@ export class ToolSurfaceManager {
 
   enableScopedMode(): void {
     this.mode = 'scoped';
+    this.activeProfile = 'default';
     this.resetToDefault();
   }
 
   getMode(): 'scoped' | 'flat' {
     return this.mode;
+  }
+
+  getProfile(): ToolProfileId {
+    return this.activeProfile;
   }
 
   getScopeDefinition(scopeId: WorkflowScopeId): WorkflowScope {

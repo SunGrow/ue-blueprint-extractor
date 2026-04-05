@@ -304,7 +304,7 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
   ['extract_widget_blueprint', extractionHints('extract_widget_blueprint', {
     on_success: [
       'Use patch_widget or replace_widget_tree to modify the widget.',
-      'Use compile_widget_blueprint to check for errors.',
+      'Use compile_widget to check for errors.',
       'Use capture_widget_preview for visual verification.',
     ],
     scope_suggestion: 'widget_authoring',
@@ -331,9 +331,9 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
   // =========================================================================
 
   ['create_widget_blueprint', creationHints(
-    'extract_widget_blueprint', 'build_widget_tree', {
+    'extract_widget_blueprint', 'replace_widget_tree', {
       on_success: [
-        'Use build_widget_tree to populate the widget tree.',
+        'Use replace_widget_tree to populate the widget tree.',
         'Use extract_widget_blueprint to verify.',
         'Use save_assets to persist.',
       ],
@@ -341,18 +341,9 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
     },
   )],
 
-  ['build_widget_tree', modificationHints('extract_widget_blueprint', {
-    on_success: [
-      'Use compile_widget_blueprint to verify the tree compiles.',
-      'Use extract_widget_blueprint to inspect the result.',
-      'Use save_assets to persist.',
-    ],
-    scope_suggestion: 'widget_authoring',
-  })],
-
   ['replace_widget_tree', modificationHints('extract_widget_blueprint', {
     on_success: [
-      'Use compile_widget_blueprint to verify the new tree.',
+      'Use compile_widget to verify the new tree.',
       'Use extract_widget_blueprint to inspect the result.',
       'Use save_assets to persist.',
     ],
@@ -409,7 +400,7 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
 
   ['replace_widget_class', modificationHints('extract_widget_blueprint', {
     on_success: [
-      'Use compile_widget_blueprint to verify the class change.',
+      'Use compile_widget to verify the class change.',
       'Use extract_widget_blueprint to inspect the result.',
       'Use save_assets to persist.',
     ],
@@ -418,7 +409,7 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
 
   ['batch_widget_operations', modificationHints('extract_widget_blueprint', {
     on_success: [
-      'Use compile_widget_blueprint to verify the batch result.',
+      'Use compile_widget to verify the batch result.',
       'Use extract_widget_blueprint to inspect changes.',
       'Use save_assets to persist.',
     ],
@@ -433,39 +424,6 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
     ],
     on_error: [
       'Use extract_widget_blueprint to inspect the widget state.',
-      'Fix reported issues and recompile.',
-    ],
-    scope_suggestion: 'widget_authoring',
-  }],
-
-  ['modify_widget_blueprint', modificationHints('extract_widget_blueprint', {
-    on_success: [
-      'Use operation-specific tools (patch_widget, replace_widget_tree, etc.) instead.',
-      'Use save_assets to persist changes.',
-    ],
-    on_error: [
-      'Use extract_widget_blueprint to inspect current state.',
-      'Consider using operation-specific tools for clearer errors.',
-    ],
-    scope_suggestion: 'widget_authoring',
-  })],
-
-  ['modify_widget', modificationHints('extract_widget_blueprint', {
-    on_success: [
-      'Use save_assets to persist changes.',
-      'Use extract_widget_blueprint to verify.',
-    ],
-    scope_suggestion: 'widget_authoring',
-  })],
-
-  ['compile_widget_blueprint', {
-    on_success: [
-      'Inspect compile.messages and diagnostics for warnings.',
-      'Re-extract the widget blueprint before applying the next patch.',
-      'Check BindWidget names/types if there are abstract class references.',
-    ],
-    on_error: [
-      'Use extract_widget_blueprint to inspect the current state.',
       'Fix reported issues and recompile.',
     ],
     scope_suggestion: 'widget_authoring',
@@ -547,7 +505,7 @@ export const NEXT_STEP_HINTS_REGISTRY: Map<string, HintConfig> = new Map<string,
   ['apply_commonui_button_style', {
     on_success: [
       'Use extract_widget_blueprint to verify the style was applied.',
-      'Use compile_widget_blueprint to verify compilation.',
+      'Use compile_widget to verify compilation.',
       'Use save_assets to persist.',
     ],
     on_error: [

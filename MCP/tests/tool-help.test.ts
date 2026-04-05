@@ -239,7 +239,7 @@ describe('collectRelatedResources', () => {
   });
 
   it('returns widget-specific resources for widget tools', () => {
-    const resources = collectRelatedResources('modify_widget');
+    const resources = collectRelatedResources('patch_widget');
     expect(resources).toContain('blueprint://selector-conventions');
     expect(resources).toContain('blueprint://widget-best-practices');
     expect(resources).toContain('blueprint://verification-workflows');

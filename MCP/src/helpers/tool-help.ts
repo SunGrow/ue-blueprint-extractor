@@ -159,24 +159,6 @@ export function collectToolExampleFamilies(
 ): Array<Record<string, unknown>> {
   const equivalentToolNames = new Set<string>([toolName]);
 
-  if (toolName === 'modify_widget_blueprint') {
-    [
-      'patch_widget',
-      'patch_widget_class_defaults',
-      'insert_widget_child',
-      'remove_widget',
-      'move_widget',
-      'wrap_widget',
-      'replace_widget_class',
-      'replace_widget_tree',
-      'batch_widget_operations',
-    ].forEach((name) => equivalentToolNames.add(name));
-  }
-
-  if (toolName === 'compile_widget_blueprint') {
-    equivalentToolNames.add('compile_widget');
-  }
-
   return Object.entries(exampleCatalog)
     .flatMap(([family, entry]) => {
       const exampleTitles = entry.examples
@@ -207,7 +189,6 @@ export function collectRelatedResources(toolName: string): string[] {
     toolName.startsWith('create_')
     || toolName.startsWith('modify_')
     || toolName.startsWith('apply_')
-    || toolName === 'build_widget_tree'
     || toolName === 'save_assets'
   ) {
     resources.add('blueprint://write-capabilities');

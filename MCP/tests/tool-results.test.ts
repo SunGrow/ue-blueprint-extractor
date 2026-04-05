@@ -65,11 +65,11 @@ describe('tool result normalizers', () => {
   });
 
   it('produces a meaningful message from an error object with no message/error/diagnostics', () => {
-    const result = normalizeToolError('modify_widget', { foo: 'bar', count: 42 });
+    const result = normalizeToolError('patch_widget', { foo: 'bar', count: 42 });
 
     expect(result.isError).toBe(true);
     const msg = (result.structuredContent as Record<string, unknown>).message as string;
-    expect(msg).toContain('modify_widget');
+    expect(msg).toContain('patch_widget');
     expect(msg).toContain('foo');
   });
 

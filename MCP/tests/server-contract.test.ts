@@ -259,6 +259,7 @@ describe('createBlueprintExtractorServer', () => {
     const compareMotionCaptureBundle = tools.tools.find((tool) => tool.name === 'compare_motion_capture_bundle');
     const compareCaptureToReference = tools.tools.find((tool) => tool.name === 'compare_capture_to_reference');
     const applyWindowUiChanges = tools.tools.find((tool) => tool.name === 'apply_window_ui_changes');
+    const activateToolProfile = tools.tools.find((tool) => tool.name === 'activate_tool_profile');
     const runAutomationTests = tools.tools.find((tool) => tool.name === 'run_automation_tests');
     const getAutomationTestRun = tools.tools.find((tool) => tool.name === 'get_automation_test_run');
     const listAutomationTestRuns = tools.tools.find((tool) => tool.name === 'list_automation_test_runs');
@@ -285,7 +286,7 @@ describe('createBlueprintExtractorServer', () => {
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
     expect(resources.resources).toHaveLength(38);
-    expect(tools.tools).toHaveLength(112);
+    expect(tools.tools).toHaveLength(109);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -311,7 +312,11 @@ describe('createBlueprintExtractorServer', () => {
     expect(prompts.prompts.map((prompt) => prompt.name).sort()).toEqual(Object.keys(promptCatalog).sort());
     expect(tools.tools.some((tool) => tool.name === 'extract_asset')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'search_assets')).toBe(true);
-    expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'activate_tool_profile')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'modify_widget_blueprint')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'modify_widget')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'build_widget_tree')).toBe(false);
+    expect(tools.tools.some((tool) => tool.name === 'compile_widget_blueprint')).toBe(false);
     expect(tools.tools.some((tool) => tool.name === 'extract_widget_animation')).toBe(true);
     expect(listRunningEditors).toBeTruthy();
     expect(getActiveEditor).toBeTruthy();
@@ -339,6 +344,7 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'capture_widget_motion_checkpoints')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compare_motion_capture_bundle')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compare_capture_to_reference')).toBe(true);
+    expect(activateToolProfile).toBeTruthy();
     expect(tools.tools.some((tool) => tool.name === 'list_captures')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'cleanup_captures')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'run_automation_tests')).toBe(true);
@@ -1062,7 +1068,7 @@ describe('createBlueprintExtractorServer', () => {
       if (method === 'ModifyWidgetBlueprintStructure') {
         return JSON.stringify({
           success: true,
-          operation: 'modify_widget_blueprint',
+          operation: 'batch_widget_operations',
           widgetOperation: params.Operation,
           assetPath: params.AssetPath,
         });
@@ -1071,7 +1077,7 @@ describe('createBlueprintExtractorServer', () => {
       if (method === 'CompileWidgetBlueprint') {
         return JSON.stringify({
           success: true,
-          operation: 'compile_widget_blueprint',
+          operation: 'compile_widget',
           compile: {
             success: true,
             status: 'UpToDate',
@@ -1093,10 +1099,9 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
     const modifyResult = await harness.client.callTool({
-      name: 'modify_widget_blueprint',
+      name: 'batch_widget_operations',
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
-        operation: 'batch',
         operations: [
           {
             operation: 'insert_child',
@@ -1132,7 +1137,7 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
     expect(parseToolResult(modifyResult)).toMatchObject({
-      operation: 'modify_widget_blueprint',
+      operation: 'batch_widget_operations',
       widgetOperation: 'batch',
       compile: {
         success: true,
@@ -1240,7 +1245,7 @@ describe('createBlueprintExtractorServer', () => {
     cleanups.push(harness.close);
 
     const modifyWidget = await harness.client.callTool({
-      name: 'modify_widget',
+      name: 'patch_widget',
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
         widget_path: 'WindowRoot/TitleBar/TitleBarBg',
@@ -1248,10 +1253,9 @@ describe('createBlueprintExtractorServer', () => {
       },
     });
     const patchDefaults = await harness.client.callTool({
-      name: 'modify_widget_blueprint',
+      name: 'patch_widget_class_defaults',
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
-        operation: 'patch_class_defaults',
         class_defaults: {
           ActiveTitleBarMaterial: '/Game/UI/MI_TitleBarActive.MI_TitleBarActive',
         },
@@ -1259,22 +1263,21 @@ describe('createBlueprintExtractorServer', () => {
     });
 
     expect(parseToolResult(modifyWidget)).toMatchObject({
-      operation: 'ModifyWidget',
+      operation: 'patch_widget',
       success: true,
     });
     expect(parseToolResult(patchDefaults)).toMatchObject({
-      operation: 'ModifyWidgetBlueprintStructure',
+      operation: 'patch_widget_class_defaults',
       success: true,
     });
     expect(fakeClient.calls).toEqual([
       {
-        method: 'ModifyWidget',
+        method: 'ModifyWidgetBlueprintStructure',
         params: {
           AssetPath: '/Game/UI/WBP_Window',
-          WidgetName: 'WindowRoot/TitleBar/TitleBarBg',
-          PropertiesJson: '{}',
-          SlotJson: '{}',
-          WidgetOptionsJson: JSON.stringify({
+          Operation: 'patch_widget',
+          PayloadJson: JSON.stringify({
+            widget_path: 'WindowRoot/TitleBar/TitleBarBg',
             is_variable: true,
           }),
           bValidateOnly: false,
@@ -1696,10 +1699,10 @@ describe('createBlueprintExtractorServer', () => {
     ]));
   });
 
-  it('passes widget_path selectors and validate_only through modify_widget', async () => {
+  it('passes widget_path selectors and validate_only through patch_widget', async () => {
     const fakeClient = new FakeUEClient(() => JSON.stringify({
       success: true,
-      operation: 'modify_widget',
+      operation: 'patch_widget',
       widgetName: 'TitleText',
       widgetPath: 'WindowRoot/TitleBar/TitleText',
       validateOnly: true,
@@ -1708,7 +1711,7 @@ describe('createBlueprintExtractorServer', () => {
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
-      name: 'modify_widget',
+      name: 'patch_widget',
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
         widget_path: 'WindowRoot/TitleBar/TitleText',
@@ -1716,6 +1719,7 @@ describe('createBlueprintExtractorServer', () => {
           Text: 'Window',
         },
         validate_only: true,
+        compile_after: false,
       },
     });
 
@@ -1725,23 +1729,24 @@ describe('createBlueprintExtractorServer', () => {
     });
     expect(fakeClient.calls).toEqual([
       {
-        method: 'ModifyWidget',
+        method: 'ModifyWidgetBlueprintStructure',
         params: {
           AssetPath: '/Game/UI/WBP_Window',
-          WidgetName: 'WindowRoot/TitleBar/TitleText',
-          PropertiesJson: JSON.stringify({ Text: 'Window' }),
-          SlotJson: JSON.stringify({}),
-          WidgetOptionsJson: JSON.stringify({}),
+          Operation: 'patch_widget',
+          PayloadJson: JSON.stringify({
+            widget_path: 'WindowRoot/TitleBar/TitleText',
+            properties: { Text: 'Window' },
+          }),
           bValidateOnly: true,
         },
       },
     ]);
   });
 
-  it('accepts batch patch_class_defaults operations through modify_widget_blueprint', async () => {
+  it('accepts batch patch_class_defaults operations through batch_widget_operations', async () => {
     const fakeClient = new FakeUEClient((method, params) => JSON.stringify({
       success: true,
-      operation: 'modify_widget_blueprint',
+      operation: 'batch_widget_operations',
       method,
       params,
     }));
@@ -1749,10 +1754,9 @@ describe('createBlueprintExtractorServer', () => {
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
-      name: 'modify_widget_blueprint',
+      name: 'batch_widget_operations',
       arguments: {
         asset_path: '/Game/UI/WBP_Window',
-        operation: 'batch',
         operations: [
           {
             operation: 'insert_child',
@@ -1775,7 +1779,7 @@ describe('createBlueprintExtractorServer', () => {
 
     expect(parseToolResult(result)).toMatchObject({
       success: true,
-      operation: 'modify_widget_blueprint',
+      operation: 'batch_widget_operations',
     });
     expect(fakeClient.calls).toEqual([{
       method: 'ModifyWidgetBlueprintStructure',
@@ -3617,20 +3621,20 @@ describe('createBlueprintExtractorServer', () => {
     cleanups.push(harness.close);
 
     const result = await harness.client.callTool({
-      name: 'get_tool_help',
-      arguments: {
-        tool_name: 'modify_widget_blueprint',
-      },
-    });
+        name: 'get_tool_help',
+        arguments: {
+          tool_name: 'batch_widget_operations',
+        },
+      });
 
-    const parsed = parseToolResult(result);
-    expect(parsed.operation).toBe('get_tool_help');
-    expect(parsed.tool.name).toBe('modify_widget_blueprint');
-    expect(parsed.tool.parameters).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        name: 'operation',
-      }),
-    ]));
+      const parsed = parseToolResult(result);
+      expect(parsed.operation).toBe('get_tool_help');
+      expect(parsed.tool.name).toBe('batch_widget_operations');
+      expect(parsed.tool.parameters).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'operations',
+        }),
+      ]));
     expect(parsed.tool.relatedResources).toEqual(expect.arrayContaining([
       'blueprint://selector-conventions',
       'blueprint://widget-best-practices',

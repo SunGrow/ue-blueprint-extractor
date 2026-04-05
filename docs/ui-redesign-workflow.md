@@ -12,7 +12,7 @@ Use this flow before replacing or heavily restructuring a screen:
    - `design_menu_from_design_spec`
    - `design_menu_screen`
 5. Prefer the smallest patch that can solve the problem:
-   - `modify_widget` for property and variable changes
+   - `patch_widget` for property and variable changes
    - `patch_widget`, `insert_widget_child`, `remove_widget`, `move_widget`, `wrap_widget`, `replace_widget_class`, or `batch_widget_operations` for local structural edits
    - `replace_widget_tree` only when the full tree truly needs replacement
 6. Compile immediately after any structural widget change with `compile_widget`.

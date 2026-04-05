@@ -8,16 +8,9 @@ const widgetNodeSchema = z.object({
   class: z.string(),
   name: z.string(),
 }).passthrough();
-const widgetBlueprintMutationOperationSchema = z.enum([
-  'replace_tree',
-  'compile',
-  'patch_widget',
-  'patch_class_defaults',
-  'batch',
-]);
 
 describe('registerWidgetStructureTools', () => {
-  it('returns an error when modify_widget has no widget selector', async () => {
+  it('returns an error when patch_widget has no widget selector', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn();
 
@@ -25,12 +18,12 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('modify_widget').handler({
+    const result = await registry.getTool('patch_widget').handler({
       asset_path: '/Game/UI/WBP_Window',
       validate_only: false,
+      compile_after: false,
     });
 
     expect(callSubsystemJson).not.toHaveBeenCalled();
@@ -40,44 +33,47 @@ describe('registerWidgetStructureTools', () => {
     );
   });
 
-  it('serializes modify_widget payloads with widget_path selectors and variable flags', async () => {
+  it('serializes patch_widget payloads with widget_path selectors and variable flags', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
       success: true,
-      operation: 'ModifyWidget',
+      operation: 'ModifyWidgetBlueprintStructure',
     }));
 
     registerWidgetStructureTools({
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('modify_widget').handler({
+    const result = await registry.getTool('patch_widget').handler({
       asset_path: '/Game/UI/WBP_Window',
       widget_path: 'WindowRoot/TitleText',
       properties: { Text: 'Updated' },
       slot: { Padding: 8 },
       is_variable: true,
       validate_only: true,
+      compile_after: false,
     });
 
-    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyWidget', {
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyWidgetBlueprintStructure', {
       AssetPath: '/Game/UI/WBP_Window',
-      WidgetName: 'WindowRoot/TitleText',
-      PropertiesJson: JSON.stringify({ Text: 'Updated' }),
-      SlotJson: JSON.stringify({ Padding: 8 }),
-      WidgetOptionsJson: JSON.stringify({ is_variable: true }),
+      Operation: 'patch_widget',
+      PayloadJson: JSON.stringify({
+        widget_path: 'WindowRoot/TitleText',
+        properties: { Text: 'Updated' },
+        slot: { Padding: 8 },
+        is_variable: true,
+      }),
       bValidateOnly: true,
     });
     expect(parseDirectToolResult(result)).toMatchObject({
       success: true,
-      operation: 'ModifyWidget',
+      operation: 'patch_widget',
     });
   });
 
-  it('requires root_widget for replace_tree operations', async () => {
+  it('requires root_widget for replace_widget_tree operations', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn();
 
@@ -85,12 +81,10 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('modify_widget_blueprint').handler({
+    const result = await registry.getTool('replace_widget_tree').handler({
       asset_path: '/Game/UI/WBP_Window',
-      operation: 'replace_tree',
       validate_only: false,
       compile_after: false,
     });
@@ -98,11 +92,11 @@ describe('registerWidgetStructureTools', () => {
     expect(callSubsystemJson).not.toHaveBeenCalled();
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
-      'root_widget or dsl is required for operation="replace_tree"',
+      'root_widget or dsl is required',
     );
   });
 
-  it('serializes structural widget mutations and performs optional compile_after', async () => {
+  it('serializes batch widget mutations and performs optional compile_after', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async (method) => {
       if (method === 'ModifyWidgetBlueprintStructure') {
@@ -126,16 +120,10 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('modify_widget_blueprint').handler({
+    const result = await registry.getTool('batch_widget_operations').handler({
       asset_path: '/Game/UI/WBP_Window',
-      operation: 'patch_widget',
-      widget_path: 'WindowRoot/TitleText',
-      properties: { Text: 'Patched' },
-      class_defaults: { Active: true },
-      is_variable: true,
       operations: [{ operation: 'nested' }],
       validate_only: false,
       compile_after: true,
@@ -143,12 +131,8 @@ describe('registerWidgetStructureTools', () => {
 
     expect(callSubsystemJson).toHaveBeenNthCalledWith(1, 'ModifyWidgetBlueprintStructure', {
       AssetPath: '/Game/UI/WBP_Window',
-      Operation: 'patch_widget',
+      Operation: 'batch',
       PayloadJson: JSON.stringify({
-        widget_path: 'WindowRoot/TitleText',
-        properties: { Text: 'Patched' },
-        classDefaults: { Active: true },
-        is_variable: true,
         operations: [{ operation: 'nested' }],
       }),
       bValidateOnly: false,
@@ -158,7 +142,7 @@ describe('registerWidgetStructureTools', () => {
     });
     expect(parseDirectToolResult(result)).toEqual({
       success: true,
-      operation: 'ModifyWidgetBlueprintStructure',
+      operation: 'batch_widget_operations',
       compile: {
         success: true,
         messages: [],
@@ -166,7 +150,7 @@ describe('registerWidgetStructureTools', () => {
     });
   });
 
-  it('routes compile operations directly to CompileWidgetBlueprint', async () => {
+  it('routes compile_widget directly to CompileWidgetBlueprint', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
       success: true,
@@ -177,14 +161,10 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('modify_widget_blueprint').handler({
+    const result = await registry.getTool('compile_widget').handler({
       asset_path: '/Game/UI/WBP_Window',
-      operation: 'compile',
-      validate_only: false,
-      compile_after: true,
     });
 
     expect(callSubsystemJson).toHaveBeenCalledTimes(1);
@@ -193,7 +173,7 @@ describe('registerWidgetStructureTools', () => {
     });
     expect(parseDirectToolResult(result)).toMatchObject({
       success: true,
-      operation: 'CompileWidgetBlueprint',
+      operation: 'compile_widget',
     });
   });
 
@@ -208,7 +188,6 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
     const result = await registry.getTool('create_widget_blueprint').handler({
@@ -236,7 +215,6 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
     const result = await registry.getTool('create_widget_blueprint').handler({
@@ -250,7 +228,7 @@ describe('registerWidgetStructureTools', () => {
     );
   });
 
-  it('serializes build_widget_tree payloads for the subsystem', async () => {
+  it('serializes replace_widget_tree payloads for the subsystem', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
       success: true,
@@ -262,7 +240,6 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
     const rootWidget = {
@@ -273,10 +250,11 @@ describe('registerWidgetStructureTools', () => {
       ],
     };
 
-    const result = await registry.getTool('build_widget_tree').handler({
+    const result = await registry.getTool('replace_widget_tree').handler({
       asset_path: '/Game/UI/WBP_Window',
       root_widget: rootWidget,
       validate_only: true,
+      compile_after: false,
     });
 
     expect(callSubsystemJson).toHaveBeenCalledWith('BuildWidgetTree', {
@@ -286,11 +264,11 @@ describe('registerWidgetStructureTools', () => {
     });
     expect(parseDirectToolResult(result)).toMatchObject({
       success: true,
-      operation: 'BuildWidgetTree',
+      operation: 'replace_widget_tree',
     });
   });
 
-  it('returns an error when build_widget_tree fails', async () => {
+  it('returns an error when replace_widget_tree fails', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => {
       throw new Error('widget tree build failed');
@@ -300,13 +278,13 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('build_widget_tree').handler({
+    const result = await registry.getTool('replace_widget_tree').handler({
       asset_path: '/Game/UI/WBP_Bad',
       root_widget: { class: 'CanvasPanel', name: 'Root' },
       validate_only: false,
+      compile_after: false,
     });
 
     expect((result as { isError?: boolean }).isError).toBe(true);
@@ -315,7 +293,7 @@ describe('registerWidgetStructureTools', () => {
     );
   });
 
-  it('serializes compile_widget_blueprint payloads for the subsystem', async () => {
+  it('serializes compile_widget payloads for the subsystem', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => ({
       success: true,
@@ -327,10 +305,9 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('compile_widget_blueprint').handler({
+    const result = await registry.getTool('compile_widget').handler({
       asset_path: '/Game/UI/WBP_Window',
     });
 
@@ -339,11 +316,11 @@ describe('registerWidgetStructureTools', () => {
     });
     expect(parseDirectToolResult(result)).toMatchObject({
       success: true,
-      operation: 'CompileWidgetBlueprint',
+      operation: 'compile_widget',
     });
   });
 
-  it('returns an error when compile_widget_blueprint fails', async () => {
+  it('returns an error when compile_widget fails', async () => {
     const registry = createToolRegistry();
     const callSubsystemJson = vi.fn(async () => {
       throw new Error('compile failed');
@@ -353,10 +330,9 @@ describe('registerWidgetStructureTools', () => {
       server: registry.server,
       callSubsystemJson,
       widgetNodeSchema,
-      widgetBlueprintMutationOperationSchema,
     });
 
-    const result = await registry.getTool('compile_widget_blueprint').handler({
+    const result = await registry.getTool('compile_widget').handler({
       asset_path: '/Game/UI/WBP_Bad',
     });
 

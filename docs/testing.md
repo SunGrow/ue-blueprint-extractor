@@ -24,8 +24,8 @@ Useful flags:
 The default MCP path covers:
 
 - contract registration, resource templates, prompts, and output schemas
-- scope activation and tool-surface management
-- project-control tools including `get_project_automation_context`, `start_pie`, `stop_pie`, and `relaunch_pie`
+- tool-profile switching, scope activation, and tool-surface management
+- `project_control` tools including `get_project_automation_context`, `start_pie`, `stop_pie`, and `relaunch_pie`
 - verification tools including `capture_widget_preview`, `capture_editor_screenshot`, `capture_runtime_screenshot`, and comparison flows
 - version/count drift, static resources, example catalogs, and pack/publish gates
 

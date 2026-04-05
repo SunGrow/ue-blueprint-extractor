@@ -23,7 +23,7 @@ Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotoc
  AI Assistant         stdio           MCP Server         HTTP :30010        Unreal Editor
  ─────────────  ◄────────────►  ─────────────────  ◄──────────────────►  ─────────────────
   Claude Code                     Node.js process                         Remote Control API
-  Codex / OpenCode                106 tools                               BlueprintExtractor
+  Codex / OpenCode                109 tools                               BlueprintExtractor
   ...                             38 resources                            plugin
                                   4 resource templates
                                   12 prompts
@@ -112,22 +112,23 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
 
 ## Tool Surface
 
-Only the compact core surface is visible by default to keep the context window lean. Specialized families are loaded on demand via `activate_workflow_scope`.
+Use `activate_tool_profile` to switch between the compact `default` surface and the full `expert` surface. The default profile keeps the context window lean and loads specialized families on demand via `activate_workflow_scope`.
 
 | Scope | What It Unlocks |
 |:------|:----------------|
-| **Core** *(always on)* | Search, extraction, list/save/help, editor-session binding, and project-control entry points such as `extract_asset`, `search_assets`, `save_assets`, `get_tool_help`, and `activate_workflow_scope` |
+| **Core** *(always on in `default` profile)* | Search, extraction, `find_and_extract`, list/save/help, and the profile/scope switches such as `extract_asset`, `search_assets`, `save_assets`, `get_tool_help`, `activate_tool_profile`, and `activate_workflow_scope` |
 | `widget_authoring` | Parent scope that loads `widget_authoring_structure`, `widget_authoring_visual`, and `widget_verification` together |
-| `widget_authoring_structure` | Widget tree structure, hierarchy edits, wrapping, moving, replacement, and batch operations |
+| `widget_authoring_structure` | Recipe-first widget authoring, tree replacement, unified-diff patching, and focused structure edits without the deprecated widget aliases |
 | `widget_authoring_visual` | Widget compile flows, CommonUI styles, widget animations, and widget preview capture |
 | `widget_verification` | Widget capture, checkpoint bundles, capture listing, cleanup, and reference comparison |
-| `material_authoring` | Material creation, `material_graph_operation`, compile, and material-instance edits |
-| `blueprint_authoring` | Blueprint creation, member edits, graph edits, and Live Coding trigger |
+| `material_authoring` | `create_material_setup`, `modify_material`, `material_graph_operation`, compile, and material-instance edits |
+| `blueprint_authoring` | `scaffold_blueprint`, graph/member edits, Blueprint creation, and Live Coding trigger |
 | `schema_ai_authoring` | Structs, enums, Blackboards, Behavior Trees, and State Trees |
 | `animation_authoring` | Anim sequences, montages, blend spaces, and widget motion authoring |
 | `data_tables` | Data assets, data tables, curves, Input Actions, and Input Mapping Contexts |
 | `import` | Async asset import and import-job polling |
-| `automation_testing` | Host-side automation runs, coarse project automation context, and PIE lifecycle control |
+| `project_control` | Editor-session binding, launch/wait, project automation context, PIE lifecycle control, host build/restart/sync, and `apply_window_ui_changes` |
+| `automation_testing` | Host-side automation runs and automation-run polling |
 | `analysis` | Deterministic Blueprint review and low-noise project asset audits |
 | `project_intelligence` | Bounded editor context, project indexing, freshness status, and snippet-first context search |
 | `verification` | Editor/runtime screenshots, capture comparison, motion verification, and artifact inspection |

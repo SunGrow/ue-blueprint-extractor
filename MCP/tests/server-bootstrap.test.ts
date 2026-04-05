@@ -380,6 +380,24 @@ describe('ToolSurfaceManager integration with server factory', () => {
     }
   });
 
+  it('registers activate_tool_profile tool', async () => {
+    const { server } = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+    const harness = await connectInMemoryServer(server);
+
+    try {
+      const tools = await harness.client.listTools();
+      const profileTool = tools.tools.find(t => t.name === 'activate_tool_profile');
+      expect(profileTool).toBeDefined();
+      expect(profileTool?.description).toContain('visible MCP tool profile');
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('default tool surface includes all CORE_TOOLS after scoped mode activation', async () => {
     const { server, toolSurfaceManager } = createBlueprintExtractorServer(
       { callSubsystem: async () => '{}' } as any,
@@ -397,5 +415,33 @@ describe('ToolSurfaceManager integration with server factory', () => {
     }
 
     expect(activeTools.size).toBeLessThanOrEqual(CORE_TOOLS.size + 5);
+    expect(activeTools.has('find_and_extract')).toBe(true);
+    expect(activeTools.has('compile_project_code')).toBe(false);
+    expect(activeTools.has('restart_editor')).toBe(false);
+    expect(activeTools.has('sync_project_code')).toBe(false);
+  });
+
+  it('oninitialized selects default for listChanged clients and expert for fallback clients', () => {
+    const supporting = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+    const fallback = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+
+    (supporting.server as any).server.getClientCapabilities = () => ({ tools: { listChanged: true } });
+    (fallback.server as any).server.getClientCapabilities = () => ({ tools: {} });
+
+    (supporting.server as any).server.oninitialized();
+    (fallback.server as any).server.oninitialized();
+
+    expect(supporting.toolSurfaceManager.getProfile()).toBe('default');
+    expect(supporting.toolSurfaceManager.getMode()).toBe('scoped');
+    expect(fallback.toolSurfaceManager.getProfile()).toBe('expert');
+    expect(fallback.toolSurfaceManager.getMode()).toBe('flat');
   });
 });

@@ -13,7 +13,7 @@ Blueprint Extractor connects a running Unreal Editor to MCP clients such as [Cla
 
 | Capability | Current contract |
 |---|---|
-| Tools | 106 |
+| Tools | 109 |
 | Resources | 38 |
 | Resource templates | 4 |
 | Prompts | 12 |
@@ -114,7 +114,7 @@ Open a new MCP-enabled assistant session and ask for:
 
 - `search_assets` on a known Blueprint
 - `get_tool_help` for a tool you plan to use
-- `capture_widget_preview` on a fixture widget if you want to confirm verification works end-to-end
+- `activate_workflow_scope` with `widget_verification` or `verification`, then `capture_widget_preview` on a fixture widget if you want to confirm verification works end-to-end
 
 ## What The Contract Feels Like
 
@@ -138,19 +138,20 @@ Key references:
 
 ## Workflow-Scoped Tool Surface
 
-The server exposes a compact default surface and expands into specialized families when needed through `activate_workflow_scope`.
+The server exposes a compact `default` tool profile and a full `expert` profile via `activate_tool_profile`. The default profile expands into specialized families when needed through `activate_workflow_scope`.
 
 | Scope | Focus |
 |---|---|
-| Core | Search, extract, list, save, help, verification entry points |
-| `widget_authoring` | Widget tree edits, widget class defaults, CommonUI, compile flows |
-| `material_authoring` | Material creation, graph operations, instances, refresh |
-| `blueprint_authoring` | Blueprint creation, member edits, graph edits |
+| Core | Search, extract, `find_and_extract`, list, save, help, and the profile/scope switches |
+| `widget_authoring` | Recipe-first widget tree edits, widget class defaults, CommonUI, compile flows |
+| `material_authoring` | `create_material_setup`, graph operations, `modify_material`, instances, refresh |
+| `blueprint_authoring` | `scaffold_blueprint`, member edits, graph DSL edits |
 | `schema_ai_authoring` | Structs, enums, blackboards, behavior trees, state trees |
 | `animation_authoring` | Anim sequences, montages, blend spaces, widget motion |
 | `data_tables` | Data assets, tables, curves, input actions, mapping contexts |
 | `import` | Import jobs and import status |
-| `automation_testing` | Host-side automation runs, project automation context, and PIE lifecycle control |
+| `project_control` | Editor-session binding, launch/wait, project automation context, PIE lifecycle control, and code-sync flows |
+| `automation_testing` | Host-side automation runs and automation result polling |
 | `analysis` | Blueprint review and project asset audits |
 | `project_intelligence` | Editor context, project indexing, ranked snippet search |
 | `verification` | Widget captures, editor/runtime screenshots, comparisons, list/cleanup, and motion verification |
