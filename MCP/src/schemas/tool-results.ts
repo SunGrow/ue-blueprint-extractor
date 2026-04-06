@@ -265,6 +265,83 @@ export const EditorContextResultSchema = toolResultSchema.extend({
   unsupportedSections: z.array(z.string()).optional(),
 });
 
+export const nameCountSchema = z.object({
+  name: z.string(),
+  count: z.number().int().min(0),
+});
+
+export const OutputLogEntrySchema = z.object({
+  sequence: z.number().int().min(0),
+  category: z.string(),
+  verbosity: z.string(),
+  message: z.string(),
+  capturedAtUtc: z.string(),
+  engineTime: z.number().optional(),
+});
+
+export const ReadOutputLogResultSchema = toolResultSchema.extend({
+  snapshotAtUtc: z.string(),
+  bufferedCount: z.number().int().min(0),
+  matchedCount: z.number().int().min(0),
+  returnedCount: z.number().int().min(0),
+  offset: z.number().int().min(0),
+  limit: z.number().int().min(1),
+  hasMore: z.boolean(),
+  categoryCounts: z.array(nameCountSchema),
+  verbosityCounts: z.array(nameCountSchema),
+  entries: z.array(OutputLogEntrySchema),
+});
+
+export const MessageLogListingSummarySchema = z.object({
+  listingName: z.string(),
+  listingLabel: z.string().optional(),
+  registered: z.boolean(),
+  messageCount: z.number().int().min(0).optional(),
+  filteredMessageCount: z.number().int().min(0).optional(),
+  filterCount: z.number().int().min(0).optional(),
+});
+
+export const ListMessageLogListingsResultSchema = toolResultSchema.extend({
+  snapshotAtUtc: z.string(),
+  discoveryMode: z.literal('known_candidates'),
+  candidateCount: z.number().int().min(0),
+  listingCount: z.number().int().min(0),
+  includeUnregistered: z.boolean(),
+  listings: z.array(MessageLogListingSummarySchema),
+});
+
+export const MessageLogTokenSchema = z.object({
+  type: z.string(),
+  text: z.string(),
+});
+
+export const MessageLogEntrySchema = z.object({
+  index: z.number().int().min(0),
+  severity: z.string(),
+  text: z.string(),
+  identifier: z.string().optional(),
+  tokenCount: z.number().int().min(0),
+  hasMessageLink: z.boolean(),
+  messageLinkText: z.string().optional(),
+  tokens: z.array(MessageLogTokenSchema).optional(),
+});
+
+export const ReadMessageLogResultSchema = toolResultSchema.extend({
+  snapshotAtUtc: z.string(),
+  listingName: z.string(),
+  listingLabel: z.string().optional(),
+  messageCount: z.number().int().min(0),
+  filteredMessageCount: z.number().int().min(0),
+  matchedCount: z.number().int().min(0),
+  returnedCount: z.number().int().min(0),
+  offset: z.number().int().min(0),
+  limit: z.number().int().min(1),
+  hasMore: z.boolean(),
+  filterCount: z.number().int().min(0),
+  severityCounts: z.array(nameCountSchema),
+  entries: z.array(MessageLogEntrySchema),
+});
+
 export const verificationSurfaceSchema = z.enum([
   'editor_offscreen',
   'pie_runtime',

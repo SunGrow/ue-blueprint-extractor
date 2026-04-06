@@ -11,7 +11,12 @@ import {
   explainProjectResolutionFailure,
   supportsConnectionProbe,
 } from '../helpers/project-utils.js';
-import { EditorContextResultSchema } from '../schemas/tool-results.js';
+import {
+  EditorContextResultSchema,
+  ListMessageLogListingsResultSchema,
+  ReadMessageLogResultSchema,
+  ReadOutputLogResultSchema,
+} from '../schemas/tool-results.js';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
 import { filesystemPathsEqual } from '../helpers/workspace-project.js';
 import { ActiveEditorSession } from '../active-editor-session.js';
@@ -463,6 +468,165 @@ export function registerProjectControlTools({
     async () => {
       try {
         const parsed = await getEditorContext(activeEditorSession);
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'read_output_log',
+    {
+      title: 'Read Output Log',
+      description: 'Read buffered Unreal Editor Output Log entries with query, category, verbosity, time, and paging filters.',
+      inputSchema: {
+        query: z.string().optional().describe(
+          'Case-insensitive substring filter applied to message text and category.',
+        ),
+        categories: z.array(z.string()).default([]).describe(
+          'Exact log categories to include.',
+        ),
+        verbosities: z.array(z.string()).default([]).describe(
+          'Verbosity values to include (error, warning, log, verbose, etc.).',
+        ),
+        since_utc: z.string().optional().describe(
+          'ISO-8601 lower bound for captured entries.',
+        ),
+        since_seconds: z.number().min(0).optional().describe(
+          'Include only entries captured within the last N seconds.',
+        ),
+        offset: z.number().int().min(0).default(0).describe(
+          'Matched-entry offset after filtering.',
+        ),
+        limit: z.number().int().min(1).max(1000).default(200).describe(
+          'Max entries to return.',
+        ),
+        reverse: z.boolean().default(true).describe(
+          'Return newest entries first when true.',
+        ),
+      },
+      outputSchema: ReadOutputLogResultSchema,
+      annotations: {
+        title: 'Read Output Log',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ query, categories, verbosities, since_utc, since_seconds, offset, limit, reverse }) => {
+      try {
+        const parsed = await callSubsystemJson('ReadOutputLog', {
+          FilterJson: JSON.stringify({
+            query,
+            categories,
+            verbosities,
+            since_utc,
+            since_seconds,
+            offset,
+            limit,
+            reverse,
+          }),
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_message_log_listings',
+    {
+      title: 'List Message Log Listings',
+      description: 'List registered Unreal Message Log listings from known built-in and caller-supplied candidate names.',
+      inputSchema: {
+        candidate_names: z.array(z.string()).default([]).describe(
+          'Extra listing names to probe in addition to built-in candidates.',
+        ),
+        include_unregistered: z.boolean().default(false).describe(
+          'Include probed names that are currently not registered.',
+        ),
+      },
+      outputSchema: ListMessageLogListingsResultSchema,
+      annotations: {
+        title: 'List Message Log Listings',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ candidate_names, include_unregistered }) => {
+      try {
+        const parsed = await callSubsystemJson('ListMessageLogListings', {
+          PayloadJson: JSON.stringify({
+            candidate_names,
+            include_unregistered,
+          }),
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'read_message_log',
+    {
+      title: 'Read Message Log',
+      description: 'Read one Unreal Message Log listing with text, severity, token, and paging filters.',
+      inputSchema: {
+        listing_name: z.string().describe(
+          'Registered Message Log listing name.',
+        ),
+        query: z.string().optional().describe(
+          'Case-insensitive substring filter applied to message and token text.',
+        ),
+        severities: z.array(z.string()).default([]).describe(
+          'Severity values to include (error, warning, info, performance_warning).',
+        ),
+        token_types: z.array(z.string()).default([]).describe(
+          'Token kinds to include (text, object, asset_name, url, etc.).',
+        ),
+        include_tokens: z.boolean().default(false).describe(
+          'Include per-token payloads in each entry.',
+        ),
+        offset: z.number().int().min(0).default(0).describe(
+          'Matched-entry offset after filtering.',
+        ),
+        limit: z.number().int().min(1).max(1000).default(200).describe(
+          'Max entries to return.',
+        ),
+        reverse: z.boolean().default(true).describe(
+          'Return newest filtered entries first when true.',
+        ),
+      },
+      outputSchema: ReadMessageLogResultSchema,
+      annotations: {
+        title: 'Read Message Log',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ listing_name, query, severities, token_types, include_tokens, offset, limit, reverse }) => {
+      try {
+        const parsed = await callSubsystemJson('ReadMessageLog', {
+          ListingName: listing_name,
+          FilterJson: JSON.stringify({
+            query,
+            severities,
+            token_types,
+            include_tokens,
+            offset,
+            limit,
+            reverse,
+          }),
+        });
         return jsonToolSuccess(parsed);
       } catch (error) {
         return jsonToolError(error);

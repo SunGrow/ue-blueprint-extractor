@@ -11,7 +11,7 @@ export const serverInstructions = [
   'Use find_and_extract for search+extract in one call from the default core surface. Use search_assets when you only need to locate assets.',
   'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance. Use activate_workflow_scope explicitly when the tool family is not in the current profile.',
   // Deferred tool directory (tools available via activate_workflow_scope)
-  'Deferred tool families — widget_authoring_structure: recipe-first widget authoring, tree replacement, diff/patch DSLs, and focused structural edits. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction, and preview capture. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create_material_setup, modify_material DSL/batch authoring, material_graph_operation, and material instances. blueprint_authoring: scaffold_blueprint, modify_blueprint_graphs DSL authoring, member edits, and Live Coding trigger. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. project_control: editor-session binding, launch/wait, project automation context, PIE lifecycle control, host build/restart/sync flows, and apply_window_ui_changes. automation_testing: run/get/list automation tests. verification: widget captures, editor screenshots, runtime screenshots, and comparisons. analysis: deterministic Blueprint review and asset audits. project_intelligence: editor context, project indexing, and metadata-first context search.',
+  'Deferred tool families — widget_authoring_structure: recipe-first widget authoring, tree replacement, diff/patch DSLs, and focused structural edits. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction, and preview capture. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create_material_setup, modify_material DSL/batch authoring, material_graph_operation, and material instances. blueprint_authoring: scaffold_blueprint, modify_blueprint_graphs DSL authoring, member edits, and Live Coding trigger. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. project_control: editor-session binding, launch/wait, project automation context, Output Log and Message Log inspection, PIE lifecycle control, host build/restart/sync flows, and apply_window_ui_changes. automation_testing: run/get/list automation tests. verification: widget captures, editor screenshots, runtime screenshots, and comparisons. analysis: deterministic Blueprint review and asset audits. project_intelligence: editor context, project indexing, and metadata-first context search.',
   // Extraction
   'All extract_* tools default to compact: true. Pass compact: false for verbose output.',
   // Search
@@ -28,6 +28,7 @@ export const serverInstructions = [
   'Each MCP session owns one active editor selection. Use list_running_editors, get_active_editor, select_editor, clear_editor_selection, and launch_editor to control which Unreal Editor instance this session targets.',
   'Multiple simultaneous Unreal Editors must expose distinct Remote Control ports. When the workspace project matches multiple running editors, the server will reject the ambiguity until select_editor chooses one explicitly.',
   'Use wait_for_editor after restart windows or transient Remote Control disconnects before retrying editor-backed tools.',
+  'Use read_output_log for buffered editor log lines, list_message_log_listings to discover registered Message Log listings, and read_message_log to inspect one listing when UE reports editor-side failures.',
   'Prefer validate_only=true the first time you author a new asset family or payload shape.',
   // Input authoring
   'Use create_input_action, modify_input_action, create_input_mapping_context, and modify_input_mapping_context for Enhanced Input authoring.',
@@ -92,6 +93,9 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['search_project_context', 'both'],
   ['audit_project_assets', 'both'],
   ['get_project_automation_context', 'both'],
+  ['read_output_log', 'editor_only'],
+  ['list_message_log_listings', 'editor_only'],
+  ['read_message_log', 'editor_only'],
   ['get_import_job', 'both'],
   ['list_import_jobs', 'both'],
   ['get_automation_test_run', 'both'],
@@ -349,7 +353,7 @@ export function classifyRecoverableToolFailure(toolName: string, message: string
       code: 'invalid_response',
       recoverable: true,
       next_steps: [
-        'Check UE editor output log for errors',
+        'Call read_output_log or read_message_log to inspect editor-side errors',
         'The editor may have returned an HTML error page instead of JSON',
         'Retry the operation — this may be a transient serialization issue',
       ],

@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Register BlueprintExtractor MCP server with OpenCode.
 # Usage: ./install-opencode-mcp.sh [--local]
-# Default uses npx. --local builds from source.
+# Default installs the published MCP package into the OpenCode config dir.
+# --local builds from source instead of installing from npm.
 
 SERVER_NAME="blueprint-extractor"
 LOCAL=false
@@ -55,7 +56,16 @@ if ! command -v node &>/dev/null; then
     exit 1
 fi
 
-COMMAND_JSON='["npx","-y","blueprint-extractor-mcp@latest"]'
+if ! command -v npm &>/dev/null; then
+    error "npm not found. Install Node.js 18+ and re-run."
+    exit 1
+fi
+
+CONFIG_FILE="$(resolve_config_file)"
+CONFIG_DIR="$(dirname "${CONFIG_FILE}")"
+mkdir -p "${CONFIG_DIR}"
+
+COMMAND_JSON=''
 
 if [ "$LOCAL" = true ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,11 +89,19 @@ if [ "$LOCAL" = true ]; then
     fi
 
     COMMAND_JSON="$(node -e 'console.log(JSON.stringify(["node", process.argv[1]]))' "${DIST_INDEX}")"
-fi
+else
+    INSTALLED_BIN="${CONFIG_DIR}/node_modules/.bin/blueprint-extractor-mcp"
 
-CONFIG_FILE="$(resolve_config_file)"
-CONFIG_DIR="$(dirname "${CONFIG_FILE}")"
-mkdir -p "${CONFIG_DIR}"
+    info "Installing Blueprint Extractor MCP into ${CONFIG_DIR}..."
+    npm install --prefix "${CONFIG_DIR}" --silent --save-exact blueprint-extractor-mcp@latest
+
+    if [ ! -f "${INSTALLED_BIN}" ]; then
+        error "Installed MCP binary not found at ${INSTALLED_BIN}"
+        exit 1
+    fi
+
+    COMMAND_JSON="$(node -e 'console.log(JSON.stringify([process.argv[1]]))' "${INSTALLED_BIN}")"
+fi
 
 ENV_JSON='{"UE_REMOTE_CONTROL_PORT":"30010"}'
 

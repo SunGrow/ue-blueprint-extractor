@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { installNormalizedToolRegistration } from '../src/helpers/tool-registration.js';
@@ -443,5 +445,44 @@ describe('ToolSurfaceManager integration with server factory', () => {
     expect(supporting.toolSurfaceManager.getMode()).toBe('scoped');
     expect(fallback.toolSurfaceManager.getProfile()).toBe('expert');
     expect(fallback.toolSurfaceManager.getMode()).toBe('flat');
+  });
+
+  it('hides MCP prompts from OpenCode clients to avoid client-side prompt flood warnings', async () => {
+    const openCodeServer = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+    const genericServer = createBlueprintExtractorServer(
+      { callSubsystem: async () => '{}' } as any,
+      { runBuild: async () => ({}) } as any,
+      { startRun: async () => ({}), getRunDetails: async () => ({}), listRuns: async () => ({}) } as any,
+    );
+
+    const openCodeClient = new Client({ name: 'OpenCode', version: '1.3.15' });
+    const genericClient = new Client({ name: 'blueprint-extractor-tests', version: '1.0.0' });
+    const [openCodeClientTransport, openCodeServerTransport] = InMemoryTransport.createLinkedPair();
+    const [genericClientTransport, genericServerTransport] = InMemoryTransport.createLinkedPair();
+
+    await openCodeServer.server.connect(openCodeServerTransport);
+    await genericServer.server.connect(genericServerTransport);
+    await openCodeClient.connect(openCodeClientTransport);
+    await genericClient.connect(genericClientTransport);
+
+    try {
+      const openCodePrompts = await openCodeClient.listPrompts();
+      const genericPrompts = await genericClient.listPrompts();
+
+      expect(openCodePrompts.prompts).toHaveLength(0);
+      expect(genericPrompts.prompts.length).toBeGreaterThan(0);
+      expect(genericPrompts.prompts.some((prompt) => prompt.name === 'normalize_ui_design_input')).toBe(true);
+    } finally {
+      await Promise.allSettled([
+        openCodeClient.close(),
+        genericClient.close(),
+        openCodeServer.server.close(),
+        genericServer.server.close(),
+      ]);
+    }
   });
 });

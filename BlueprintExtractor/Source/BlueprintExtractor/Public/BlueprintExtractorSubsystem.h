@@ -490,6 +490,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString GetEditorContext();
 
+	/** Returns filtered entries from the editor Output Log ring buffer captured by the plugin module. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ReadOutputLog(const FString& FilterJson = TEXT(""));
+
+	/** Lists registered Message Log listings from known built-in and caller-supplied candidate names. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ListMessageLogListings(const FString& PayloadJson = TEXT(""));
+
+	/** Returns filtered messages from one registered Message Log listing. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ReadMessageLog(const FString& ListingName, const FString& FilterJson = TEXT(""));
+
 	/** Requests a Play-In-Editor or Simulate-In-Editor session. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString StartPIE(const bool bSimulateInEditor = false);

@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # SYNOPSIS: Register BlueprintExtractor MCP server with OpenCode.
-# -Local switch builds from source instead of using npx.
+# Default mode installs the published MCP package into the OpenCode config dir.
+# -Local switch builds from source instead of installing from npm.
 
 [CmdletBinding()]
 param(
@@ -57,7 +58,16 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-$commandJson = '["npx","-y","blueprint-extractor-mcp@latest"]'
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Err 'npm not found. Install Node.js 18+ and re-run.'
+    exit 1
+}
+
+$ConfigFile = Get-OpenCodeConfigPath
+$ConfigDir = Split-Path -Parent $ConfigFile
+New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+
+$commandJson = $null
 
 if ($Local) {
     $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -88,11 +98,21 @@ if ($Local) {
 
     $commandJson = & node -e "console.log(JSON.stringify(['node', process.argv[1]]))" $DistIndex
     Assert-LastExitCode 'Failed to prepare the local OpenCode command.'
-}
+} else {
+    $InstalledBin = Join-Path $ConfigDir 'node_modules\.bin\blueprint-extractor-mcp.cmd'
 
-$ConfigFile = Get-OpenCodeConfigPath
-$ConfigDir = Split-Path -Parent $ConfigFile
-New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    Write-Info "Installing Blueprint Extractor MCP into $ConfigDir..."
+    & npm install --prefix $ConfigDir --silent --save-exact blueprint-extractor-mcp@latest 2>&1 | Out-Null
+    Assert-LastExitCode 'npm install failed.'
+
+    if (-not (Test-Path $InstalledBin)) {
+        Write-Err "Installed MCP binary not found at $InstalledBin"
+        exit 1
+    }
+
+    $commandJson = & node -e "console.log(JSON.stringify([process.argv[1]]))" $InstalledBin
+    Assert-LastExitCode 'Failed to prepare the installed OpenCode command.'
+}
 
 $commandJsonBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($commandJson))
 $envJsonBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"UE_REMOTE_CONTROL_PORT":"30010"}'))

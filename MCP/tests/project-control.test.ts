@@ -2033,6 +2033,182 @@ describe('registerProjectControlTools', () => {
     expect(activeEditorSession.getEditorContext).toHaveBeenCalledTimes(1);
   });
 
+  it('reads Output Log entries through the subsystem with filters', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'read_output_log',
+      snapshotAtUtc: '2026-04-06T00:00:00Z',
+      bufferedCount: 12,
+      matchedCount: 2,
+      returnedCount: 2,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      categoryCounts: [{ name: 'LogBlueprintExtractor', count: 2 }],
+      verbosityCounts: [{ name: 'error', count: 2 }],
+      entries: [{ sequence: 12, category: 'LogBlueprintExtractor', verbosity: 'error', message: 'bad thing', capturedAtUtc: '2026-04-06T00:00:00Z' }],
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ engineRoot: 'C:/UE', projectFilePath: 'C:/Proj/Proj.uproject' })),
+      resolveProjectInputs: vi.fn(async () => createResolvedProjectInputs()),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('read_output_log').handler({
+      query: 'bad',
+      categories: ['LogBlueprintExtractor'],
+      verbosities: ['error'],
+      since_seconds: 60,
+      offset: 0,
+      limit: 50,
+      reverse: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ReadOutputLog', {
+      FilterJson: JSON.stringify({
+        query: 'bad',
+        categories: ['LogBlueprintExtractor'],
+        verbosities: ['error'],
+        since_utc: undefined,
+        since_seconds: 60,
+        offset: 0,
+        limit: 50,
+        reverse: true,
+      }),
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'read_output_log',
+      matchedCount: 2,
+    });
+  });
+
+  it('lists Message Log listings through the subsystem', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'list_message_log_listings',
+      snapshotAtUtc: '2026-04-06T00:00:00Z',
+      discoveryMode: 'known_candidates',
+      candidateCount: 3,
+      listingCount: 2,
+      includeUnregistered: true,
+      listings: [
+        { listingName: 'PIE', registered: true, listingLabel: 'Play In Editor', messageCount: 3, filteredMessageCount: 3, filterCount: 2 },
+        { listingName: 'CustomLog', registered: false },
+      ],
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ engineRoot: 'C:/UE', projectFilePath: 'C:/Proj/Proj.uproject' })),
+      resolveProjectInputs: vi.fn(async () => createResolvedProjectInputs()),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('list_message_log_listings').handler({
+      candidate_names: ['PIE', 'CustomLog'],
+      include_unregistered: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ListMessageLogListings', {
+      PayloadJson: JSON.stringify({
+        candidate_names: ['PIE', 'CustomLog'],
+        include_unregistered: true,
+      }),
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'list_message_log_listings',
+      listingCount: 2,
+    });
+  });
+
+  it('reads one Message Log listing through the subsystem with token filters', async () => {
+    const registry = createToolRegistry();
+    const callSubsystemJson = vi.fn(async () => ({
+      success: true,
+      operation: 'read_message_log',
+      snapshotAtUtc: '2026-04-06T00:00:00Z',
+      listingName: 'PIE',
+      listingLabel: 'Play In Editor',
+      messageCount: 4,
+      filteredMessageCount: 4,
+      matchedCount: 1,
+      returnedCount: 1,
+      offset: 0,
+      limit: 10,
+      hasMore: false,
+      filterCount: 2,
+      severityCounts: [{ name: 'error', count: 1 }],
+      entries: [{ index: 0, severity: 'error', text: 'No owning player', tokenCount: 0, hasMessageLink: false }],
+    }));
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController: createProjectController(),
+      callSubsystemJson,
+      getProjectAutomationContext: vi.fn(async () => ({ engineRoot: 'C:/UE', projectFilePath: 'C:/Proj/Proj.uproject' })),
+      resolveProjectInputs: vi.fn(async () => createResolvedProjectInputs()),
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('read_message_log').handler({
+      listing_name: 'PIE',
+      query: 'player',
+      severities: ['error'],
+      token_types: ['text'],
+      include_tokens: true,
+      offset: 0,
+      limit: 10,
+      reverse: true,
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('ReadMessageLog', {
+      ListingName: 'PIE',
+      FilterJson: JSON.stringify({
+        query: 'player',
+        severities: ['error'],
+        token_types: ['text'],
+        include_tokens: true,
+        offset: 0,
+        limit: 10,
+        reverse: true,
+      }),
+    });
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'read_message_log',
+      listingName: 'PIE',
+      matchedCount: 1,
+    });
+  });
+
   // --- Phase 5: critical coverage gaps ---
 
   it('sync_project_code restart_first=true orchestrates shutdown-build-launch sequence', async () => {

@@ -278,6 +278,9 @@ describe('createBlueprintExtractorServer', () => {
     const clearEditorSelection = tools.tools.find((tool) => tool.name === 'clear_editor_selection');
     const launchEditor = tools.tools.find((tool) => tool.name === 'launch_editor');
     const getEditorContext = tools.tools.find((tool) => tool.name === 'get_editor_context');
+    const readOutputLog = tools.tools.find((tool) => tool.name === 'read_output_log');
+    const listMessageLogListings = tools.tools.find((tool) => tool.name === 'list_message_log_listings');
+    const readMessageLog = tools.tools.find((tool) => tool.name === 'read_message_log');
     const reviewBlueprint = tools.tools.find((tool) => tool.name === 'review_blueprint');
     const refreshProjectIndex = tools.tools.find((tool) => tool.name === 'refresh_project_index');
     const getProjectIndexStatus = tools.tools.find((tool) => tool.name === 'get_project_index_status');
@@ -286,7 +289,7 @@ describe('createBlueprintExtractorServer', () => {
 
     expect(resourceTemplates.resourceTemplates).toHaveLength(4);
     expect(resources.resources).toHaveLength(38);
-    expect(tools.tools).toHaveLength(109);
+    expect(tools.tools).toHaveLength(112);
     expect(resourceUris).toContain('blueprint://scopes');
     expect(resourceUris).toContain('blueprint://write-capabilities');
     expect(resourceUris).toContain('blueprint://import-capabilities');
@@ -333,6 +336,9 @@ describe('createBlueprintExtractorServer', () => {
     expect(tools.tools.some((tool) => tool.name === 'compile_material_asset')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'compile_project_code')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'get_project_automation_context')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'read_output_log')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'list_message_log_listings')).toBe(true);
+    expect(tools.tools.some((tool) => tool.name === 'read_message_log')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'trigger_live_coding')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'restart_editor')).toBe(true);
     expect(tools.tools.some((tool) => tool.name === 'wait_for_editor')).toBe(true);
@@ -419,6 +425,9 @@ describe('createBlueprintExtractorServer', () => {
     expectSchemaProperty(getAutomationTestRun, 'artifacts');
     expectSchemaProperty(listAutomationTestRuns, 'runs');
     expectSchemaProperty(getEditorContext, 'selectedAssetPaths');
+    expectSchemaProperty(readOutputLog, 'entries');
+    expectSchemaProperty(listMessageLogListings, 'listings');
+    expectSchemaProperty(readMessageLog, 'entries');
     expectSchemaProperty(reviewBlueprint, 'findings');
     expectSchemaProperty(refreshProjectIndex, 'entry_count');
     expectSchemaProperty(getProjectIndexStatus, 'stale');
@@ -445,6 +454,9 @@ describe('createBlueprintExtractorServer', () => {
     expect(relaunchPie?.annotations?.readOnlyHint).toBe(false);
     expect(waitForEditor?.annotations?.readOnlyHint).toBe(true);
     expect(getEditorContext?.annotations?.readOnlyHint).toBe(true);
+    expect(readOutputLog?.annotations?.readOnlyHint).toBe(true);
+    expect(listMessageLogListings?.annotations?.readOnlyHint).toBe(true);
+    expect(readMessageLog?.annotations?.readOnlyHint).toBe(true);
     expect(createCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
     expect(extractCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(true);
     expect(modifyCommonUIButtonStyle?.annotations?.readOnlyHint).toBe(false);
@@ -2689,6 +2701,164 @@ describe('createBlueprintExtractorServer', () => {
       {
         method: 'GetProjectAutomationContext',
         params: {},
+      },
+    ]);
+  });
+
+  it('reads Output Log entries through the subsystem', async () => {
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'ReadOutputLog') {
+        return JSON.stringify({
+          success: true,
+          operation: 'read_output_log',
+          snapshotAtUtc: '2026-04-06T00:00:00Z',
+          bufferedCount: 20,
+          matchedCount: 1,
+          returnedCount: 1,
+          offset: 0,
+          limit: 25,
+          hasMore: false,
+          categoryCounts: [{ name: 'LogBlueprintExtractor', count: 1 }],
+          verbosityCounts: [{ name: 'error', count: 1 }],
+          entries: [{ sequence: 20, category: 'LogBlueprintExtractor', verbosity: 'error', message: 'Subsystem failed', capturedAtUtc: '2026-04-06T00:00:00Z' }],
+          params,
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
+    cleanups.push(harness.close);
+
+    const result = await harness.client.callTool({
+      name: 'read_output_log',
+      arguments: {
+        query: 'Subsystem',
+        categories: ['LogBlueprintExtractor'],
+        verbosities: ['error'],
+        limit: 25,
+      },
+    });
+
+    expect(parseToolResult(result)).toMatchObject({
+      operation: 'read_output_log',
+      matchedCount: 1,
+      entries: [{ message: 'Subsystem failed' }],
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ReadOutputLog',
+        params: {
+          FilterJson: JSON.stringify({
+            query: 'Subsystem',
+            categories: ['LogBlueprintExtractor'],
+            verbosities: ['error'],
+            since_utc: undefined,
+            since_seconds: undefined,
+            offset: 0,
+            limit: 25,
+            reverse: true,
+          }),
+        },
+      },
+    ]);
+  });
+
+  it('lists and reads Message Log listings through the subsystem', async () => {
+    const fakeClient = new FakeUEClient((method, params) => {
+      if (method === 'ListMessageLogListings') {
+        return JSON.stringify({
+          success: true,
+          operation: 'list_message_log_listings',
+          snapshotAtUtc: '2026-04-06T00:00:00Z',
+          discoveryMode: 'known_candidates',
+          candidateCount: 2,
+          listingCount: 1,
+          includeUnregistered: true,
+          listings: [{ listingName: 'PIE', registered: true, listingLabel: 'Play In Editor', messageCount: 2, filteredMessageCount: 2, filterCount: 1 }],
+          params,
+        });
+      }
+      if (method === 'ReadMessageLog') {
+        return JSON.stringify({
+          success: true,
+          operation: 'read_message_log',
+          snapshotAtUtc: '2026-04-06T00:00:00Z',
+          listingName: 'PIE',
+          listingLabel: 'Play In Editor',
+          messageCount: 2,
+          filteredMessageCount: 2,
+          matchedCount: 1,
+          returnedCount: 1,
+          offset: 0,
+          limit: 10,
+          hasMore: false,
+          filterCount: 1,
+          severityCounts: [{ name: 'error', count: 1 }],
+          entries: [{ index: 0, severity: 'error', text: 'Missing player controller', tokenCount: 0, hasMessageLink: false }],
+          params,
+        });
+      }
+
+      return JSON.stringify({ error: `Unexpected method ${method}` });
+    });
+    const harness = await connectInMemoryServer(createBlueprintExtractorServer(fakeClient).server);
+    cleanups.push(harness.close);
+
+    const listResult = await harness.client.callTool({
+      name: 'list_message_log_listings',
+      arguments: {
+        candidate_names: ['PIE', 'CustomLog'],
+        include_unregistered: true,
+      },
+    });
+    const readResult = await harness.client.callTool({
+      name: 'read_message_log',
+      arguments: {
+        listing_name: 'PIE',
+        query: 'player',
+        severities: ['error'],
+        token_types: ['text'],
+        include_tokens: true,
+        limit: 10,
+      },
+    });
+
+    expect(parseToolResult(listResult)).toMatchObject({
+      operation: 'list_message_log_listings',
+      listingCount: 1,
+      listings: [{ listingName: 'PIE', registered: true }],
+    });
+    expect(parseToolResult(readResult)).toMatchObject({
+      operation: 'read_message_log',
+      listingName: 'PIE',
+      matchedCount: 1,
+      entries: [{ text: 'Missing player controller' }],
+    });
+    expect(fakeClient.calls).toEqual([
+      {
+        method: 'ListMessageLogListings',
+        params: {
+          PayloadJson: JSON.stringify({
+            candidate_names: ['PIE', 'CustomLog'],
+            include_unregistered: true,
+          }),
+        },
+      },
+      {
+        method: 'ReadMessageLog',
+        params: {
+          ListingName: 'PIE',
+          FilterJson: JSON.stringify({
+            query: 'player',
+            severities: ['error'],
+            token_types: ['text'],
+            include_tokens: true,
+            offset: 0,
+            limit: 10,
+            reverse: true,
+          }),
+        },
       },
     ]);
   });

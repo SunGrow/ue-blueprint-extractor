@@ -186,7 +186,7 @@ const SCOPE_DEFINITIONS: Record<WorkflowScopeId, WorkflowScope> = {
     tools: [
       'list_running_editors', 'get_active_editor', 'select_editor', 'clear_editor_selection',
       'launch_editor', 'wait_for_editor',
-      'get_project_automation_context',
+      'get_project_automation_context', 'read_output_log', 'list_message_log_listings', 'read_message_log',
       'start_pie', 'stop_pie', 'relaunch_pie',
       'compile_project_code', 'restart_editor', 'sync_project_code',
       'apply_window_ui_changes',

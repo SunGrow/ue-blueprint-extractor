@@ -1050,6 +1050,53 @@ static bool RunEditorContextCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
+static bool RunEditorLogCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> OutputLogResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ReadOutputLog(TEXT("{\"limit\":25,\"reverse\":true}")),
+		TEXT("ReadOutputLog"));
+	if (!OutputLogResult.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestTrue(TEXT("Output log returns bufferedCount"), OutputLogResult->HasTypedField<EJson::Number>(TEXT("bufferedCount")));
+	Test.TestTrue(TEXT("Output log returns entries array"), OutputLogResult->HasTypedField<EJson::Array>(TEXT("entries")));
+
+	const TSharedPtr<FJsonObject> ListingsResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ListMessageLogListings(TEXT("{\"candidate_names\":[\"PIE\",\"MapCheck\"],\"include_unregistered\":true}")),
+		TEXT("ListMessageLogListings"));
+	if (!ListingsResult.IsValid())
+	{
+		return false;
+	}
+
+	Test.TestTrue(TEXT("Message log listing probe returns candidateCount"), ListingsResult->HasTypedField<EJson::Number>(TEXT("candidateCount")));
+	Test.TestTrue(TEXT("Message log listing probe returns listings array"), ListingsResult->HasTypedField<EJson::Array>(TEXT("listings")));
+
+	const TSharedPtr<FJsonObject> ReadMessageLogResult = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ReadMessageLog(TEXT("PIE"), TEXT("{\"limit\":25,\"reverse\":true}")),
+		TEXT("ReadMessageLog"));
+	if (!ReadMessageLogResult.IsValid())
+	{
+		return false;
+	}
+
+	FString ListingName;
+	Test.TestTrue(TEXT("ReadMessageLog returns listingName"), ReadMessageLogResult->TryGetStringField(TEXT("listingName"), ListingName) && ListingName == TEXT("PIE"));
+	Test.TestTrue(TEXT("ReadMessageLog returns entries array"), ReadMessageLogResult->HasTypedField<EJson::Array>(TEXT("entries")));
+	return true;
+}
+
 static bool RunRoundTripCoverage(FAutomationTestBase& Test)
 {
 	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
@@ -4541,6 +4588,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("PIEAndScreenshots"), [this]()
 		{
 			TestTrue(TEXT("PIE and screenshot coverage completes"), RunProjectControlCoverage(*this));
+		});
+
+		It(TEXT("EditorLogs"), [this]()
+		{
+			TestTrue(TEXT("Editor log coverage completes"), RunEditorLogCoverage(*this));
 		});
 	});
 

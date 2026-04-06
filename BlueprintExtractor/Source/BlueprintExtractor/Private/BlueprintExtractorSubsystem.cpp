@@ -2,6 +2,7 @@
 #include "BlueprintExtractorLibrary.h"
 #include "BlueprintExtractorModule.h"
 #include "BlueprintExtractorSettings.h"
+#include "Diagnostics/BlueprintExtractorLogAccess.h"
 #include "Authoring/AssetMutationHelpers.h"
 #include "Authoring/AnimMontageAuthoring.h"
 #include "Authoring/AnimSequenceAuthoring.h"
@@ -97,6 +98,24 @@ static FString SerializeJsonObject(const TSharedPtr<FJsonObject>& JsonObject)
 	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
 	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	return OutString;
+}
+
+static bool ParseOptionalJsonObject(const FString& JsonText, TSharedPtr<FJsonObject>& OutObject, FString& OutError)
+{
+	OutObject = MakeShared<FJsonObject>();
+	if (JsonText.IsEmpty())
+	{
+		return true;
+	}
+
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
+	if (!FJsonSerializer::Deserialize(Reader, OutObject) || !OutObject.IsValid())
+	{
+		OutError = TEXT("Invalid JSON payload");
+		return false;
+	}
+
+	return true;
 }
 
 static void SetSharedEditorContextFields(const TSharedPtr<FJsonObject>& Result, const FBlueprintExtractorModule* Module)
@@ -3131,6 +3150,63 @@ FString UBlueprintExtractorSubsystem::GetEditorContext()
 	Result->SetObjectField(TEXT("pieSummary"), BuildPieSummaryJson());
 	Result->SetBoolField(TEXT("partial"), UnsupportedSections.Num() > 0);
 	Result->SetArrayField(TEXT("unsupportedSections"), ToJsonStringArray(UnsupportedSections));
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ReadOutputLog(const FString& FilterJson)
+{
+	TSharedPtr<FJsonObject> ParsedFilters;
+	FString ParseError;
+	if (!ParseOptionalJsonObject(FilterJson, ParsedFilters, ParseError))
+	{
+		return MakeErrorJson(ParseError);
+	}
+
+	FString Error;
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorLogAccess::ReadOutputLog(ParsedFilters, Error);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(Error);
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ListMessageLogListings(const FString& PayloadJson)
+{
+	TSharedPtr<FJsonObject> ParsedPayload;
+	FString ParseError;
+	if (!ParseOptionalJsonObject(PayloadJson, ParsedPayload, ParseError))
+	{
+		return MakeErrorJson(ParseError);
+	}
+
+	FString Error;
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorLogAccess::ListMessageLogListings(ParsedPayload, Error);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(Error);
+	}
+
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ReadMessageLog(const FString& ListingName, const FString& FilterJson)
+{
+	TSharedPtr<FJsonObject> ParsedFilters;
+	FString ParseError;
+	if (!ParseOptionalJsonObject(FilterJson, ParsedFilters, ParseError))
+	{
+		return MakeErrorJson(ParseError);
+	}
+
+	FString Error;
+	const TSharedPtr<FJsonObject> Result = BlueprintExtractorLogAccess::ReadMessageLog(ListingName, ParsedFilters, Error);
+	if (!Result.IsValid())
+	{
+		return MakeErrorJson(Error);
+	}
+
 	return SerializeJsonObject(Result);
 }
 

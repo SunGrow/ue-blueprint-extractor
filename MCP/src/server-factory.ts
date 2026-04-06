@@ -1,4 +1,4 @@
-import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredPrompt, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { UEClient } from './ue-client.js';
 import { packageVersion } from './helpers/package-metadata.js';
@@ -86,6 +86,35 @@ export function createBlueprintExtractorServer(
     instructions: serverInstructions,
   });
   const defaultOutputSchema = toolResultSchema.catchall(z.unknown());
+  let promptsEnabled = true;
+
+  function setPromptSurfaceEnabled(registeredPrompts: Map<string, RegisteredPrompt>, enabled: boolean): boolean {
+    if (promptsEnabled === enabled) {
+      return false;
+    }
+
+    for (const registeredPrompt of registeredPrompts.values()) {
+      if (enabled) {
+        registeredPrompt.enable();
+      } else {
+        registeredPrompt.disable();
+      }
+    }
+
+    promptsEnabled = enabled;
+    return true;
+  }
+
+  function isOpenCodeClient(clientVersion: unknown): boolean {
+    if (!clientVersion || typeof clientVersion !== 'object') {
+      return false;
+    }
+
+    return ['name', 'title', 'description', 'websiteUrl'].some((field) => {
+      const value = (clientVersion as Record<string, unknown>)[field];
+      return typeof value === 'string' && /opencode/i.test(value);
+    });
+  }
 
   // Direct editor path — preserves callSubsystemJson error-checking layer and
   // avoids recursive executor routing while resolving commandlet fallback inputs.
@@ -179,11 +208,15 @@ export function createBlueprintExtractorServer(
     });
   }
 
-  registerServerResources({
+  const { registeredPrompts } = registerServerResources({
     server,
     automationController,
     callSubsystemJson,
   });
+
+  // OpenCode eagerly fetches every prompt on startup and currently surfaces a
+  // client-side drain-listener warning against larger prompt catalogs.
+  setPromptSurfaceEnabled(registeredPrompts, false);
 
   registerServerTools({
     server,
@@ -293,7 +326,17 @@ export function createBlueprintExtractorServer(
 
   // Wire oninitialized to detect client capabilities
   (server as any).server.oninitialized = () => {
-    const caps = (server as any).server.getClientCapabilities();
+    const lowLevelServer = (server as any).server;
+    const caps = lowLevelServer.getClientCapabilities();
+    const promptSurfaceChanged = setPromptSurfaceEnabled(
+      registeredPrompts,
+      !isOpenCodeClient(lowLevelServer.getClientVersion?.()),
+    );
+
+    if (promptSurfaceChanged && caps?.prompts?.listChanged) {
+      server.sendPromptListChanged();
+    }
+
     if (caps?.tools?.listChanged) {
       toolSurfaceManager.activateProfile('default');
     } else {

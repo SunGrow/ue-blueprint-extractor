@@ -23,7 +23,7 @@ Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotoc
  AI Assistant         stdio           MCP Server         HTTP :30010        Unreal Editor
  ─────────────  ◄────────────►  ─────────────────  ◄──────────────────►  ─────────────────
   Claude Code                     Node.js process                         Remote Control API
-  Codex / OpenCode                109 tools                               BlueprintExtractor
+  Codex / OpenCode                112 tools                               BlueprintExtractor
   ...                             38 resources                            plugin
                                   4 resource templates
                                   12 prompts
@@ -86,6 +86,10 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
 <tr><td><b>OpenCode</b></td></tr>
 <tr><td>
 
+```bash
+npm install --prefix ~/.config/opencode --save-exact blueprint-extractor-mcp@latest
+```
+
 ```jsonc
 // ~/.config/opencode/opencode.json
 {
@@ -93,7 +97,7 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
   "mcp": {
     "blueprint-extractor": {
       "type": "local",
-      "command": ["npx", "-y", "blueprint-extractor-mcp@latest"],
+      "command": ["/absolute/path/to/.config/opencode/node_modules/.bin/blueprint-extractor-mcp"],
       "enabled": true,
       "environment": {
         "UE_REMOTE_CONTROL_PORT": "30010"
@@ -106,7 +110,7 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
 </td></tr>
 </table>
 
-> On Windows, wrap `npx` with `cmd /c` if your shell requires it.
+> On Windows, point `command` at `C:\Users\you\.config\opencode\node_modules\.bin\blueprint-extractor-mcp.cmd`.
 
 <br>
 
@@ -127,7 +131,7 @@ Use `activate_tool_profile` to switch between the compact `default` surface and 
 | `animation_authoring` | Anim sequences, montages, blend spaces, and widget motion authoring |
 | `data_tables` | Data assets, data tables, curves, Input Actions, and Input Mapping Contexts |
 | `import` | Async asset import and import-job polling |
-| `project_control` | Editor-session binding, launch/wait, project automation context, PIE lifecycle control, host build/restart/sync, and `apply_window_ui_changes` |
+| `project_control` | Editor-session binding, launch/wait, project automation context, Output Log and Message Log inspection, PIE lifecycle control, host build/restart/sync, and `apply_window_ui_changes` |
 | `automation_testing` | Host-side automation runs and automation-run polling |
 | `analysis` | Deterministic Blueprint review and low-noise project asset audits |
 | `project_intelligence` | Bounded editor context, project indexing, freshness status, and snippet-first context search |

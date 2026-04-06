@@ -82,7 +82,7 @@ const ALL_TEST_TOOLS = [
   // project control
   'list_running_editors', 'get_active_editor', 'select_editor', 'clear_editor_selection',
   'launch_editor', 'wait_for_editor', 'compile_project_code', 'restart_editor', 'sync_project_code',
-  'get_project_automation_context', 'apply_window_ui_changes',
+  'get_project_automation_context', 'read_output_log', 'list_message_log_listings', 'read_message_log', 'apply_window_ui_changes',
   // automation
   'run_automation_tests', 'get_automation_test_run', 'list_automation_test_runs',
   'start_pie', 'stop_pie', 'relaunch_pie',
@@ -287,6 +287,9 @@ describe('ToolSurfaceManager', () => {
       expect(active.has('launch_editor')).toBe(true);
       expect(active.has('wait_for_editor')).toBe(true);
       expect(active.has('get_project_automation_context')).toBe(true);
+      expect(active.has('read_output_log')).toBe(true);
+      expect(active.has('list_message_log_listings')).toBe(true);
+      expect(active.has('read_message_log')).toBe(true);
       expect(active.has('start_pie')).toBe(true);
       expect(active.has('stop_pie')).toBe(true);
       expect(active.has('relaunch_pie')).toBe(true);

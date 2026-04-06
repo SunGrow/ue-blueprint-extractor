@@ -82,6 +82,9 @@ Task-aware families currently include:
 - `activate_tool_profile` switches between `default` (compact scoped surface) and `expert` (full flat surface).
 - `get_project_automation_context` surfaces the editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state used by project-control fallbacks and PIE guards.
 - `get_editor_context` is the separate read-only editor-state snapshot for selected assets, selected actors, open asset editors, active level, and PIE summary. It remains session-bound, bounded, and explicitly query-only.
+- `read_output_log` returns buffered Output Log entries with query, category, verbosity, time-window, and paging filters.
+- `list_message_log_listings` probes known built-in plus caller-supplied candidate listing names and reports which Message Log listings are currently registered.
+- `read_message_log` reads one registered Message Log listing with severity, token-type, text, and paging filters. Message Log timestamps are not part of Unreal's public listing API, so the tool returns current listing snapshots rather than historical timestamps.
 - `start_pie`, `stop_pie`, and `relaunch_pie` are the explicit PIE lifecycle controls. Use them for live editor state, not as a replacement for automation-backed runtime verification.
 - `wait_for_editor` polls Remote Control once per second and returns `connected`, `elapsedMs`, `timeoutMs`, and `attempts`, with `editor_unavailable` when the timeout elapses.
 - `trigger_live_coding` returns `fallbackRecommended` and a normalized `reason` when editor-side Live Coding cannot apply the requested change. If a recent external build exists, it is surfaced as `lastExternalBuild`.

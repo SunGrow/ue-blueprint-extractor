@@ -225,6 +225,9 @@ export function collectRelatedResources(toolName: string): string[] {
     || toolName === 'start_pie'
     || toolName === 'stop_pie'
     || toolName === 'relaunch_pie'
+    || toolName === 'read_output_log'
+    || toolName === 'list_message_log_listings'
+    || toolName === 'read_message_log'
   ) {
     resources.add('blueprint://project-automation');
   }

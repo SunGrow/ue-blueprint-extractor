@@ -262,6 +262,9 @@ describe('collectRelatedResources', () => {
     expect(collectRelatedResources('wait_for_editor')).toContain('blueprint://project-automation');
     expect(collectRelatedResources('sync_project_code')).toContain('blueprint://project-automation');
     expect(collectRelatedResources('trigger_live_coding')).toContain('blueprint://project-automation');
+    expect(collectRelatedResources('read_output_log')).toContain('blueprint://project-automation');
+    expect(collectRelatedResources('list_message_log_listings')).toContain('blueprint://project-automation');
+    expect(collectRelatedResources('read_message_log')).toContain('blueprint://project-automation');
   });
 
   it('returns motion resources for animation and motion tools', () => {

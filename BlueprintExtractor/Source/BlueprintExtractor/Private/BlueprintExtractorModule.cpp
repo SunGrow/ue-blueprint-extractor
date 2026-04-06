@@ -1,5 +1,6 @@
 #include "BlueprintExtractorModule.h"
 #include "ContentBrowserExtension.h"
+#include "Diagnostics/BlueprintExtractorLogAccess.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
@@ -37,6 +38,7 @@ void FBlueprintExtractorModule::StartupModule()
 	EditorInstanceId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
 	RegistryFilePath = FPaths::Combine(GetEditorRegistryDirectory(), FString::Printf(TEXT("%s.json"), *EditorInstanceId));
 	RefreshEditorRegistry();
+	BlueprintExtractorLogAccess::Startup();
 	RegistryTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
 		FTickerDelegate::CreateRaw(this, &FBlueprintExtractorModule::HandleRegistryHeartbeat),
 		2.0f);
@@ -50,6 +52,7 @@ void FBlueprintExtractorModule::ShutdownModule()
 		FTSTicker::GetCoreTicker().RemoveTicker(RegistryTickerHandle);
 		RegistryTickerHandle.Reset();
 	}
+	BlueprintExtractorLogAccess::Shutdown();
 	RemoveEditorRegistryFile();
 	FContentBrowserExtension::UnregisterMenuExtension(ContentBrowserExtenderDelegateHandle);
 }

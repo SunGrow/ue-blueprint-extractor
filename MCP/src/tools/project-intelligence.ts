@@ -84,7 +84,8 @@ const publishedResourceContext: IndexedEntry[] = [
     uri: 'blueprint://project-automation',
     body: [
       'get_project_automation_context exposes coarse editor-derived identity and build context.',
-      'Project-control tools handle launch, wait, restart, PIE, external build, and live coding orchestration.',
+      'Project-control tools handle launch, wait, restart, PIE, external build, live coding orchestration, and editor log inspection.',
+      'Use read_output_log for buffered editor log lines, list_message_log_listings to probe Message Log listings, and read_message_log to inspect one listing.',
     ].join('\n'),
   },
   {

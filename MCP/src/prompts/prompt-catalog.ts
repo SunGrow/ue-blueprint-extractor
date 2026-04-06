@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredPrompt } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
   formatPromptBlock,
@@ -377,9 +377,11 @@ export const promptCatalog: Record<string, PromptCatalogEntry> = {
 
 export function registerPromptCatalog(
   server: Pick<McpServer, 'registerPrompt'>,
-): void {
+): Map<string, RegisteredPrompt> {
+  const registeredPrompts = new Map<string, RegisteredPrompt>();
+
   for (const [name, prompt] of Object.entries(promptCatalog)) {
-    server.registerPrompt(
+    const registeredPrompt = server.registerPrompt(
       name,
       {
         title: prompt.title,
@@ -397,5 +399,8 @@ export function registerPromptCatalog(
         }],
       }),
     );
+    registeredPrompts.set(name, registeredPrompt);
   }
+
+  return registeredPrompts;
 }

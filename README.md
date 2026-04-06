@@ -13,7 +13,7 @@ Blueprint Extractor connects a running Unreal Editor to MCP clients such as [Cla
 
 | Capability | Current contract |
 |---|---|
-| Tools | 109 |
+| Tools | 112 |
 | Resources | 38 |
 | Resource templates | 4 |
 | Prompts | 12 |
@@ -48,6 +48,7 @@ Supported families include Blueprint, WidgetBlueprint, StateTree, BehaviorTree, 
 | Author data and AI assets | `create_data_table`, `modify_curve`, `create_state_tree`, `modify_behavior_tree`, `modify_blackboard` |
 | Import external content | `import_assets`, `get_import_job`, `list_import_jobs` |
 | Verify visuals and motion | `capture_widget_preview`, `capture_editor_screenshot`, `capture_runtime_screenshot`, `compare_capture_to_reference`, `capture_widget_motion_checkpoints`, `compare_motion_capture_bundle` |
+| Inspect editor diagnostics | `read_output_log`, `list_message_log_listings`, `read_message_log` |
 | Drive the project lifecycle | `compile_project_code`, `trigger_live_coding`, `restart_editor`, `sync_project_code`, `run_automation_tests`, `start_pie`, `stop_pie`, `relaunch_pie` |
 
 ## Quick Start
@@ -91,6 +92,11 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- npx -y b
 codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c npx -y blueprint-extractor-mcp@latest
 ```
 
+```bash
+# OpenCode
+npm install --prefix ~/.config/opencode --save-exact blueprint-extractor-mcp@latest
+```
+
 ```jsonc
 // OpenCode global config (~/.config/opencode/opencode.json)
 {
@@ -98,7 +104,7 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c n
   "mcp": {
     "blueprint-extractor": {
       "type": "local",
-      "command": ["npx", "-y", "blueprint-extractor-mcp@latest"],
+      "command": ["/absolute/path/to/.config/opencode/node_modules/.bin/blueprint-extractor-mcp"],
       "enabled": true,
       "environment": {
         "UE_REMOTE_CONTROL_PORT": "30010"
@@ -107,6 +113,8 @@ codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 blueprint-extractor -- cmd /c n
   }
 }
 ```
+
+On Windows, point `command` at `C:\\Users\\you\\.config\\opencode\\node_modules\\.bin\\blueprint-extractor-mcp.cmd`.
 
 ### 3. Verify the connection
 
@@ -150,7 +158,7 @@ The server exposes a compact `default` tool profile and a full `expert` profile 
 | `animation_authoring` | Anim sequences, montages, blend spaces, widget motion |
 | `data_tables` | Data assets, tables, curves, input actions, mapping contexts |
 | `import` | Import jobs and import status |
-| `project_control` | Editor-session binding, launch/wait, project automation context, PIE lifecycle control, and code-sync flows |
+| `project_control` | Editor-session binding, launch/wait, project automation context, Output Log and Message Log inspection, PIE lifecycle control, and code-sync flows |
 | `automation_testing` | Host-side automation runs and automation result polling |
 | `analysis` | Blueprint review and project asset audits |
 | `project_intelligence` | Editor context, project indexing, ranked snippet search |
