@@ -128,7 +128,7 @@ describe('server bootstrap helpers', () => {
         operation: 'demo_tool',
         echoed: 'hello',
       });
-      expect(result.content?.some((entry) => entry.type === 'text')).toBe(false);
+      expect(result.content?.some((entry) => entry.type === 'text')).toBe(true);
       expect((result as { structuredContent?: unknown }).structuredContent).toMatchObject({
         operation: 'demo_tool',
         echoed: 'hello',

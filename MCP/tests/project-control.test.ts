@@ -307,7 +307,9 @@ describe('registerProjectControlTools', () => {
   it('binds the launched editor into the session', async () => {
     const registry = createToolRegistry();
     const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
-    const activeEditorSession = createActiveEditorSession();
+    const activeEditorSession = createActiveEditorSession({
+      listRunningEditors: vi.fn(async () => []),
+    });
 
     registerProjectControlTools({
       server: registry.server,
@@ -354,6 +356,47 @@ describe('registerProjectControlTools', () => {
     expect(parseDirectToolResult(result)).toMatchObject({
       success: true,
       operation: 'launch_editor',
+      activeEditor: {
+        instanceId: 'editor-1',
+      },
+    });
+  });
+
+  it('reuses an existing matching editor instead of launching a second one', async () => {
+    const registry = createToolRegistry();
+    const resolveProjectInputs = vi.fn(async () => createResolvedProjectInputs());
+    const activeEditorSession = createActiveEditorSession();
+    const projectController = createProjectController();
+
+    registerProjectControlTools({
+      server: registry.server,
+      client: {},
+      projectController,
+      callSubsystemJson: vi.fn(),
+      getProjectAutomationContext: vi.fn(),
+      resolveProjectInputs,
+      rememberExternalBuild: vi.fn(),
+      getLastExternalBuildContext: vi.fn(() => null),
+      clearProjectAutomationContext: vi.fn(),
+      activeEditorSession: activeEditorSession as any,
+      buildPlatformSchema,
+      buildConfigurationSchema,
+      editorPollIntervalMs: 5,
+    });
+
+    const result = await registry.getTool('launch_editor').handler({
+      reconnect_timeout_seconds: 30,
+    });
+
+    expect(activeEditorSession.listRunningEditors).toHaveBeenCalledTimes(1);
+    expect(activeEditorSession.selectEditor).toHaveBeenCalledWith({ instanceId: 'editor-1' });
+    expect(projectController.launchEditor).not.toHaveBeenCalled();
+    expect(activeEditorSession.bindLaunchedEditor).not.toHaveBeenCalled();
+    expect(parseDirectToolResult(result)).toMatchObject({
+      success: true,
+      operation: 'launch_editor',
+      launched: false,
+      reusedExistingEditor: true,
       activeEditor: {
         instanceId: 'editor-1',
       },

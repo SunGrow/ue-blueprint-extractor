@@ -18,7 +18,7 @@ describe('tool result normalizers', () => {
     },
   });
 
-  it('uses structuredContent as the canonical success payload and preserves non-text content', () => {
+  it('uses structuredContent as the canonical success payload, mirrors it as text, and preserves extra content', () => {
     const result = normalizeToolSuccess(
       'run_automation_tests',
       {
@@ -34,11 +34,25 @@ describe('tool result normalizers', () => {
       }],
     );
 
-    expect(result.content).toEqual([{
+    expect(result.content).toHaveLength(2);
+    expect(result.content[0]).toMatchObject({ type: 'text' });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({
+      success: true,
+      operation: 'run_automation_tests',
+      runId: 'run-123',
+      status: 'running',
+      terminal: false,
+      execution: {
+        mode: 'task_aware',
+        task_support: 'optional',
+        status: 'running',
+      },
+    });
+    expect(result.content[1]).toEqual({
       type: 'resource_link',
       uri: 'blueprint://test-runs/run-123/report.json',
       name: 'Automation Report',
-    }]);
+    });
     expect(result.structuredContent).toMatchObject({
       success: true,
       operation: 'run_automation_tests',
@@ -199,6 +213,12 @@ describe('tool result normalizers', () => {
     });
     expect(result.structuredContent).not.toHaveProperty('execution');
     expect(result.structuredContent).not.toHaveProperty('_hints');
+    expect(result.content[0]).toMatchObject({ type: 'text' });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({
+      success: true,
+      operation: 'extract_blueprint',
+      blueprint: '/Game/Test/BP_Foo',
+    });
   });
 
   it('omits next_steps and _hints from error envelopes', () => {

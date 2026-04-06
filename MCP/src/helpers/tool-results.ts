@@ -22,6 +22,18 @@ export function createToolResultNormalizers({
   taskAwareTools,
   classifyRecoverableToolFailure,
 }: CreateToolResultNormalizersOptions) {
+  function serializeSuccessEnvelope(envelope: Record<string, unknown>): string {
+    try {
+      return JSON.stringify(envelope);
+    } catch {
+      return JSON.stringify({
+        success: true,
+        operation: typeof envelope.operation === 'string' ? envelope.operation : 'unknown_operation',
+        message: 'Unable to serialize tool result payload.',
+      });
+    }
+  }
+
   function extractNonTextContent(
     existingResult?: Partial<CallToolResult> & Record<string, unknown>,
   ): ContentBlock[] {
@@ -180,7 +192,10 @@ export function createToolResultNormalizers({
     };
 
     return {
-      content: extraContent,
+      content: [
+        { type: 'text' as const, text: serializeSuccessEnvelope(envelope) },
+        ...extraContent,
+      ],
       structuredContent: envelope,
     };
   }

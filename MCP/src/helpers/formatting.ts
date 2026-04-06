@@ -130,7 +130,7 @@ export function extractExtraContent(result: unknown): ContentBlock[] {
   }
 
   return result.content.filter((candidate): candidate is ContentBlock => (
-    isContentBlock(candidate) && candidate.type !== 'text'
+    isContentBlock(candidate)
   ));
 }
 

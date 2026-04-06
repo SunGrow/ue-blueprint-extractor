@@ -148,6 +148,19 @@ export function registerProjectControlTools({
     target: previousEditor?.editorTarget ?? fallback.target,
   });
 
+  const matchesResolvedEditor = (
+    entry: EditorInstanceSnapshot,
+    resolved: {
+      projectPath: string;
+      engineRoot?: string;
+      target?: string;
+    },
+  ) => (
+    filesystemPathsEqual(entry.projectFilePath, resolved.projectPath)
+    && (!resolved.engineRoot || !entry.engineRoot || filesystemPathsEqual(entry.engineRoot, resolved.engineRoot))
+    && (!resolved.target || !entry.editorTarget || entry.editorTarget === resolved.target)
+  );
+
   const recoverEditorViaHostRelaunch = async (request: {
     previousEditor?: EditorInstanceSnapshot;
     projectPath?: string;
@@ -671,9 +684,47 @@ export function registerProjectControlTools({
           );
         }
 
+        const resolvedProjectPath = resolved.projectPath;
+        const resolvedEngineRoot = resolved.engineRoot;
+        const resolvedTarget = resolved.target;
+
+        if (activeEditorSession) {
+          const matchingEditors = (await activeEditorSession.listRunningEditors()).filter((entry) => matchesResolvedEditor(entry, {
+            projectPath: resolvedProjectPath,
+            engineRoot: resolvedEngineRoot,
+            target: resolvedTarget,
+          }));
+
+          if (matchingEditors.length > 1) {
+            throw new Error(
+              `Multiple running editors already match "${resolvedProjectPath}". `
+              + 'Call list_running_editors and select_editor instead of launch_editor.',
+            );
+          }
+
+          if (matchingEditors.length === 1) {
+            try {
+              const bound = await activeEditorSession.selectEditor({ instanceId: matchingEditors[0]!.instanceId });
+              clearProjectAutomationContext();
+              const activeEditor = toLabeledActiveEditor(bound);
+              return jsonToolSuccess({
+                success: true,
+                operation: 'launch_editor',
+                launched: false,
+                reusedExistingEditor: true,
+                message: 'Bound the existing matching editor instead of launching a new process.',
+                inputResolution: buildInputResolution(resolved),
+                activeEditor,
+              });
+            } catch {
+              // Fall through to a real launch when the registry entry is stale or not yet responsive.
+            }
+          }
+        }
+
         const launched = await projectController.launchEditor({
-          engineRoot: resolved.engineRoot,
-          projectPath: resolved.projectPath,
+          engineRoot: resolvedEngineRoot,
+          projectPath: resolvedProjectPath,
         });
         clearProjectAutomationContext();
 
@@ -681,9 +732,9 @@ export function registerProjectControlTools({
         if (activeEditorSession) {
           const bound = await activeEditorSession.bindLaunchedEditor({
             processId: launched.processId,
-            projectPath: resolved.projectPath,
-            engineRoot: resolved.engineRoot,
-            target: resolved.target,
+            projectPath: resolvedProjectPath,
+            engineRoot: resolvedEngineRoot,
+            target: resolvedTarget,
             timeoutMs: reconnect_timeout_seconds * 1000,
           });
           activeEditor = toLabeledActiveEditor(bound);
