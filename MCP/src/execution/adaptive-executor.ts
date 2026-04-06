@@ -8,6 +8,16 @@ import { ExecutionModeDetector } from './execution-mode-detector.js';
 
 export type ToolModeAnnotation = 'both' | 'editor_only' | 'read_only';
 
+const EDITOR_FALLBACK_ERROR_FRAGMENTS = [
+  'UE Editor not running or Remote Control not available',
+  'BlueprintExtractor subsystem not found',
+  'No active editor is selected for this MCP session',
+  'Multiple running editors match the workspace project',
+  'Active editor mismatch',
+  'previously selected active editor',
+  'The selected active editor is currently unavailable on its registered Remote Control endpoint.',
+] as const;
+
 export type EditorFallbackCaller = (
   method: string,
   params: Record<string, unknown>,
@@ -76,10 +86,50 @@ export class AdaptiveExecutor {
     const toolName = this._activeToolName;
     const detection = await this.detector.detect();
 
+    const tryCommandletFallback = async (
+      error: unknown,
+      requiredCapability: ToolCapability,
+    ): Promise<Record<string, unknown>> => {
+      if (!toolName || !this.commandletAdapter || !shouldFallbackToCommandlet(error)) {
+        throw error;
+      }
+
+      const commandletCapabilities = this.commandletAdapter.getCapabilities();
+      if (!commandletCapabilities.has(requiredCapability) && requiredCapability !== 'write_simple') {
+        throw error;
+      }
+
+      const available = await this.commandletAdapter.isAvailable();
+      if (!available) {
+        throw error;
+      }
+
+      this.detector.invalidateCache();
+      return this.commandletAdapter.execute('BlueprintExtractor', method, params);
+    };
+
     // If no active tool context or editor mode, use the original path
     // (preserves callSubsystemJson error-checking layer)
     if (!toolName || detection.mode === 'editor') {
-      return editorFallback(method, params, options);
+      if (!toolName) {
+        return editorFallback(method, params, options);
+      }
+
+      const toolMode = this.getToolMode(toolName);
+      const requiredCapability: ToolCapability = toolMode === 'read_only'
+        ? 'read'
+        : toolMode === 'both'
+          ? 'write_simple'
+          : 'write_complex';
+
+      try {
+        return await editorFallback(method, params, options);
+      } catch (error) {
+        if (toolMode === 'editor_only') {
+          throw error;
+        }
+        return tryCommandletFallback(error, requiredCapability);
+      }
     }
 
     const toolMode = this.getToolMode(toolName);
@@ -181,6 +231,15 @@ export class AdaptiveExecutor {
       requiredCapability,
     );
   }
+}
+
+function shouldFallbackToCommandlet(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith('Failed to call ')) {
+    return true;
+  }
+
+  return EDITOR_FALLBACK_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment));
 }
 
 export class ExecutorError extends Error {

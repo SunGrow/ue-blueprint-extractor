@@ -59,6 +59,41 @@ describe('AdaptiveExecutor.executeRouted', () => {
     expect(cmdAdapter.execute).not.toHaveBeenCalled();
   });
 
+  it('falls back to commandlet when editor mode is selected but editor access fails for a both-mode tool', async () => {
+    const detector = createMockDetector('editor');
+    const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);
+    executor.setActiveToolName('extract_blueprint');
+    executor.setToolMode('extract_blueprint', 'both');
+
+    const fallback = vi.fn(async () => {
+      throw new Error('No active editor is selected for this MCP session. Workspace project: D:/Proj/Proj.uproject.');
+    });
+
+    const result = await executor.executeRouted(fallback, 'ExtractBlueprint', { AssetPath: '/Game/BP_Test' });
+
+    expect(result).toEqual({ success: true, from: 'commandlet' });
+    expect(cmdAdapter.execute).toHaveBeenCalledWith('BlueprintExtractor', 'ExtractBlueprint', { AssetPath: '/Game/BP_Test' });
+    expect((detector.invalidateCache as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the original editor error for editor_only tools even when commandlet is available', async () => {
+    const detector = createMockDetector('editor');
+    const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);
+    executor.setActiveToolName('patch_widget');
+    executor.setToolMode('patch_widget', 'editor_only');
+
+    const fallbackError = new Error('No active editor is selected for this MCP session.');
+    const fallback = vi.fn(async () => {
+      throw fallbackError;
+    });
+
+    await expect(
+      executor.executeRouted(fallback, 'ModifyWidget', { AssetPath: '/Game/UI/WBP_Test' }),
+    ).rejects.toBe(fallbackError);
+
+    expect(cmdAdapter.execute).not.toHaveBeenCalled();
+  });
+
   it('calls editorFallback when _activeToolName is null regardless of detected mode', async () => {
     const detector = createMockDetector('commandlet');
     const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);
