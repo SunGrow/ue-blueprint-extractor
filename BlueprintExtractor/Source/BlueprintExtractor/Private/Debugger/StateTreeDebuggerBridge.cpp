@@ -206,7 +206,7 @@ TSharedPtr<FJsonObject> FStateTreeDebuggerBridge::Read(const FString& PayloadJso
 	}
 
 	Result->SetArrayField(TEXT("instances"), InstancesArray);
-	Result->SetNumberField(TEXT("instanceCount"), InstancesArray.Num());
+	Result->SetNumberField(TEXT("instanceCount"), static_cast<double>(InstancesArray.Num()));
 
 	return Result;
 
@@ -276,7 +276,7 @@ TSharedPtr<FJsonObject> FStateTreeDebuggerBridge::SerializeInstanceEvents(FState
 	const UStateTree* Asset = Debugger->GetAsset();
 
 	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-	Result->SetNumberField(TEXT("totalEvents"), Collection.Events.Num());
+	Result->SetNumberField(TEXT("totalEvents"), static_cast<double>(Collection.Events.Num()));
 
 	// Serialize events (last MaxEvents)
 	const int32 StartIdx = FMath::Max(0, Collection.Events.Num() - MaxEvents);
@@ -292,20 +292,20 @@ TSharedPtr<FJsonObject> FStateTreeDebuggerBridge::SerializeInstanceEvents(FState
 	}
 
 	Result->SetArrayField(TEXT("events"), EventsArray);
-	Result->SetNumberField(TEXT("returnedEvents"), EventsArray.Num());
-	Result->SetNumberField(TEXT("skippedEvents"), StartIdx);
+	Result->SetNumberField(TEXT("returnedEvents"), static_cast<double>(EventsArray.Num()));
+	Result->SetNumberField(TEXT("skippedEvents"), static_cast<double>(StartIdx));
 
 	// Active states changes
 	TArray<TSharedPtr<FJsonValue>> ActiveChanges;
 	for (const auto& ChangePair : Collection.ActiveStatesChanges)
 	{
-		if (ChangePair.EventIdx < Collection.Events.Num())
+		if (ChangePair.EventIndex < Collection.Events.Num())
 		{
-			const FStateTreeTraceEventVariantType& ChangeEvent = Collection.Events[ChangePair.EventIdx];
+			const FStateTreeTraceEventVariantType& ChangeEvent = Collection.Events[ChangePair.EventIndex];
 			if (const FStateTreeTraceActiveStatesEvent* ActiveEvent = ChangeEvent.TryGet<FStateTreeTraceActiveStatesEvent>())
 			{
 				TSharedPtr<FJsonObject> ChangeObj = MakeShared<FJsonObject>();
-				ChangeObj->SetNumberField(TEXT("eventIdx"), ChangePair.EventIdx);
+				ChangeObj->SetNumberField(TEXT("eventIdx"), static_cast<double>(ChangePair.EventIndex));
 				ChangeObj->SetNumberField(TEXT("worldTime"), ActiveEvent->RecordingWorldTime);
 
 				TArray<TSharedPtr<FJsonValue>> StatesArray;

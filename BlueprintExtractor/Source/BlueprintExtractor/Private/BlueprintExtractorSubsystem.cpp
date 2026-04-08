@@ -3524,7 +3524,7 @@ FString UBlueprintExtractorSubsystem::StartStateTreeDebugger(const FString& Asse
 {
 	if (!StateTreeDebuggerBridgeInstance)
 	{
-		StateTreeDebuggerBridgeInstance = MakeUnique<FStateTreeDebuggerBridge>();
+		StateTreeDebuggerBridgeInstance = MakeShared<FStateTreeDebuggerBridge>();
 	}
 	const TSharedPtr<FJsonObject> Result = StateTreeDebuggerBridgeInstance->Start(AssetPath);
 	return SerializeJsonObject(Result);

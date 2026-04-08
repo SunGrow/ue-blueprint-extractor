@@ -23,7 +23,7 @@ class BLUEPRINTEXTRACTOR_API UBlueprintExtractorSubsystem : public UEditorSubsys
 private:
 	static EBlueprintExtractionScope ParseScope(const FString& ScopeString);
 	FBlueprintExtractorImportJobManager* ImportJobManager = nullptr;
-	TUniquePtr<FStateTreeDebuggerBridge> StateTreeDebuggerBridgeInstance;
+	TSharedPtr<FStateTreeDebuggerBridge> StateTreeDebuggerBridgeInstance;
 
 // ============================================================
 // Public Interface
