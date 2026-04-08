@@ -1690,4 +1690,108 @@ export function registerProjectControlTools({
       }
     },
   );
+
+  // ============================================================
+  // StateTree Debugger
+  // ============================================================
+
+  server.registerTool(
+    'start_statetree_debugger',
+    {
+      title: 'Start StateTree Debugger',
+      description: 'Start recording StateTree debug traces. Requires PIE to be running. Optionally filter to a specific StateTree asset.',
+      inputSchema: {
+        asset_path: z.string().default('').describe(
+          'UE content path of the StateTree asset to filter on (e.g. /Game/AI/ST_Character). Empty = record all.',
+        ),
+      },
+      annotations: {
+        title: 'Start StateTree Debugger',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ asset_path }) => {
+      try {
+        const parsed = await callSubsystemJson('StartStateTreeDebugger', {
+          AssetPath: asset_path,
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'stop_statetree_debugger',
+    {
+      title: 'Stop StateTree Debugger',
+      description: 'Stop the active StateTree debugger session and discard trace data.',
+      inputSchema: {},
+      annotations: {
+        title: 'Stop StateTree Debugger',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        const parsed = await callSubsystemJson('StopStateTreeDebugger', {});
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'read_statetree_debugger',
+    {
+      title: 'Read StateTree Debugger',
+      description: 'Read current StateTree debugger data: instances, events, active states, transitions, conditions.',
+      inputSchema: {
+        instance_id: z.string().default('').describe(
+          'Filter to a specific instance ID (from a previous read). Empty = list all instances without events.',
+        ),
+        max_events: z.number().int().positive().default(500).describe(
+          'Maximum events to return per instance.',
+        ),
+        scrub_time: z.number().default(-1).describe(
+          'Set the scrub time before reading. -1 = use current position.',
+        ),
+      },
+      annotations: {
+        title: 'Read StateTree Debugger',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ instance_id, max_events, scrub_time }) => {
+      try {
+        const payload: Record<string, unknown> = {};
+        if (instance_id) {
+          payload.instanceId = instance_id;
+        }
+        if (max_events !== 500) {
+          payload.maxEvents = max_events;
+        }
+        if (scrub_time >= 0) {
+          payload.scrubTime = scrub_time;
+        }
+        const parsed = await callSubsystemJson('ReadStateTreeDebugger', {
+          PayloadJson: JSON.stringify(payload),
+        });
+        return jsonToolSuccess(parsed);
+      } catch (error) {
+        return jsonToolError(error);
+      }
+    },
+  );
 }

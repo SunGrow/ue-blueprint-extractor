@@ -283,10 +283,63 @@ describe('ProjectController', () => {
 
     expect(result.success).toBe(true);
     expect(result.command.executable).toBe(editorExecutable);
-    expect(result.command.args).toEqual([projectPath, '-RCWebControlEnable', '-RCWebInterfaceEnable']);
+    expect(result.command.args).toEqual([projectPath, '-RCWebControlEnable', '-RCWebInterfaceEnable', '-WebControl.EnableServerOnStartup=1']);
     expect(spawnCalls).toEqual([{
       executable: editorExecutable,
-      args: [projectPath, '-RCWebControlEnable', '-RCWebInterfaceEnable'],
+      args: [projectPath, '-RCWebControlEnable', '-RCWebInterfaceEnable', '-WebControl.EnableServerOnStartup=1'],
+      options: expect.objectContaining({
+        cwd: root,
+        detached: true,
+        shell: false,
+        stdio: 'ignore',
+      }),
+    }]);
+  });
+
+  it('does not duplicate default launch switches when explicit overrides are provided', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-launch-args-'));
+    tempDirs.push(root);
+
+    const engineRoot = join(root, 'UE_5.7');
+    const editorExecutable = join(engineRoot, 'Engine', 'Binaries', 'Linux', 'UnrealEditor');
+    const projectPath = join(root, 'MyGame.uproject');
+    await mkdir(join(engineRoot, 'Engine', 'Binaries', 'Linux'), { recursive: true });
+    await writeFile(editorExecutable, '#!/usr/bin/env bash\n');
+    await writeFile(projectPath, '{}');
+
+    const spawnCalls: Array<Record<string, unknown>> = [];
+    const controller = new ProjectController({
+      env: {
+        UE_ENGINE_ROOT: engineRoot,
+        UE_PROJECT_PATH: projectPath,
+      },
+      platform: 'linux',
+      spawnProcess: ((executable, args, options) => {
+        spawnCalls.push({ executable, args, options });
+        return {
+          unref() {},
+        } as never;
+      }) as typeof import('node:child_process').spawn,
+    });
+
+    const result = await controller.launchEditor({
+      additionalArgs: ['-RCWebControlEnable', '-WebControl.EnableServerOnStartup=0'],
+    });
+
+    expect(result.command.args).toEqual([
+      projectPath,
+      '-RCWebInterfaceEnable',
+      '-RCWebControlEnable',
+      '-WebControl.EnableServerOnStartup=0',
+    ]);
+    expect(spawnCalls).toEqual([{
+      executable: editorExecutable,
+      args: [
+        projectPath,
+        '-RCWebInterfaceEnable',
+        '-RCWebControlEnable',
+        '-WebControl.EnableServerOnStartup=0',
+      ],
       options: expect.objectContaining({
         cwd: root,
         detached: true,

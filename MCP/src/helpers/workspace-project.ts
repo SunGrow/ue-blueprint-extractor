@@ -76,6 +76,12 @@ export function normalizeFilesystemPath(input: string | undefined): string | und
     return path.win32.normalize(trimmed).replaceAll('\\', '/').toLowerCase();
   }
 
+  // Canonicalize WSL-mounted Windows paths to the same normalized form as native Windows paths
+  // so registry entries like D:/Project/MyGame.uproject match /mnt/d/Project/MyGame.uproject.
+  if (isWslMountedWindowsPath(trimmed)) {
+    return toWindowsStylePath(trimmed).replaceAll('\\', '/').toLowerCase();
+  }
+
   return path.posix.normalize(trimmed);
 }
 

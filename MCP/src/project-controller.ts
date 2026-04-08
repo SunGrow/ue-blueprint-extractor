@@ -17,7 +17,15 @@ const DEFAULT_BUILD_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_DISCONNECT_TIMEOUT_MS = 60 * 1000;
 const DEFAULT_RECONNECT_TIMEOUT_MS = 3 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
-const DEFAULT_EDITOR_LAUNCH_ARGS = ['-RCWebControlEnable', '-RCWebInterfaceEnable'];
+const DEFAULT_EDITOR_LAUNCH_ARGS = ['-RCWebControlEnable', '-RCWebInterfaceEnable', '-WebControl.EnableServerOnStartup=1'];
+
+function hasCommandLineArg(args: string[], arg: string): boolean {
+  const normalizedTarget = arg.toLowerCase();
+  return args.some((candidate) => {
+    const normalizedCandidate = candidate.toLowerCase();
+    return normalizedCandidate === normalizedTarget || normalizedCandidate.startsWith(`${normalizedTarget}=`);
+  });
+}
 
 export interface CompileProjectCodeRequest {
   engineRoot?: string;
@@ -769,9 +777,13 @@ export class ProjectController implements ProjectControllerLike {
     const hostExecutable = toHostFilesystemPath(executable, executionPlatform, this.platform);
     const requestedArgs = request.additionalArgs ?? [];
     const commandProjectPath = normalizeFilesystemPathForCommand(projectPath, executionPlatform);
+    const defaultArgs = DEFAULT_EDITOR_LAUNCH_ARGS.filter((arg) => {
+      const argName = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+      return !hasCommandLineArg(requestedArgs, argName);
+    });
     const args = [
       commandProjectPath,
-      ...DEFAULT_EDITOR_LAUNCH_ARGS.filter((arg) => !requestedArgs.includes(arg)),
+      ...defaultArgs,
       ...requestedArgs,
     ];
     const invocation = resolveCommandInvocation(hostExecutable, args, executionPlatform, this.env);

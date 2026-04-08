@@ -7,6 +7,9 @@ import {
   resolveProjectInputs,
 } from '../src/helpers/project-resolution.js';
 import {
+  listRegisteredEditors,
+} from '../src/editor-instance-registry.js';
+import {
   buildEngineAssociationCandidates,
   filesystemPathsEqual,
   toHostFilesystemPath,
@@ -251,6 +254,10 @@ describe('resolveProjectInputs', () => {
     expect(filesystemPathsEqual('C:/Proj/Proj.uproject', 'C:\\Proj\\Proj.uproject')).toBe(true);
   });
 
+  it('matches WSL-mounted paths against Windows-style registry paths', () => {
+    expect(filesystemPathsEqual('/mnt/d/Development/V2/CyberVolleyball6vs6.uproject', 'D:/Development/V2/CyberVolleyball6vs6.uproject')).toBe(true);
+  });
+
   it('converts WSL-mounted paths into Windows command paths', () => {
     expect(toWindowsStylePath('/mnt/d/Development/V2/CyberVolleyball6vs6.uproject')).toBe(
       'D:\\Development\\V2\\CyberVolleyball6vs6.uproject',
@@ -266,6 +273,59 @@ describe('resolveProjectInputs', () => {
   it('builds engine association candidates for Windows and macOS installs', () => {
     expect(buildEngineAssociationCandidates('5.7', 'win32')).toContain('C:/Program Files/Epic Games/UE_5.7');
     expect(buildEngineAssociationCandidates('5.7', 'darwin')).toContain('/Users/Shared/Epic Games/UE_5.7');
+  });
+
+  it('discovers editor registry entries from Windows temp when running under WSL', async () => {
+    if (process.platform !== 'linux') {
+      return;
+    }
+
+    vi.resetModules();
+    const readdir = vi.fn(async (targetPath: string, options?: { withFileTypes?: boolean }) => {
+      if (targetPath === '/tmp/BlueprintExtractor/EditorRegistry') {
+        throw new Error('missing');
+      }
+
+      if (targetPath === '/mnt/c/Users' && options?.withFileTypes) {
+        return [{
+          name: 'LazyF',
+          isDirectory: () => true,
+        }];
+      }
+
+      if (targetPath === '/mnt/c/Users/LazyF/AppData/Local/Temp/BlueprintExtractor/EditorRegistry') {
+        return ['editor-1.json'];
+      }
+
+      throw new Error(`unexpected readdir: ${targetPath}`);
+    });
+    const readFile = vi.fn(async () => JSON.stringify({
+      instanceId: 'editor-1',
+      projectFilePath: 'D:/Development/V2/CyberVolleyball6vs6.uproject',
+      remoteControlHost: '127.0.0.1',
+      remoteControlPort: 30010,
+      lastSeenAt: new Date().toISOString(),
+    }));
+    const stat = vi.fn(async () => ({ mtimeMs: Date.now() }));
+    const rm = vi.fn(async () => undefined);
+
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return {
+        ...actual,
+        readdir,
+        readFile,
+        stat,
+        rm,
+      };
+    });
+
+    const registryModule = await import('../src/editor-instance-registry.js');
+    const result = await registryModule.listRegisteredEditors();
+
+    expect(result.editors).toHaveLength(1);
+    expect(result.editors[0]?.instanceId).toBe('editor-1');
+    expect(readdir).toHaveBeenCalledWith('/mnt/c/Users', { withFileTypes: true });
   });
 
   it('includes host-appropriate filesystem heuristic candidates', () => {

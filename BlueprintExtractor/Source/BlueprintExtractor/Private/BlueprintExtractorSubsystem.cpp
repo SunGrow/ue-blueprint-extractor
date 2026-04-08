@@ -77,6 +77,8 @@
 #include "UnrealEdMisc.h"
 #include "UObject/UObjectIterator.h"
 
+#include "Debugger/StateTreeDebuggerBridge.h"
+
 #if PLATFORM_WINDOWS
 #include "ILiveCodingModule.h"
 #endif
@@ -705,6 +707,10 @@ EBlueprintExtractionScope UBlueprintExtractorSubsystem::ParseScope(const FString
 
 UBlueprintExtractorSubsystem::~UBlueprintExtractorSubsystem()
 {
+	if (StateTreeDebuggerBridgeInstance)
+	{
+		StateTreeDebuggerBridgeInstance->Shutdown();
+	}
 	ImportJobManager = nullptr;
 }
 
@@ -3507,5 +3513,39 @@ FString UBlueprintExtractorSubsystem::RestartEditor(const bool bWarn,
 		}),
 		0.0f);
 
+	return SerializeJsonObject(Result);
+}
+
+// ============================================================
+// StateTree Debugger
+// ============================================================
+
+FString UBlueprintExtractorSubsystem::StartStateTreeDebugger(const FString& AssetPath)
+{
+	if (!StateTreeDebuggerBridgeInstance)
+	{
+		StateTreeDebuggerBridgeInstance = MakeUnique<FStateTreeDebuggerBridge>();
+	}
+	const TSharedPtr<FJsonObject> Result = StateTreeDebuggerBridgeInstance->Start(AssetPath);
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::StopStateTreeDebugger()
+{
+	if (!StateTreeDebuggerBridgeInstance)
+	{
+		return MakeErrorJson(TEXT("No debugger bridge instance."));
+	}
+	const TSharedPtr<FJsonObject> Result = StateTreeDebuggerBridgeInstance->Stop();
+	return SerializeJsonObject(Result);
+}
+
+FString UBlueprintExtractorSubsystem::ReadStateTreeDebugger(const FString& PayloadJson)
+{
+	if (!StateTreeDebuggerBridgeInstance || !StateTreeDebuggerBridgeInstance->IsActive())
+	{
+		return MakeErrorJson(TEXT("No active StateTree debugger session. Call StartStateTreeDebugger first."));
+	}
+	const TSharedPtr<FJsonObject> Result = StateTreeDebuggerBridgeInstance->Read(PayloadJson);
 	return SerializeJsonObject(Result);
 }

@@ -6,6 +6,8 @@ import type { EditorInstanceSnapshot, EditorRegistryListResult } from './editor-
 
 const REGISTRY_ENV = 'BLUEPRINT_EXTRACTOR_EDITOR_REGISTRY_DIR';
 const DEFAULT_STALE_TTL_MS = 15_000;
+const WSL_WINDOWS_USERS_ROOT = '/mnt/c/Users';
+const WSL_WINDOWS_REGISTRY_SUFFIX = ['AppData', 'Local', 'Temp', 'BlueprintExtractor', 'EditorRegistry'];
 
 const editorInstanceSchema = z.object({
   instanceId: z.string(),
@@ -36,47 +38,89 @@ export function getEditorRegistryDir(): string {
     : path.join(tmpdir(), 'BlueprintExtractor', 'EditorRegistry');
 }
 
-export async function listRegisteredEditors(staleTtlMs = DEFAULT_STALE_TTL_MS): Promise<EditorRegistryListResult> {
-  const registryDir = getEditorRegistryDir();
-  let fileNames: string[] = [];
-  try {
-    fileNames = await readdir(registryDir);
-  } catch {
-    return {
-      editors: [],
-      registryDir,
-      staleEntryCount: 0,
-    };
+async function getEditorRegistryDirs(): Promise<string[]> {
+  const overrideDir = process.env[REGISTRY_ENV];
+  if (overrideDir) {
+    return [path.resolve(overrideDir)];
   }
 
-  const editors: EditorInstanceSnapshot[] = [];
-  let staleEntryCount = 0;
+  const dirs = new Set<string>([getEditorRegistryDir()]);
+  if (process.platform !== 'linux') {
+    return Array.from(dirs);
+  }
 
-  for (const fileName of fileNames) {
-    if (!fileName.toLowerCase().endsWith('.json')) {
-      continue;
-    }
-
-    const fullPath = path.join(registryDir, fileName);
-    try {
-      const [raw, fileStat] = await Promise.all([
-        readFile(fullPath, 'utf8'),
-        stat(fullPath),
-      ]);
-      const parsed = editorInstanceSchema.parse(JSON.parse(raw)) as EditorInstanceSnapshot;
-      const lastSeenAt = parseLastSeenAt(parsed.lastSeenAt) ?? fileStat.mtimeMs;
-      if ((Date.now() - lastSeenAt) > staleTtlMs) {
-        staleEntryCount += 1;
-        await rm(fullPath, { force: true }).catch(() => undefined);
+  try {
+    const userEntries = await readdir(WSL_WINDOWS_USERS_ROOT, { withFileTypes: true });
+    for (const entry of userEntries) {
+      if (!entry.isDirectory()) {
         continue;
       }
 
-      editors.push(parsed);
+      dirs.add(path.join(WSL_WINDOWS_USERS_ROOT, entry.name, ...WSL_WINDOWS_REGISTRY_SUFFIX));
+    }
+  } catch {
+    // Ignore missing /mnt/c/Users on non-WSL or restricted hosts.
+  }
+
+  return Array.from(dirs);
+}
+
+export async function listRegisteredEditors(staleTtlMs = DEFAULT_STALE_TTL_MS): Promise<EditorRegistryListResult> {
+  const registryDirs = await getEditorRegistryDirs();
+  const editorsByInstanceId = new Map<string, { snapshot: EditorInstanceSnapshot; lastSeenAt: number }>();
+  let staleEntryCount = 0;
+
+  for (const registryDir of registryDirs) {
+    let fileNames: string[] = [];
+    try {
+      fileNames = await readdir(registryDir);
     } catch {
-      staleEntryCount += 1;
-      await rm(fullPath, { force: true }).catch(() => undefined);
+      continue;
+    }
+
+    for (const fileName of fileNames) {
+      if (!fileName.toLowerCase().endsWith('.json')) {
+        continue;
+      }
+
+      const fullPath = path.join(registryDir, fileName);
+      try {
+        const [raw, fileStat] = await Promise.all([
+          readFile(fullPath, 'utf8'),
+          stat(fullPath),
+        ]);
+        const parsed = editorInstanceSchema.parse(JSON.parse(raw)) as EditorInstanceSnapshot;
+        const lastSeenAt = parseLastSeenAt(parsed.lastSeenAt) ?? fileStat.mtimeMs;
+        if ((Date.now() - lastSeenAt) > staleTtlMs) {
+          staleEntryCount += 1;
+          await rm(fullPath, { force: true }).catch(() => undefined);
+          continue;
+        }
+
+        // Verify the process is actually alive — registry files can outlive the editor
+        // process (e.g. after a crash, force-kill, or external build restart).
+        if (typeof parsed.processId === 'number') {
+          try {
+            process.kill(parsed.processId, 0);
+          } catch {
+            staleEntryCount += 1;
+            await rm(fullPath, { force: true }).catch(() => undefined);
+            continue;
+          }
+        }
+
+        const existing = editorsByInstanceId.get(parsed.instanceId);
+        if (!existing || lastSeenAt >= existing.lastSeenAt) {
+          editorsByInstanceId.set(parsed.instanceId, { snapshot: parsed, lastSeenAt });
+        }
+      } catch {
+        staleEntryCount += 1;
+        await rm(fullPath, { force: true }).catch(() => undefined);
+      }
     }
   }
+
+  const editors = Array.from(editorsByInstanceId.values(), (entry) => entry.snapshot);
 
   editors.sort((left, right) => {
     const projectCompare = String(left.projectName ?? left.projectFilePath)
@@ -90,7 +134,7 @@ export async function listRegisteredEditors(staleTtlMs = DEFAULT_STALE_TTL_MS): 
 
   return {
     editors,
-    registryDir,
+    registryDir: registryDirs[0] ?? getEditorRegistryDir(),
     staleEntryCount,
   };
 }

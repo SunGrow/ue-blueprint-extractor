@@ -8,6 +8,7 @@
 #include "BlueprintExtractorSubsystem.generated.h"
 
 class FBlueprintExtractorImportJobManager;
+class FStateTreeDebuggerBridge;
 
 /** Editor subsystem exposing blueprint extraction as string-based methods
  *  for remote invocation via the Web Remote Control API. */
@@ -22,6 +23,7 @@ class BLUEPRINTEXTRACTOR_API UBlueprintExtractorSubsystem : public UEditorSubsys
 private:
 	static EBlueprintExtractionScope ParseScope(const FString& ScopeString);
 	FBlueprintExtractorImportJobManager* ImportJobManager = nullptr;
+	TUniquePtr<FStateTreeDebuggerBridge> StateTreeDebuggerBridgeInstance;
 
 // ============================================================
 // Public Interface
@@ -521,4 +523,18 @@ public:
 	/** Schedules an editor restart after the current remote call returns. */
 	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
 	FString RestartEditor(const bool bWarn = false, const FString& AdditionalCommandLine = TEXT(""), const bool bSaveDirtyAssets = false, const bool bRelaunch = true);
+
+	/** Starts a StateTree debugger trace session. Optionally filters to a specific StateTree asset.
+	 *  Requires PIE to be running. Returns JSON with session status. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString StartStateTreeDebugger(const FString& AssetPath = TEXT(""));
+
+	/** Stops the active StateTree debugger session. */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString StopStateTreeDebugger();
+
+	/** Reads StateTree debugger data: instances, events, active states.
+	 *  PayloadJson: { instanceId?, maxEvents?, scrubTime? } */
+	UFUNCTION(BlueprintCallable, Category="Blueprint Extractor")
+	FString ReadStateTreeDebugger(const FString& PayloadJson = TEXT(""));
 };
