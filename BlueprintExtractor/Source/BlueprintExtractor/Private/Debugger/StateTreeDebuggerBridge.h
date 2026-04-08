@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Dom/JsonObject.h"
+#include "UObject/StrongObjectPtr.h"
 
 #if WITH_STATETREE_TRACE_DEBUGGER
 #include "Debugger/StateTreeDebugger.h"
@@ -42,6 +43,12 @@ public:
 private:
 #if WITH_STATETREE_TRACE_DEBUGGER
 	TSharedPtr<FStateTreeDebugger> Debugger;
+
+	/** Strong reference to the filtered StateTree asset to prevent GC.
+	 *  FStateTreeDebugger::SetAsset stores a TWeakObjectPtr — without this strong ref
+	 *  the asset can be collected between Start() and Read(), causing a check() crash
+	 *  in FStateTreeDebugger::AddEvents. */
+	TStrongObjectPtr<UStateTree> CachedFilterAsset;
 
 	TSharedPtr<FJsonObject> SerializeInstances() const;
 	TSharedPtr<FJsonObject> SerializeInstanceEvents(FStateTreeInstanceDebugId InstanceId, int32 MaxEvents) const;

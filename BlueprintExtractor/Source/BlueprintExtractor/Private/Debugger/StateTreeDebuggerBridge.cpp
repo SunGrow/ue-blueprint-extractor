@@ -59,6 +59,7 @@ TSharedPtr<FJsonObject> FStateTreeDebuggerBridge::Start(const FString& AssetPath
 		}
 		if (Asset)
 		{
+			CachedFilterAsset = TStrongObjectPtr<UStateTree>(Asset);
 			Debugger->SetAsset(Asset);
 		}
 		else
@@ -106,6 +107,7 @@ TSharedPtr<FJsonObject> FStateTreeDebuggerBridge::Stop()
 	}
 
 	Debugger.Reset();
+	CachedFilterAsset.Reset();
 	return MakeBridgeResult(true, TEXT("StateTree debugger stopped."));
 
 #else
@@ -235,6 +237,7 @@ void FStateTreeDebuggerBridge::Shutdown()
 		}
 		Debugger.Reset();
 	}
+	CachedFilterAsset.Reset();
 #endif
 }
 
