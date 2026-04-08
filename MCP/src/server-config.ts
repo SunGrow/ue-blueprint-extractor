@@ -102,6 +102,9 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['list_automation_test_runs', 'both'],
   ['list_captures', 'both'],
   ['get_editor_context', 'editor_only'],
+  ['start_statetree_debugger', 'editor_only'],
+  ['stop_statetree_debugger', 'editor_only'],
+  ['read_statetree_debugger', 'editor_only'],
 
   // ── Simple writes that work in both modes ──
   ['save_assets', 'both'],
