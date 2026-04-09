@@ -567,6 +567,64 @@ static TSharedPtr<FJsonObject> BuildCompileSummary(const FStateTreeCompilerLog& 
 	return Result;
 }
 
+/** Pre-compile safety: walk all editor nodes and verify their FInstancedStruct
+ *  pointers are valid. After Live Coding, UScriptStruct pointers inside
+ *  FInstancedStruct can go stale — CompileStateTree would crash accessing them. */
+static bool PreValidateEditorNodes(const UStateTree* StateTree, TArray<FString>& OutErrors)
+{
+	const UStateTreeEditorData* EditorData = StateTree ? Cast<UStateTreeEditorData>(StateTree->EditorData) : nullptr;
+	if (!EditorData) return true; // nothing to validate
+
+	auto CheckNodeArray = [&](const TArray<FStateTreeEditorNode>& Nodes, const FString& Context)
+	{
+		for (int32 i = 0; i < Nodes.Num(); ++i)
+		{
+			const FStateTreeEditorNode& EditorNode = Nodes[i];
+			if (EditorNode.Node.IsValid() && !EditorNode.Node.GetScriptStruct())
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("%s[%d] has a valid FInstancedStruct with a null UScriptStruct pointer (stale after Live Coding?)."),
+					*Context, i));
+			}
+			if (EditorNode.Instance.IsValid() && !EditorNode.Instance.GetScriptStruct())
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("%s[%d].Instance has a valid FInstancedStruct with a null UScriptStruct pointer."),
+					*Context, i));
+			}
+		}
+	};
+
+	CheckNodeArray(EditorData->Evaluators, TEXT("Evaluators"));
+	CheckNodeArray(EditorData->GlobalTasks, TEXT("GlobalTasks"));
+
+	TArray<const UStateTreeState*> Stack;
+	for (const UStateTreeState* RootState : EditorData->SubTrees)
+	{
+		if (RootState) Stack.Push(RootState);
+	}
+	while (Stack.Num() > 0)
+	{
+		const UStateTreeState* State = Stack.Pop();
+		const FString StatePath = State->Name.ToString();
+
+		CheckNodeArray(State->Tasks, FString::Printf(TEXT("State '%s' Tasks"), *StatePath));
+		CheckNodeArray(State->EnterConditions, FString::Printf(TEXT("State '%s' EnterConditions"), *StatePath));
+
+		for (const FStateTreeTransition& Transition : State->Transitions)
+		{
+			CheckNodeArray(Transition.Conditions, FString::Printf(TEXT("State '%s' Transition Conditions"), *StatePath));
+		}
+
+		for (const UStateTreeState* ChildState : State->Children)
+		{
+			if (ChildState) Stack.Push(ChildState);
+		}
+	}
+
+	return OutErrors.Num() == 0;
+}
+
 static bool ValidateAndCompile(UStateTree* StateTree,
                                FAssetMutationContext& Context,
                                const FString& SuccessSummary,
@@ -576,6 +634,23 @@ static bool ValidateAndCompile(UStateTree* StateTree,
 	{
 		Context.AddError(TEXT("editor_data_missing"), TEXT("StateTree has no editor data."));
 		return false;
+	}
+
+	// Pre-validate: catch stale struct pointers before the engine compiler accesses them.
+	{
+		TArray<FString> PreValidationErrors;
+		if (!PreValidateEditorNodes(StateTree, PreValidationErrors))
+		{
+			for (const FString& Error : PreValidationErrors)
+			{
+				Context.AddError(TEXT("stale_struct_pointer"), Error);
+			}
+			Context.SetValidationSummary(false,
+				TEXT("StateTree has nodes with stale struct pointers (likely after Live Coding). "
+				     "Restart the editor and retry."),
+				PreValidationErrors);
+			return false;
+		}
 	}
 
 	FStateTreeCompilerLog CompilerLog;
