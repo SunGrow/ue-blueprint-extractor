@@ -25,8 +25,10 @@
 #include "Engine/SimpleConstructionScript.h"
 #include "GameFramework/Actor.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_Composite.h"
 #include "K2Node_ExecutionSequence.h"
 #include "K2Node_FunctionEntry.h"
+#include "K2Node_GetSubsystem.h"
 #include "K2Node_VariableGet.h"
 #include "KismetCompilerModule.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -1627,6 +1629,529 @@ static bool AppendFunctionCallToSequence(UBlueprint* Blueprint,
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// insert_exec_nodes helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Search for a graph by name across FunctionGraphs, UbergraphPages, and
+ * collapsed-graph sub-graphs (K2Node_Composite bound graphs) inside
+ * UbergraphPages.
+ */
+static UEdGraph* FindGraphIncludingCollapsed(UBlueprint* Blueprint,
+                                             const FString& GraphName)
+{
+	if (!Blueprint || GraphName.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	const FName TargetName(*GraphName);
+
+	// 1. Standard function graphs
+	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+	{
+		if (Graph && Graph->GetFName() == TargetName)
+		{
+			return Graph;
+		}
+	}
+
+	// 2. Ubergraph pages (EventGraph and peers)
+	for (UEdGraph* Graph : Blueprint->UbergraphPages)
+	{
+		if (!Graph)
+		{
+			continue;
+		}
+
+		if (Graph->GetFName() == TargetName)
+		{
+			return Graph;
+		}
+
+		// 3. Collapsed graphs inside ubergraph pages
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			UK2Node_Composite* Composite = Cast<UK2Node_Composite>(Node);
+			if (!Composite)
+			{
+				continue;
+			}
+
+			UEdGraph* BoundGraph = Composite->GetBoundGraph();
+			if (BoundGraph && BoundGraph->GetFName() == TargetName)
+			{
+				return BoundGraph;
+			}
+		}
+	}
+
+	return nullptr;
+}
+
+/**
+ * Find a node inside a graph by (partial) title match.
+ * Uses Contains() because UE node titles often include context like
+ * "Target is SomeClass".
+ */
+static UEdGraphNode* FindNodeByTitle(UEdGraph* Graph, const FString& Title)
+{
+	if (!Graph || Title.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (!Node)
+		{
+			continue;
+		}
+
+		const FString NodeTitle = Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
+		if (NodeTitle.Contains(Title))
+		{
+			return Node;
+		}
+	}
+
+	return nullptr;
+}
+
+/**
+ * Insert new Blueprint nodes into an exec-pin chain between two existing
+ * connected nodes.
+ *
+ * Expected payload shape:
+ * {
+ *   "graphName": "SomeCollapsedOrFunctionGraph",
+ *   "insertAfter":  { "nodeTitle": "...", "pinName": "then" },
+ *   "insertBefore": { "nodeTitle": "...", "pinName": "execute" },
+ *   "nodes": [
+ *     { "nodeClass": "K2Node_GetSubsystem", "subsystemClass": "...", "id": "..." },
+ *     { "nodeClass": "K2Node_CallFunction", "functionReference": {...}, "id": "...",
+ *       "pins": { "self": { "linkedTo": "OtherId:ReturnValue" } } }
+ *   ]
+ * }
+ */
+static bool InsertExecNodes(UBlueprint* Blueprint,
+                            const TSharedPtr<FJsonObject>& Payload,
+                            TArray<FString>& OutErrors)
+{
+	if (!Blueprint || !Payload.IsValid())
+	{
+		OutErrors.Add(TEXT("insert_exec_nodes requires a Blueprint and payload."));
+		return false;
+	}
+
+	// --- Parse top-level fields ---
+
+	FString GraphName;
+	if (!Payload->TryGetStringField(TEXT("graphName"), GraphName) || GraphName.IsEmpty())
+	{
+		OutErrors.Add(TEXT("insert_exec_nodes requires 'graphName'."));
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* InsertAfterObj = nullptr;
+	if (!Payload->TryGetObjectField(TEXT("insertAfter"), InsertAfterObj) || !InsertAfterObj || !InsertAfterObj->IsValid())
+	{
+		OutErrors.Add(TEXT("insert_exec_nodes requires 'insertAfter' object."));
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* InsertBeforeObj = nullptr;
+	if (!Payload->TryGetObjectField(TEXT("insertBefore"), InsertBeforeObj) || !InsertBeforeObj || !InsertBeforeObj->IsValid())
+	{
+		OutErrors.Add(TEXT("insert_exec_nodes requires 'insertBefore' object."));
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* NodesArray = nullptr;
+	if (!Payload->TryGetArrayField(TEXT("nodes"), NodesArray) || !NodesArray || NodesArray->Num() == 0)
+	{
+		OutErrors.Add(TEXT("insert_exec_nodes requires a non-empty 'nodes' array."));
+		return false;
+	}
+
+	FString AfterNodeTitle, AfterPinName;
+	(*InsertAfterObj)->TryGetStringField(TEXT("nodeTitle"), AfterNodeTitle);
+	(*InsertAfterObj)->TryGetStringField(TEXT("pinName"), AfterPinName);
+	if (AfterNodeTitle.IsEmpty() || AfterPinName.IsEmpty())
+	{
+		OutErrors.Add(TEXT("insertAfter requires 'nodeTitle' and 'pinName'."));
+		return false;
+	}
+
+	FString BeforeNodeTitle, BeforePinName;
+	(*InsertBeforeObj)->TryGetStringField(TEXT("nodeTitle"), BeforeNodeTitle);
+	(*InsertBeforeObj)->TryGetStringField(TEXT("pinName"), BeforePinName);
+	if (BeforeNodeTitle.IsEmpty() || BeforePinName.IsEmpty())
+	{
+		OutErrors.Add(TEXT("insertBefore requires 'nodeTitle' and 'pinName'."));
+		return false;
+	}
+
+	// --- Find graph ---
+
+	UEdGraph* Graph = FindGraphIncludingCollapsed(Blueprint, GraphName);
+	if (!Graph)
+	{
+		OutErrors.Add(FString::Printf(TEXT("Graph '%s' not found (searched FunctionGraphs, UbergraphPages, and collapsed graphs)."), *GraphName));
+		return false;
+	}
+
+	// --- Find source and target nodes ---
+
+	UEdGraphNode* SourceNode = FindNodeByTitle(Graph, AfterNodeTitle);
+	if (!SourceNode)
+	{
+		OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: source node with title containing '%s' not found in graph '%s'."), *AfterNodeTitle, *GraphName));
+		return false;
+	}
+
+	UEdGraphNode* TargetNode = FindNodeByTitle(Graph, BeforeNodeTitle);
+	if (!TargetNode)
+	{
+		OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: target node with title containing '%s' not found in graph '%s'."), *BeforeNodeTitle, *GraphName));
+		return false;
+	}
+
+	// --- Find exec pins ---
+
+	UEdGraphPin* SourceExecPin = FindPinByName(SourceNode, AfterPinName);
+	if (!SourceExecPin)
+	{
+		OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: pin '%s' not found on source node '%s'."), *AfterPinName, *AfterNodeTitle));
+		return false;
+	}
+
+	UEdGraphPin* TargetExecPin = FindPinByName(TargetNode, BeforePinName);
+	if (!TargetExecPin)
+	{
+		OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: pin '%s' not found on target node '%s'."), *BeforePinName, *BeforeNodeTitle));
+		return false;
+	}
+
+	// Verify they are connected
+	bool bAreConnected = false;
+	for (UEdGraphPin* LinkedPin : SourceExecPin->LinkedTo)
+	{
+		if (LinkedPin == TargetExecPin)
+		{
+			bAreConnected = true;
+			break;
+		}
+	}
+	if (!bAreConnected)
+	{
+		OutErrors.Add(FString::Printf(
+			TEXT("insert_exec_nodes: pin '%s' on '%s' is not connected to pin '%s' on '%s'."),
+			*AfterPinName, *AfterNodeTitle, *BeforePinName, *BeforeNodeTitle));
+		return false;
+	}
+
+	// --- Break the existing connection ---
+
+	SourceExecPin->BreakLinkTo(TargetExecPin);
+
+	// --- Phase 1: Spawn new nodes ---
+
+	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
+	TMap<FString, UEdGraphNode*> SpawnedNodes;
+	TArray<UEdGraphNode*> SpawnedNodesOrdered;
+
+	for (int32 Index = 0; Index < NodesArray->Num(); ++Index)
+	{
+		const FString NodePath = FString::Printf(TEXT("nodes[%d]"), Index);
+		const TSharedPtr<FJsonObject> NodeDef = (*NodesArray)[Index].IsValid()
+			? (*NodesArray)[Index]->AsObject()
+			: nullptr;
+		if (!NodeDef.IsValid())
+		{
+			OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: expected an object."), *NodePath));
+			continue;
+		}
+
+		FString NodeId;
+		if (!NodeDef->TryGetStringField(TEXT("id"), NodeId) || NodeId.IsEmpty())
+		{
+			OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: requires 'id'."), *NodePath));
+			continue;
+		}
+
+		FString NodeClass;
+		if (!(NodeDef->TryGetStringField(TEXT("nodeClass"), NodeClass)
+			  || NodeDef->TryGetStringField(TEXT("class"), NodeClass))
+			|| NodeClass.IsEmpty())
+		{
+			OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: requires 'nodeClass'."), *NodePath));
+			continue;
+		}
+
+		// Position the new nodes offset from the source node
+		const FVector2D NodePosition(
+			SourceNode->NodePosX + 250.0 * (Index + 1),
+			SourceNode->NodePosY);
+
+		UEdGraphNode* NewNode = nullptr;
+
+		if (NodeClass == TEXT("K2Node_GetSubsystem"))
+		{
+			FString SubsystemClassPath;
+			NodeDef->TryGetStringField(TEXT("subsystemClass"), SubsystemClassPath);
+			if (SubsystemClassPath.IsEmpty())
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: K2Node_GetSubsystem requires 'subsystemClass'."), *NodePath));
+				continue;
+			}
+
+			UClass* SubsystemClass = FAuthoringHelpers::ResolveClass(SubsystemClassPath, USubsystem::StaticClass());
+			if (!SubsystemClass)
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: subsystem class '%s' not found."), *NodePath, *SubsystemClassPath));
+				continue;
+			}
+
+			UK2Node_GetSubsystem* SubsystemNode = FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_GetSubsystem>(
+				Graph,
+				NodePosition,
+				EK2NewNodeFlags::None,
+				[SubsystemClass](UK2Node_GetSubsystem* Node)
+				{
+					Node->Initialize(SubsystemClass);
+				});
+
+			if (!SubsystemNode)
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: failed to spawn K2Node_GetSubsystem."), *NodePath));
+				continue;
+			}
+
+			NewNode = SubsystemNode;
+		}
+		else if (NodeClass == TEXT("K2Node_CallFunction"))
+		{
+			const TSharedPtr<FJsonObject>* FuncRefObj = nullptr;
+			FString FunctionName;
+
+			if (NodeDef->TryGetObjectField(TEXT("functionReference"), FuncRefObj)
+				&& FuncRefObj && FuncRefObj->IsValid())
+			{
+				FString MemberName;
+				FString MemberParent;
+				(*FuncRefObj)->TryGetStringField(TEXT("memberName"), MemberName);
+				(*FuncRefObj)->TryGetStringField(TEXT("memberParent"), MemberParent);
+
+				if (MemberName.IsEmpty())
+				{
+					OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: functionReference requires 'memberName'."), *NodePath));
+					continue;
+				}
+
+				UK2Node_CallFunction* CallNode = FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_CallFunction>(
+					Graph,
+					NodePosition,
+					EK2NewNodeFlags::None,
+					[&MemberName, &MemberParent, Blueprint](UK2Node_CallFunction* Node)
+					{
+						if (!MemberParent.IsEmpty())
+						{
+							if (UClass* OwnerClass = FAuthoringHelpers::ResolveClass(MemberParent, UObject::StaticClass()))
+							{
+								if (UFunction* Function = OwnerClass->FindFunctionByName(FName(*MemberName)))
+								{
+									Node->SetFromFunction(Function);
+									return;
+								}
+							}
+						}
+
+						if (Blueprint && Blueprint->SkeletonGeneratedClass)
+						{
+							if (UFunction* Function = Blueprint->SkeletonGeneratedClass->FindFunctionByName(FName(*MemberName)))
+							{
+								Node->SetFromFunction(Function);
+								return;
+							}
+						}
+
+						Node->FunctionReference.SetSelfMember(FName(*MemberName));
+					});
+
+				if (!CallNode)
+				{
+					OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: failed to spawn K2Node_CallFunction."), *NodePath));
+					continue;
+				}
+
+				NewNode = CallNode;
+			}
+			else if (NodeDef->TryGetStringField(TEXT("functionName"), FunctionName) && !FunctionName.IsEmpty())
+			{
+				UK2Node_CallFunction* CallNode = FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_CallFunction>(
+					Graph,
+					NodePosition,
+					EK2NewNodeFlags::None,
+					[&FunctionName, Blueprint](UK2Node_CallFunction* Node)
+					{
+						if (Blueprint && Blueprint->SkeletonGeneratedClass)
+						{
+							if (UFunction* Function = Blueprint->SkeletonGeneratedClass->FindFunctionByName(FName(*FunctionName)))
+							{
+								Node->SetFromFunction(Function);
+								return;
+							}
+						}
+
+						Node->FunctionReference.SetSelfMember(FName(*FunctionName));
+					});
+
+				if (!CallNode)
+				{
+					OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: failed to spawn K2Node_CallFunction."), *NodePath));
+					continue;
+				}
+
+				NewNode = CallNode;
+			}
+			else
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: K2Node_CallFunction requires 'functionReference' or 'functionName'."), *NodePath));
+				continue;
+			}
+		}
+		else
+		{
+			OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes %s: unsupported nodeClass '%s'. Supported: K2Node_CallFunction, K2Node_GetSubsystem."), *NodePath, *NodeClass));
+			continue;
+		}
+
+		if (NewNode)
+		{
+			SpawnedNodes.Add(NodeId, NewNode);
+			SpawnedNodesOrdered.Add(NewNode);
+		}
+	}
+
+	if (SpawnedNodesOrdered.Num() == 0)
+	{
+		OutErrors.Add(TEXT("insert_exec_nodes: no nodes were successfully spawned."));
+		return false;
+	}
+
+	// --- Phase 2: Wire internal data connections (e.g. self pin) ---
+
+	for (int32 Index = 0; Index < NodesArray->Num(); ++Index)
+	{
+		const TSharedPtr<FJsonObject> NodeDef = (*NodesArray)[Index].IsValid()
+			? (*NodesArray)[Index]->AsObject()
+			: nullptr;
+		if (!NodeDef.IsValid()) continue;
+
+		FString NodeId;
+		if (!NodeDef->TryGetStringField(TEXT("id"), NodeId) || !SpawnedNodes.Contains(NodeId)) continue;
+
+		UEdGraphNode* ThisNode = SpawnedNodes[NodeId];
+		const TSharedPtr<FJsonObject>* PinsObj = nullptr;
+		if (!NodeDef->TryGetObjectField(TEXT("pins"), PinsObj) || !PinsObj || !PinsObj->IsValid()) continue;
+
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& PinEntry : (*PinsObj)->Values)
+		{
+			const FString& PinName = PinEntry.Key;
+			const TSharedPtr<FJsonObject> PinDef = PinEntry.Value.IsValid()
+				? PinEntry.Value->AsObject()
+				: nullptr;
+			if (!PinDef.IsValid()) continue;
+
+			FString LinkedToStr;
+			if (!PinDef->TryGetStringField(TEXT("linkedTo"), LinkedToStr) || LinkedToStr.IsEmpty()) continue;
+
+			// Parse "OtherNodeId:PinName" format
+			FString OtherNodeId;
+			FString OtherPinName;
+			if (!LinkedToStr.Split(TEXT(":"), &OtherNodeId, &OtherPinName) || OtherNodeId.IsEmpty() || OtherPinName.IsEmpty())
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: pin '%s' linkedTo format must be 'nodeId:pinName', got '%s'."), *PinName, *LinkedToStr));
+				continue;
+			}
+
+			UEdGraphNode** OtherNodePtr = SpawnedNodes.Find(OtherNodeId);
+			if (!OtherNodePtr || !*OtherNodePtr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: referenced node '%s' not found in spawned nodes."), *OtherNodeId));
+				continue;
+			}
+
+			UEdGraphPin* ThisPin = FindPinByName(ThisNode, PinName);
+			UEdGraphPin* OtherPin = FindPinByName(*OtherNodePtr, OtherPinName);
+			if (!ThisPin)
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: pin '%s' not found on node '%s'."), *PinName, *NodeId));
+				continue;
+			}
+			if (!OtherPin)
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: pin '%s' not found on node '%s'."), *OtherPinName, *OtherNodeId));
+				continue;
+			}
+
+			if (!Schema->TryCreateConnection(ThisPin, OtherPin))
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: failed to connect '%s:%s' to '%s:%s'."), *NodeId, *PinName, *OtherNodeId, *OtherPinName));
+			}
+		}
+	}
+
+	// --- Phase 3: Wire exec chain ---
+	// source.pinName -> first new node's "execute" -> ... -> last new node's "then" -> target.pinName
+
+	// Connect source exec pin to first spawned node's execute pin
+	UEdGraphPin* FirstExecPin = FindPinByName(SpawnedNodesOrdered[0], TEXT("execute"));
+	if (FirstExecPin)
+	{
+		if (!Schema->TryCreateConnection(SourceExecPin, FirstExecPin))
+		{
+			OutErrors.Add(TEXT("insert_exec_nodes: failed to wire source to first inserted node."));
+		}
+	}
+	else
+	{
+		OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: first spawned node has no 'execute' pin.")));
+	}
+
+	// Chain exec pins between consecutive spawned nodes
+	for (int32 i = 0; i + 1 < SpawnedNodesOrdered.Num(); ++i)
+	{
+		UEdGraphPin* ThenPin = FindPinByName(SpawnedNodesOrdered[i], TEXT("then"));
+		UEdGraphPin* NextExecPin = FindPinByName(SpawnedNodesOrdered[i + 1], TEXT("execute"));
+		if (ThenPin && NextExecPin)
+		{
+			if (!Schema->TryCreateConnection(ThenPin, NextExecPin))
+			{
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: failed to chain exec between nodes %d and %d."), i, i + 1));
+			}
+		}
+	}
+
+	// Connect last spawned node's then pin to target exec pin
+	UEdGraphPin* LastThenPin = FindPinByName(SpawnedNodesOrdered.Last(), TEXT("then"));
+	if (LastThenPin)
+	{
+		if (!Schema->TryCreateConnection(LastThenPin, TargetExecPin))
+		{
+			OutErrors.Add(TEXT("insert_exec_nodes: failed to wire last inserted node to target."));
+		}
+	}
+	else
+	{
+		OutErrors.Add(TEXT("insert_exec_nodes: last spawned node has no 'then' pin."));
+	}
+
+	return OutErrors.Num() == 0;
+}
+
 static bool ApplyClassDefaults(UBlueprint* Blueprint,
                                const TSharedPtr<FJsonObject>& DefaultsObject,
                                TArray<FString>& OutErrors,
@@ -2642,6 +3167,12 @@ static bool ApplyGraphOperation(UBlueprint* Blueprint,
 	{
 		OutMutationFlags |= EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
 		return AppendFunctionCallToSequence(Blueprint, Payload, OutErrors);
+	}
+
+	if (Operation == TEXT("insert_exec_nodes"))
+	{
+		OutMutationFlags |= EBlueprintMutationFlags::Structural | EBlueprintMutationFlags::Compile;
+		return InsertExecNodes(Blueprint, Payload, OutErrors);
 	}
 
 	if (Operation == TEXT("add_animgraph_nodes"))

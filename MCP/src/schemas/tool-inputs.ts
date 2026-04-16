@@ -431,6 +431,7 @@ export const BlueprintMemberMutationOperationSchema = z.enum([
 export const BlueprintGraphMutationOperationSchema = z.enum([
   'upsert_function_graphs',
   'append_function_call_to_sequence',
+  'insert_exec_nodes',
   'add_animgraph_nodes',
   'connect_animgraph_pins',
   'compile',
