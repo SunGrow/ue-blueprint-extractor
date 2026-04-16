@@ -1679,7 +1679,7 @@ static UEdGraph* FindGraphIncludingCollapsed(UBlueprint* Blueprint,
 				continue;
 			}
 
-			UEdGraph* BoundGraph = Composite->GetBoundGraph();
+			UEdGraph* BoundGraph = Composite->BoundGraph;
 			if (BoundGraph && BoundGraph->GetFName() == TargetName)
 			{
 				return BoundGraph;
