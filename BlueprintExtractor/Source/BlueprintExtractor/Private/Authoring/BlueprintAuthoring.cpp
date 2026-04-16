@@ -1648,16 +1648,9 @@ static UEdGraph* FindGraphIncludingCollapsed(UBlueprint* Blueprint,
 
 	const FName TargetName(*GraphName);
 
-	// 1. Standard function graphs
-	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
-	{
-		if (Graph && Graph->GetFName() == TargetName)
-		{
-			return Graph;
-		}
-	}
-
-	// 2. Ubergraph pages (EventGraph and peers)
+	// 1. Collapsed graphs inside ubergraph pages (highest priority —
+	//    a collapsed graph named X has richer content than the
+	//    auto-generated function-entry stub also named X)
 	for (UEdGraph* Graph : Blueprint->UbergraphPages)
 	{
 		if (!Graph)
@@ -1665,12 +1658,6 @@ static UEdGraph* FindGraphIncludingCollapsed(UBlueprint* Blueprint,
 			continue;
 		}
 
-		if (Graph->GetFName() == TargetName)
-		{
-			return Graph;
-		}
-
-		// 3. Collapsed graphs inside ubergraph pages
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
 			UK2Node_Composite* Composite = Cast<UK2Node_Composite>(Node);
@@ -1684,6 +1671,24 @@ static UEdGraph* FindGraphIncludingCollapsed(UBlueprint* Blueprint,
 			{
 				return BoundGraph;
 			}
+		}
+	}
+
+	// 2. Ubergraph pages by name (EventGraph and peers)
+	for (UEdGraph* Graph : Blueprint->UbergraphPages)
+	{
+		if (Graph && Graph->GetFName() == TargetName)
+		{
+			return Graph;
+		}
+	}
+
+	// 3. Standard function graphs
+	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+	{
+		if (Graph && Graph->GetFName() == TargetName)
+		{
+			return Graph;
 		}
 	}
 
