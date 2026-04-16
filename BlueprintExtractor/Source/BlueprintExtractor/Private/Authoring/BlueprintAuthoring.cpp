@@ -1861,6 +1861,39 @@ static bool InsertExecNodes(UBlueprint* Blueprint,
 
 	SourceExecPin->BreakLinkTo(TargetExecPin);
 
+	// --- Phase 0.5: Pre-scan nodes to classify exec vs pure for layout ---
+
+	constexpr double ExecNodeWidth = 300.0;
+	constexpr double PureNodeYOffset = 120.0;
+
+	int32 ExecNodeCount = 0;
+	for (int32 i = 0; i < NodesArray->Num(); ++i)
+	{
+		const TSharedPtr<FJsonObject> Def = (*NodesArray)[i].IsValid() ? (*NodesArray)[i]->AsObject() : nullptr;
+		if (!Def.IsValid()) continue;
+		FString Cls;
+		if (Def->TryGetStringField(TEXT("nodeClass"), Cls) || Def->TryGetStringField(TEXT("class"), Cls))
+		{
+			if (Cls != TEXT("K2Node_GetSubsystem")) // GetSubsystem is pure — not in exec chain
+			{
+				++ExecNodeCount;
+			}
+		}
+	}
+
+	// Shift target node (and everything reachable via its output exec pins) to the right
+	const double TotalShift = ExecNodeCount * ExecNodeWidth;
+	if (TotalShift > 0.0)
+	{
+		// Simple approach: shift only the target node itself.
+		// (Shifting the full downstream subgraph is complex and risks breaking layouts.)
+		TargetNode->NodePosX += static_cast<int32>(TotalShift);
+	}
+
+	// Compute insertion X range: between source and (shifted) target
+	const double InsertStartX = SourceNode->NodePosX + ExecNodeWidth;
+	int32 CurrentExecIndex = 0;
+
 	// --- Phase 1: Spawn new nodes ---
 
 	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
@@ -1895,10 +1928,24 @@ static bool InsertExecNodes(UBlueprint* Blueprint,
 			continue;
 		}
 
-		// Position the new nodes offset from the source node
-		const FVector2D NodePosition(
-			SourceNode->NodePosX + 250.0 * (Index + 1),
-			SourceNode->NodePosY);
+		// Position: exec nodes in a row between source and target;
+		// pure/data nodes below the next exec node they feed into.
+		const bool bIsPureNode = (NodeClass == TEXT("K2Node_GetSubsystem"));
+		FVector2D NodePosition;
+		if (bIsPureNode)
+		{
+			// Place below the next exec node's position
+			NodePosition = FVector2D(
+				InsertStartX + CurrentExecIndex * ExecNodeWidth,
+				SourceNode->NodePosY + PureNodeYOffset);
+		}
+		else
+		{
+			NodePosition = FVector2D(
+				InsertStartX + CurrentExecIndex * ExecNodeWidth,
+				SourceNode->NodePosY);
+			++CurrentExecIndex;
+		}
 
 		UEdGraphNode* NewNode = nullptr;
 
