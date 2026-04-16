@@ -2110,48 +2110,61 @@ static bool InsertExecNodes(UBlueprint* Blueprint,
 	}
 
 	// --- Phase 3: Wire exec chain ---
-	// source.pinName -> first new node's "execute" -> ... -> last new node's "then" -> target.pinName
+	// Only nodes that have exec pins participate in the chain.
+	// Pure nodes (e.g. K2Node_GetSubsystem) are data-only providers.
 
-	// Connect source exec pin to first spawned node's execute pin
-	UEdGraphPin* FirstExecPin = FindPinByName(SpawnedNodesOrdered[0], TEXT("execute"));
-	if (FirstExecPin)
+	TArray<UEdGraphNode*> ExecNodes;
+	for (UEdGraphNode* Node : SpawnedNodesOrdered)
 	{
-		if (!Schema->TryCreateConnection(SourceExecPin, FirstExecPin))
+		if (FindPinByName(Node, TEXT("execute")) != nullptr)
 		{
-			OutErrors.Add(TEXT("insert_exec_nodes: failed to wire source to first inserted node."));
+			ExecNodes.Add(Node);
 		}
 	}
-	else
+
+	if (ExecNodes.Num() == 0)
 	{
-		OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: first spawned node has no 'execute' pin.")));
+		// No exec nodes — wire source directly to target (restore the connection)
+		if (!Schema->TryCreateConnection(SourceExecPin, TargetExecPin))
+		{
+			OutErrors.Add(TEXT("insert_exec_nodes: no exec nodes spawned and failed to restore original connection."));
+		}
+		return OutErrors.Num() == 0;
 	}
 
-	// Chain exec pins between consecutive spawned nodes
-	for (int32 i = 0; i + 1 < SpawnedNodesOrdered.Num(); ++i)
+	// source.pinName -> first exec node's "execute"
+	UEdGraphPin* FirstExecPin = FindPinByName(ExecNodes[0], TEXT("execute"));
+	if (!Schema->TryCreateConnection(SourceExecPin, FirstExecPin))
 	{
-		UEdGraphPin* ThenPin = FindPinByName(SpawnedNodesOrdered[i], TEXT("then"));
-		UEdGraphPin* NextExecPin = FindPinByName(SpawnedNodesOrdered[i + 1], TEXT("execute"));
+		OutErrors.Add(TEXT("insert_exec_nodes: failed to wire source to first exec node."));
+	}
+
+	// Chain exec pins between consecutive exec nodes
+	for (int32 i = 0; i + 1 < ExecNodes.Num(); ++i)
+	{
+		UEdGraphPin* ThenPin = FindPinByName(ExecNodes[i], TEXT("then"));
+		UEdGraphPin* NextExecPin = FindPinByName(ExecNodes[i + 1], TEXT("execute"));
 		if (ThenPin && NextExecPin)
 		{
 			if (!Schema->TryCreateConnection(ThenPin, NextExecPin))
 			{
-				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: failed to chain exec between nodes %d and %d."), i, i + 1));
+				OutErrors.Add(FString::Printf(TEXT("insert_exec_nodes: failed to chain exec between exec nodes %d and %d."), i, i + 1));
 			}
 		}
 	}
 
-	// Connect last spawned node's then pin to target exec pin
-	UEdGraphPin* LastThenPin = FindPinByName(SpawnedNodesOrdered.Last(), TEXT("then"));
+	// last exec node's "then" -> target.pinName
+	UEdGraphPin* LastThenPin = FindPinByName(ExecNodes.Last(), TEXT("then"));
 	if (LastThenPin)
 	{
 		if (!Schema->TryCreateConnection(LastThenPin, TargetExecPin))
 		{
-			OutErrors.Add(TEXT("insert_exec_nodes: failed to wire last inserted node to target."));
+			OutErrors.Add(TEXT("insert_exec_nodes: failed to wire last exec node to target."));
 		}
 	}
 	else
 	{
-		OutErrors.Add(TEXT("insert_exec_nodes: last spawned node has no 'then' pin."));
+		OutErrors.Add(TEXT("insert_exec_nodes: last exec node has no 'then' pin."));
 	}
 
 	return OutErrors.Num() == 0;
