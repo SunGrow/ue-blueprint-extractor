@@ -135,6 +135,48 @@ describe('AdaptiveExecutor.executeRouted', () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
+  it('prefers the running editor for save_assets even when commandlet mode is cached', async () => {
+    const detector = createMockDetector('commandlet', 'cached commandlet mode');
+    const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);
+    executor.setActiveToolName('save_assets');
+    executor.setToolMode('save_assets', 'both');
+
+    const fallback = createMockEditorFallback({ success: true, from: 'editor-preferred' });
+    const result = await executor.executeRouted(fallback, 'SaveAssets', {
+      AssetPathsJson: '["/Game/UI/WBP_Menu"]',
+    });
+
+    expect(result).toEqual({ success: true, from: 'editor-preferred' });
+    expect(fallback).toHaveBeenCalledWith('SaveAssets', {
+      AssetPathsJson: '["/Game/UI/WBP_Menu"]',
+    }, undefined);
+    expect(cmdAdapter.execute).not.toHaveBeenCalled();
+    expect((detector.invalidateCache as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+  });
+
+  it('reroutes commandlet lock failures back to the editor when one is reachable', async () => {
+    const detector = createMockDetector('commandlet', 'editor started after initial probe');
+    const failingCmdAdapter = createMockAdapter({
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getMode: vi.fn().mockReturnValue('commandlet'),
+      getCapabilities: vi.fn().mockReturnValue(COMMANDLET_CAPABILITIES),
+      execute: vi.fn().mockRejectedValue(new Error('asset lock conflict')),
+    });
+    const executor = new AdaptiveExecutor(editorAdapter, failingCmdAdapter, detector);
+    executor.setActiveToolName('create_blueprint');
+    executor.setToolMode('create_blueprint', 'both');
+
+    const fallback = createMockEditorFallback({ success: true, from: 'editor-reroute' });
+    const result = await executor.executeRouted(fallback, 'CreateBlueprint', {
+      AssetPath: '/Game/BP_Test',
+    });
+
+    expect(result).toEqual({ success: true, from: 'editor-reroute' });
+    expect(fallback).toHaveBeenCalledWith('CreateBlueprint', {
+      AssetPath: '/Game/BP_Test',
+    }, undefined);
+  });
+
   it('throws CAPABILITY_MISMATCH for editor_only tool in commandlet mode', async () => {
     const detector = createMockDetector('commandlet', 'editor unavailable');
     const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);

@@ -44,14 +44,15 @@ export const WORKFLOW_SCOPE_IDS: readonly WorkflowScopeId[] = [
   'project_intelligence',
 ] as const;
 
+/**
+ * Keep the always-visible default surface small so weaker models can route
+ * through search, routed extraction, and explicit help before expanding.
+ */
 export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'search_assets',
   'find_and_extract',
   'extract_blueprint',
   'extract_asset',
-  'extract_material',
-  'extract_cascade',
-  'list_assets',
   'check_asset_exists',
   'save_assets',
   'get_tool_help',

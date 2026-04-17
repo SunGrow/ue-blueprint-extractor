@@ -132,7 +132,7 @@ export class ActiveEditorSession {
   }
 
   async editorModeAvailable(): Promise<boolean> {
-    return true;
+    return this.checkConnection();
   }
 
   async listRunningEditors(): Promise<EditorInstanceSnapshot[]> {

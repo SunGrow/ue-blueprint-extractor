@@ -418,6 +418,9 @@ describe('ToolSurfaceManager integration with server factory', () => {
 
     expect(activeTools.size).toBeLessThanOrEqual(CORE_TOOLS.size + 5);
     expect(activeTools.has('find_and_extract')).toBe(true);
+    expect(activeTools.has('extract_material')).toBe(false);
+    expect(activeTools.has('extract_cascade')).toBe(false);
+    expect(activeTools.has('list_assets')).toBe(false);
     expect(activeTools.has('compile_project_code')).toBe(false);
     expect(activeTools.has('restart_editor')).toBe(false);
     expect(activeTools.has('sync_project_code')).toBe(false);

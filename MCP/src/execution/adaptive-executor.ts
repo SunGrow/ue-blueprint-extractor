@@ -18,6 +18,19 @@ const EDITOR_FALLBACK_ERROR_FRAGMENTS = [
   'The selected active editor is currently unavailable on its registered Remote Control endpoint.',
 ] as const;
 
+const COMMANDLET_LOCK_ERROR_FRAGMENTS = [
+  'locked by another process',
+  'locked file',
+  'cannot access the file',
+  'asset lock conflict',
+  'save_failed',
+  'Failed to save one or more packages',
+] as const;
+
+const EDITOR_PREFERRED_WHILE_RUNNING_TOOLS = new Set([
+  'save_assets',
+]);
+
 export type EditorFallbackCaller = (
   method: string,
   params: Record<string, unknown>,
@@ -86,9 +99,19 @@ export class AdaptiveExecutor {
     const toolName = this._activeToolName;
     const detection = await this.detector.detect();
 
+    if (!toolName) {
+      return editorFallback(method, params, options);
+    }
+
+    const toolMode = this.getToolMode(toolName);
+    const requiredCapability: ToolCapability = toolMode === 'read_only'
+      ? 'read'
+      : toolMode === 'both'
+        ? 'write_simple'
+        : 'write_complex';
+
     const tryCommandletFallback = async (
       error: unknown,
-      requiredCapability: ToolCapability,
     ): Promise<Record<string, unknown>> => {
       if (!toolName || !this.commandletAdapter || !shouldFallbackToCommandlet(error)) {
         throw error;
@@ -108,36 +131,18 @@ export class AdaptiveExecutor {
       return this.commandletAdapter.execute('BlueprintExtractor', method, params);
     };
 
-    // If no active tool context or editor mode, use the original path
-    // (preserves callSubsystemJson error-checking layer)
-    if (!toolName || detection.mode === 'editor') {
-      if (!toolName) {
-        return editorFallback(method, params, options);
-      }
-
-      const toolMode = this.getToolMode(toolName);
-      const requiredCapability: ToolCapability = toolMode === 'read_only'
-        ? 'read'
-        : toolMode === 'both'
-          ? 'write_simple'
-          : 'write_complex';
-
+    // Editor mode keeps the existing direct path, with commandlet fallback for
+    // compatible tools when the editor call fails.
+    if (detection.mode === 'editor') {
       try {
         return await editorFallback(method, params, options);
       } catch (error) {
         if (toolMode === 'editor_only') {
           throw error;
         }
-        return tryCommandletFallback(error, requiredCapability);
+        return tryCommandletFallback(error);
       }
     }
-
-    const toolMode = this.getToolMode(toolName);
-    const requiredCapability: ToolCapability = toolMode === 'read_only'
-      ? 'read'
-      : toolMode === 'both'
-        ? 'write_simple'
-        : 'write_complex';
 
     // Try commandlet for compatible tools
     if (detection.mode === 'commandlet' && this.commandletAdapter) {
@@ -162,7 +167,35 @@ export class AdaptiveExecutor {
         );
       }
 
-      return this.commandletAdapter.execute('BlueprintExtractor', method, params);
+      if (shouldPreferEditorWhileRunning(toolName)) {
+        try {
+          const editorAvailable = await this.editorAdapter.isAvailable();
+          if (editorAvailable) {
+            this.detector.invalidateCache();
+            return await editorFallback(method, params, options);
+          }
+        } catch {
+          // Fall back to the commandlet path below.
+        }
+      }
+
+      try {
+        return await this.commandletAdapter.execute('BlueprintExtractor', method, params);
+      } catch (error) {
+        if (toolMode !== 'read_only' && shouldFallbackToEditorOnLock(error)) {
+          try {
+            const editorAvailable = await this.editorAdapter.isAvailable();
+            if (editorAvailable) {
+              this.detector.invalidateCache();
+              return await editorFallback(method, params, options);
+            }
+          } catch {
+            // If the editor is not actually reachable, preserve the commandlet error.
+          }
+        }
+
+        throw error;
+      }
     }
 
     // No adapter available
@@ -191,7 +224,6 @@ export class AdaptiveExecutor {
         ? 'write_simple'
         : 'write_complex';
 
-    // Try editor first
     if (detection.mode === 'editor') {
       return this.editorAdapter.execute(subsystem, method, params);
     }
@@ -219,7 +251,35 @@ export class AdaptiveExecutor {
         );
       }
 
-      return this.commandletAdapter.execute(subsystem, method, params);
+      if (shouldPreferEditorWhileRunning(toolName)) {
+        try {
+          const editorAvailable = await this.editorAdapter.isAvailable();
+          if (editorAvailable) {
+            this.detector.invalidateCache();
+            return await this.editorAdapter.execute(subsystem, method, params);
+          }
+        } catch {
+          // Keep the commandlet path below.
+        }
+      }
+
+      try {
+        return await this.commandletAdapter.execute(subsystem, method, params);
+      } catch (error) {
+        if (toolMode !== 'read_only' && shouldFallbackToEditorOnLock(error)) {
+          try {
+            const editorAvailable = await this.editorAdapter.isAvailable();
+            if (editorAvailable) {
+              this.detector.invalidateCache();
+              return await this.editorAdapter.execute(subsystem, method, params);
+            }
+          } catch {
+            // Preserve the original commandlet failure below.
+          }
+        }
+
+        throw error;
+      }
     }
 
     // No adapter available
@@ -240,6 +300,15 @@ function shouldFallbackToCommandlet(error: unknown): boolean {
   }
 
   return EDITOR_FALLBACK_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment));
+}
+
+function shouldFallbackToEditorOnLock(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return COMMANDLET_LOCK_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment));
+}
+
+function shouldPreferEditorWhileRunning(toolName: string): boolean {
+  return EDITOR_PREFERRED_WHILE_RUNNING_TOOLS.has(toolName);
 }
 
 export class ExecutorError extends Error {

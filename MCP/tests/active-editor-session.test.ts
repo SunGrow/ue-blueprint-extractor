@@ -95,4 +95,42 @@ describe('ActiveEditorSession editor context', () => {
     });
     expect(server.requests.map((request) => request.functionName)).toEqual(['GetEditorContext']);
   });
+
+  it('reports editor mode available only when a reachable editor can be resolved', async () => {
+    const server = await startMockRemoteControlServer({
+      onCall: () => ({
+        body: {
+          ReturnValue: JSON.stringify({
+            success: true,
+            instanceId: 'editor-1',
+            projectName: 'Proj',
+            projectFilePath: 'C:/Proj/Proj.uproject',
+            projectDir: 'C:/Proj',
+            engineRoot: 'C:/UE',
+            editorTarget: 'ProjEditor',
+            remoteControlHost: server.host,
+            remoteControlPort: server.port,
+          }),
+        },
+      }),
+    });
+    servers.push(server);
+
+    const offlineSession = new ActiveEditorSession({
+      cwd: 'C:/Proj',
+      env: {} as NodeJS.ProcessEnv,
+    });
+    const onlineSession = new ActiveEditorSession({
+      cwd: 'C:/Proj',
+      env: {
+        UE_REMOTE_CONTROL_HOST: server.host,
+        UE_REMOTE_CONTROL_PORT: String(server.port),
+        UE_BLUEPRINT_EXTRACTOR_SUBSYSTEM_PATH: '/Script/Test.OverrideSubsystem',
+      } as NodeJS.ProcessEnv,
+    });
+
+    await expect(offlineSession.editorModeAvailable()).resolves.toBe(false);
+    await expect(onlineSession.editorModeAvailable()).resolves.toBe(true);
+    expect(server.requests.map((request) => request.functionName)).toContain('GetProjectAutomationContext');
+  });
 });
