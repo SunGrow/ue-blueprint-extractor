@@ -19,6 +19,8 @@
 
 Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that bridges AI coding assistants (Claude Code, Codex, OpenCode, etc.) to a running Unreal Editor instance via the Remote Control HTTP API.
 
+For compatible tools, the server can also execute through a commandlet lane when no reachable editor session is available. When an editor is already running, editor execution stays preferred for editor-only flows and for save paths that need to avoid package-lock contention.
+
 ```
  AI Assistant         stdio           MCP Server         HTTP :30010        Unreal Editor
  ─────────────  ◄────────────►  ─────────────────  ◄──────────────────►  ─────────────────
@@ -116,11 +118,11 @@ npm install --prefix ~/.config/opencode --save-exact blueprint-extractor-mcp@lat
 
 ## Tool Surface
 
-Use `activate_tool_profile` to switch between the compact `default` surface and the full `expert` surface. The default profile keeps the context window lean and loads specialized families on demand via `activate_workflow_scope`.
+Use `activate_tool_profile` to switch between the compact `default` surface and the full `expert` surface. The default profile keeps the context window lean with a retrieval-first core and loads specialized families on demand via `activate_workflow_scope`.
 
 | Scope | What It Unlocks |
 |:------|:----------------|
-| **Core** *(always on in `default` profile)* | Search, extraction, `find_and_extract`, list/save/help, and the profile/scope switches such as `extract_asset`, `search_assets`, `save_assets`, `get_tool_help`, `activate_tool_profile`, and `activate_workflow_scope` |
+| **Core** *(always on in `default` profile)* | Retrieval-first discovery and persistence: `search_assets`, `find_and_extract`, `extract_blueprint`, `extract_asset`, `check_asset_exists`, `save_assets`, `get_tool_help`, `activate_tool_profile`, and `activate_workflow_scope` |
 | `widget_authoring` | Parent scope that loads `widget_authoring_structure`, `widget_authoring_visual`, and `widget_verification` together |
 | `widget_authoring_structure` | Recipe-first widget authoring, tree replacement, unified-diff patching, and focused structure edits without the deprecated widget aliases |
 | `widget_authoring_visual` | Widget compile flows, CommonUI styles, widget animations, and widget preview capture |
@@ -146,6 +148,7 @@ The tool contract is optimized for model reliability:
 - **`structuredContent`** carries the canonical success and error payload for MCP clients that consume structured results directly
 - **Structured error envelopes** with diagnostic codes and recovery hints
 - **Explicit-save semantics** &mdash; nothing persists until `save_assets` is called
+- **Dual execution lanes** &mdash; compatible tools can fall back to commandlet execution when no editor is reachable, while `save_assets` prefers a running editor and can reroute there on file-lock contention
 - **Next-step hints** guiding the assistant toward the logical follow-up action
 
 See [../docs/CURRENT_STATUS.md](../docs/CURRENT_STATUS.md) for the current validation snapshot, normative docs, and the one-shot stabilization ledger.

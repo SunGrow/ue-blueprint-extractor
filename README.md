@@ -7,7 +7,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![UE 5.x](https://img.shields.io/badge/Unreal_Engine-5.6%20%7C%205.7-blue)](https://www.unrealengine.com/)
 
-Blueprint Extractor connects a running Unreal Editor to MCP clients such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://openai.com/index/codex/), and [OpenCode](https://opencode.ai/). It exposes a strict machine-friendly contract for extraction, authoring, visual verification, imports, project automation, and code sync.
+Blueprint Extractor connects Unreal projects to MCP clients such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://openai.com/index/codex/), and [OpenCode](https://opencode.ai/). It exposes a strict machine-friendly contract for extraction, authoring, visual verification, imports, project automation, and code sync, using a running editor when one is available and a commandlet lane for compatible tools when it is not.
 
 **Current surface**
 
@@ -146,11 +146,11 @@ Key references:
 
 ## Workflow-Scoped Tool Surface
 
-The server exposes a compact `default` tool profile and a full `expert` profile via `activate_tool_profile`. The default profile expands into specialized families when needed through `activate_workflow_scope`.
+The server exposes a compact `default` tool profile and a full `expert` profile via `activate_tool_profile`. The default profile uses a retrieval-first core and expands into specialized families only when needed through `activate_workflow_scope`.
 
 | Scope | Focus |
 |---|---|
-| Core | Search, extract, `find_and_extract`, list, save, help, and the profile/scope switches |
+| Core | `search_assets`, `find_and_extract`, `extract_blueprint`, `extract_asset`, `check_asset_exists`, `save_assets`, `get_tool_help`, and the profile/scope switches |
 | `widget_authoring` | Recipe-first widget tree edits, widget class defaults, CommonUI, compile flows |
 | `material_authoring` | `create_material_setup`, graph operations, `modify_material`, instances, refresh |
 | `blueprint_authoring` | `scaffold_blueprint`, member edits, graph DSL edits |
@@ -163,6 +163,8 @@ The server exposes a compact `default` tool profile and a full `expert` profile 
 | `analysis` | Blueprint review and project asset audits |
 | `project_intelligence` | Editor context, project indexing, ranked snippet search |
 | `verification` | Widget captures, editor/runtime screenshots, comparisons, list/cleanup, and motion verification |
+
+For dual-mode tools, the executor uses a running editor when one is actually reachable; otherwise it falls back to commandlet execution. `save_assets` stays biased toward the running editor and can reroute there when commandlet-side file locks block persistence.
 
 ## Resources And Prompts
 
