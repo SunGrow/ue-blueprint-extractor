@@ -86,4 +86,28 @@ Describe 'Get-UEAutomationReportSummary' {
         $summary.WarningCount | Should Be $null
         $summary.MatchedFile | Should Be $null
     }
+
+    It 'reads top-level succeededWithWarnings summaries under Windows PowerShell' {
+        $reportRoot = Join-Path $env:TEMP ("bpx-report-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
+
+        try {
+            Set-Content -LiteralPath (Join-Path $reportRoot 'index.json') -Value (@'
+{
+  "succeeded": 31,
+  "succeededWithWarnings": 0,
+  "failed": 0
+}
+'@)
+
+            $summary = Get-UEAutomationReportSummary -ReportPath $reportRoot
+
+            $summary.ReportAvailable | Should Be $true
+            $summary.WarningCount | Should Be 0
+            $summary.MatchedFile | Should Match 'index\.json$'
+        }
+        finally {
+            Remove-Item -LiteralPath $reportRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }

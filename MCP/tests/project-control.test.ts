@@ -873,7 +873,7 @@ describe('registerProjectControlTools', () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(resolveProjectInputs).toHaveBeenCalledTimes(2);
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
-      'toolchain missing; attempted explicit args -> editor context -> environment',
+      'toolchain missing; attempted explicit args -> project association -> editor context -> environment',
     );
     expect(getTextContent(result as { content?: Array<{ text?: string; type: string }> })).toContain(
       'editor_context_error=editor missing',

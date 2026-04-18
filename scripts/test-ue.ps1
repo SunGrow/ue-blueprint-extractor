@@ -350,7 +350,13 @@ try {
         }
 
         if ($null -eq $AutomationSummary.WarningCount) {
-            throw "Automation report summary did not include a warning count for filter $AutomationFilter. Checked $($AutomationSummary.MatchedFile ?? $AutomationSummary.ReportPath)"
+            $CheckedPath = if (-not [string]::IsNullOrWhiteSpace($AutomationSummary.MatchedFile)) {
+                $AutomationSummary.MatchedFile
+            }
+            else {
+                $AutomationSummary.ReportPath
+            }
+            throw "Automation report summary did not include a warning count for filter $AutomationFilter. Checked $CheckedPath"
         }
 
         if ($AutomationSummary.WarningCount -gt 0) {

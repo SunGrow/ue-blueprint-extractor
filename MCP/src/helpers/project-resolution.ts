@@ -5,6 +5,7 @@ import type { CompileProjectCodeResult } from '../project-controller.js';
 import type { ProjectAutomationContext, ResolvedProjectInputs } from '../tool-context.js';
 import {
   buildEngineAssociationCandidates,
+  filesystemPathsEqual,
   isWindowsStylePath,
   isWslMountedWindowsPath,
   readProjectEngineAssociation,
@@ -182,6 +183,51 @@ async function probePreferredEngineRoot(
   return undefined;
 }
 
+function hasConcreteAssociationCandidate(
+  candidates: Array<{ path: string; platform: NodeJS.Platform }>,
+): boolean {
+  return candidates.some((candidate) => (
+    isWindowsStylePath(candidate.path)
+    || isWslMountedWindowsPath(candidate.path)
+    || candidate.path.startsWith('/')
+  ));
+}
+
+function matchesAssociationCandidate(
+  engineRoot: string | undefined,
+  candidates: Array<{ path: string; platform: NodeJS.Platform }>,
+): boolean {
+  if (!engineRoot) {
+    return false;
+  }
+
+  return candidates.some((candidate) => filesystemPathsEqual(engineRoot, candidate.path));
+}
+
+function buildEngineRootConflict(
+  engineAssociation: string | undefined,
+  candidates: Array<{ path: string; platform: NodeJS.Platform }>,
+  implicitRoots: Array<{ source: 'editor_context' | 'environment'; path: string }>,
+): string | undefined {
+  if (!engineAssociation || implicitRoots.length === 0) {
+    return undefined;
+  }
+
+  const roots = implicitRoots.map(({ source, path }) => `${source}:${path}`).join(', ');
+  const concreteCandidates = candidates
+    .map((candidate) => candidate.path)
+    .filter((candidate, index, all) => all.indexOf(candidate) === index)
+    .filter((candidate) => (
+      isWindowsStylePath(candidate)
+      || isWslMountedWindowsPath(candidate)
+      || candidate.startsWith('/')
+    ));
+
+  return concreteCandidates.length > 0
+    ? `project EngineAssociation "${engineAssociation}" conflicts with implicit engine roots (${roots}); expected one of ${concreteCandidates.join(' | ')}`
+    : `project EngineAssociation "${engineAssociation}" conflicts with implicit engine roots (${roots})`;
+}
+
 export async function resolveProjectInputs(
   request: ProjectInputsRequest,
   deps: ResolveProjectInputsDeps,
@@ -230,19 +276,48 @@ export async function resolveProjectInputs(
       platform: candidatePlatform,
     }))
   ));
+  const associationIsConcrete = hasConcreteAssociationCandidate(associationCandidates);
+  const matchingContextEngineRoot = associationIsConcrete && matchesAssociationCandidate(engineRootFromContext, associationCandidates)
+    ? engineRootFromContext
+    : undefined;
+  const matchingEnvEngineRoot = associationIsConcrete && matchesAssociationCandidate(engineRootFromEnv, associationCandidates)
+    ? engineRootFromEnv
+    : undefined;
+  const conflictingImplicitRoots = associationIsConcrete
+    ? [
+      ...(engineRootFromContext && !matchingContextEngineRoot ? [{ source: 'editor_context' as const, path: engineRootFromContext }] : []),
+      ...(engineRootFromEnv && !matchingEnvEngineRoot ? [{ source: 'environment' as const, path: engineRootFromEnv }] : []),
+    ]
+    : [];
 
   let engineRoot = firstDefinedString(request.engine_root, engineRootFromContext, engineRootFromEnv);
-  let engineRootSource: 'explicit' | 'editor_context' | 'environment' | 'filesystem_heuristic' | 'missing';
+  let engineRootSource: 'explicit' | 'editor_context' | 'environment' | 'project_association' | 'filesystem_heuristic' | 'missing';
+  let engineRootConflict: string | undefined;
 
   if (request.engine_root) {
     engineRootSource = 'explicit';
+  } else if (associationIsConcrete) {
+    const preferredCandidate = await probePreferredEngineRoot(associationCandidates, platform);
+    if (matchingContextEngineRoot) {
+      engineRoot = matchingContextEngineRoot;
+      engineRootSource = 'editor_context';
+    } else if (matchingEnvEngineRoot) {
+      engineRoot = matchingEnvEngineRoot;
+      engineRootSource = 'environment';
+    } else if (preferredCandidate) {
+      engineRoot = preferredCandidate;
+      engineRootSource = 'project_association';
+    } else {
+      engineRoot = undefined;
+      engineRootSource = 'missing';
+      engineRootConflict = buildEngineRootConflict(engineAssociation, associationCandidates, conflictingImplicitRoots);
+    }
   } else if (engineRootFromContext) {
     engineRootSource = 'editor_context';
   } else if (engineRootFromEnv) {
     engineRootSource = 'environment';
   } else {
-    const preferredCandidate = await probePreferredEngineRoot(associationCandidates, platform);
-    let heuristicRoot = preferredCandidate;
+    let heuristicRoot: string | undefined;
     if (!heuristicRoot) {
       for (const candidatePlatform of heuristicPlatforms) {
         heuristicRoot = await probeEngineRootHeuristic(candidatePlatform, platform);
@@ -265,6 +340,8 @@ export async function resolveProjectInputs(
     target,
     context,
     contextError,
+    projectEngineAssociation: engineAssociation,
+    engineRootConflict,
     sources: {
       engineRoot: engineRootSource,
       projectPath: request.project_path ? 'explicit' : projectPathFromContext ? 'editor_context' : projectPathFromWorkspace ? 'workspace' : projectPathFromEnv ? 'environment' : 'missing',

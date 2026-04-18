@@ -112,7 +112,7 @@ describe('utility helpers', () => {
       'editor_context_error=editor offline',
     ]);
     expect(explainProjectResolutionFailure('missing inputs', resolved).message).toContain(
-      'missing inputs; attempted explicit args -> editor context -> environment',
+      'missing inputs; attempted explicit args -> project association -> editor context -> environment',
     );
 
     const probe = supportsConnectionProbe(client);

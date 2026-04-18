@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getProjectAutomationContext,
   getHeuristicEngineCandidates,
@@ -153,8 +156,15 @@ describe('getProjectAutomationContext', () => {
 });
 
 describe('resolveProjectInputs', () => {
+  const scratchDirs: string[] = [];
   const firstDefinedString = (...values: Array<unknown>) =>
     values.find((v) => typeof v === 'string' && v.length > 0) as string | undefined;
+
+  afterEach(async () => {
+    await Promise.allSettled(
+      scratchDirs.splice(0).map(async (dir) => rm(dir, { recursive: true, force: true })),
+    );
+  });
 
   it('uses explicit request values when provided', async () => {
     const getProjectAutomationContext = vi.fn();
@@ -230,6 +240,114 @@ describe('resolveProjectInputs', () => {
     expect(result.sources.projectPath).toBe('environment');
     expect(result.sources.target).toBe('environment');
     expect(result.contextError).toBe('editor offline');
+  });
+
+  it('prefers the project EngineAssociation over stale implicit engine roots', async () => {
+    const scratchRoot = await mkdtemp(path.join(tmpdir(), 'bpx-project-resolution-'));
+    scratchDirs.push(scratchRoot);
+
+    const associatedEngineRoot = path.join(scratchRoot, 'UE_5.7');
+    await mkdir(path.join(associatedEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux'), { recursive: true });
+    await writeFile(
+      path.join(associatedEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh'),
+      '#!/bin/sh\n',
+      'utf8',
+    );
+
+    const projectPath = path.join(scratchRoot, 'MyGame.uproject');
+    await writeFile(projectPath, JSON.stringify({ EngineAssociation: associatedEngineRoot }), 'utf8');
+
+    const staleImplicitRoot = path.join(scratchRoot, 'UE_5.6');
+    const getProjectAutomationContext = vi.fn(async () => ({
+      engineRoot: staleImplicitRoot,
+      projectFilePath: projectPath,
+      editorTarget: 'MyGameEditor',
+    }));
+
+    const result = await resolveProjectInputs(
+      {},
+      {
+        getProjectAutomationContext,
+        firstDefinedString,
+        env: {
+          UE_ENGINE_ROOT: staleImplicitRoot,
+        } as NodeJS.ProcessEnv,
+        platform: 'linux',
+      },
+    );
+
+    expect(result.engineRoot).toBe(associatedEngineRoot);
+    expect(result.projectPath).toBe(projectPath);
+    expect(result.target).toBe('MyGameEditor');
+    expect(result.projectEngineAssociation).toBe(associatedEngineRoot);
+    expect(result.sources.engineRoot).toBe('project_association');
+    expect(result.sources.projectPath).toBe('editor_context');
+    expect(result.sources.target).toBe('editor_context');
+  });
+
+  it('blocks mismatched implicit engine roots when no associated engine installation is available', async () => {
+    const scratchRoot = await mkdtemp(path.join(tmpdir(), 'bpx-project-resolution-'));
+    scratchDirs.push(scratchRoot);
+
+    const associatedEngineRoot = path.join(scratchRoot, 'UE_5.7');
+    const projectPath = path.join(scratchRoot, 'MyGame.uproject');
+    await writeFile(projectPath, JSON.stringify({ EngineAssociation: associatedEngineRoot }), 'utf8');
+
+    const staleImplicitRoot = path.join(scratchRoot, 'UE_5.6');
+    const getProjectAutomationContext = vi.fn(async () => ({
+      engineRoot: staleImplicitRoot,
+      projectFilePath: projectPath,
+      editorTarget: 'MyGameEditor',
+    }));
+
+    const result = await resolveProjectInputs(
+      {},
+      {
+        getProjectAutomationContext,
+        firstDefinedString,
+        env: {
+          UE_ENGINE_ROOT: staleImplicitRoot,
+        } as NodeJS.ProcessEnv,
+        platform: 'linux',
+      },
+    );
+
+    expect(result.engineRoot).toBeUndefined();
+    expect(result.projectPath).toBe(projectPath);
+    expect(result.target).toBe('MyGameEditor');
+    expect(result.projectEngineAssociation).toBe(associatedEngineRoot);
+    expect(result.sources.engineRoot).toBe('missing');
+    expect(result.engineRootConflict).toContain('EngineAssociation');
+    expect(result.engineRootConflict).toContain(staleImplicitRoot);
+    expect(result.engineRootConflict).toContain(associatedEngineRoot);
+  });
+
+  it('keeps explicit engine_root overrides even when the project association differs', async () => {
+    const scratchRoot = await mkdtemp(path.join(tmpdir(), 'bpx-project-resolution-'));
+    scratchDirs.push(scratchRoot);
+
+    const associatedEngineRoot = path.join(scratchRoot, 'UE_5.7');
+    const explicitEngineRoot = path.join(scratchRoot, 'UE_5.6');
+    const projectPath = path.join(scratchRoot, 'MyGame.uproject');
+    await writeFile(projectPath, JSON.stringify({ EngineAssociation: associatedEngineRoot }), 'utf8');
+
+    const getProjectAutomationContext = vi.fn();
+    const result = await resolveProjectInputs(
+      {
+        engine_root: explicitEngineRoot,
+        project_path: projectPath,
+        target: 'MyGameEditor',
+      },
+      {
+        getProjectAutomationContext,
+        firstDefinedString,
+        platform: 'linux',
+      },
+    );
+
+    expect(result.engineRoot).toBe(explicitEngineRoot);
+    expect(result.sources.engineRoot).toBe('explicit');
+    expect(getProjectAutomationContext).not.toHaveBeenCalled();
   });
 
   it('captures contextError when automation context fails', async () => {

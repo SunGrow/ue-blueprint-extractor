@@ -126,6 +126,20 @@ function Get-UEAutomationWarningCount {
     return $BestCount
 }
 
+function ConvertFrom-BPXJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Json
+    )
+
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        return $Json | ConvertFrom-Json -Depth 100 -ErrorAction Stop
+    }
+
+    return $Json | ConvertFrom-Json -ErrorAction Stop
+}
+
 function Get-UEAutomationReportSummary {
     [CmdletBinding()]
     param(
@@ -161,7 +175,7 @@ function Get-UEAutomationReportSummary {
     foreach ($ReportFile in $ReportFiles) {
         try {
             $Raw = Get-Content -LiteralPath $ReportFile.FullName -Raw -ErrorAction Stop
-            $Parsed = $Raw | ConvertFrom-Json -Depth 100 -ErrorAction Stop
+            $Parsed = ConvertFrom-BPXJson -Json $Raw
         }
         catch {
             continue

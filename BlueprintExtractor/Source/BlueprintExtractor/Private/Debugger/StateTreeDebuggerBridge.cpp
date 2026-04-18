@@ -2,6 +2,7 @@
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Misc/EngineVersionComparison.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
@@ -153,20 +154,30 @@ TSharedPtr<FJsonObject> FStateTreeDebuggerBridge::Read(const FString& PayloadJso
 	// Force sync to latest data
 	Debugger->SyncToCurrentSessionDuration();
 
-	// Get all instances
-	TArray<UE::StateTreeDebugger::FInstanceDescriptor> Instances;
-	Debugger->GetSessionInstances(Instances);
-
 	TSharedPtr<FJsonObject> Result = MakeBridgeResult(true);
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5, 7, 0)
+	Result->SetNumberField(TEXT("recordingDuration"), Debugger->GetLastProcessedRecordedWorldTime());
+#else
 	Result->SetNumberField(TEXT("recordingDuration"), Debugger->GetRecordingDuration());
+#endif
 	Result->SetNumberField(TEXT("analysisDuration"), Debugger->GetAnalysisDuration());
 	Result->SetNumberField(TEXT("scrubTime"), Debugger->GetScrubTime());
 	Result->SetBoolField(TEXT("paused"), Debugger->IsAnalysisSessionPaused());
 
 	// Serialize instances
 	TArray<TSharedPtr<FJsonValue>> InstancesArray;
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5, 7, 0)
+	TArray<const TSharedRef<const UE::StateTreeDebugger::FInstanceDescriptor>> InstanceDescriptors;
+	Debugger->GetSessionInstanceDescriptors(InstanceDescriptors);
+	for (const TSharedRef<const UE::StateTreeDebugger::FInstanceDescriptor>& InstRef : InstanceDescriptors)
+	{
+		const UE::StateTreeDebugger::FInstanceDescriptor& Inst = InstRef.Get();
+#else
+	TArray<UE::StateTreeDebugger::FInstanceDescriptor> Instances;
+	Debugger->GetSessionInstances(Instances);
 	for (const UE::StateTreeDebugger::FInstanceDescriptor& Inst : Instances)
 	{
+#endif
 		if (!Inst.IsValid())
 		{
 			continue;

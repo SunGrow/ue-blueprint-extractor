@@ -300,7 +300,7 @@ export function registerStaticDocResources(server: Pick<McpServer, 'resource'>):
       '- list_message_log_listings probes known built-in and caller-supplied Message Log listing names and reports which ones are currently registered.',
       '- read_message_log reads one registered Message Log listing with severity, token, text, and paging filters.',
       '- compile_project_code runs an external UBT build from the MCP host.',
-      '- compile_project_code and sync_project_code resolve engine_root, project_path, and target in this order: explicit args -> editor context -> environment.',
+      '- compile_project_code and sync_project_code resolve project inputs by preferring explicit args, then honoring a concrete .uproject EngineAssociation before falling back to editor context and environment defaults.',
       '- trigger_live_coding requests an editor-side Live Coding compile and is only supported on Windows-focused setups. changed_paths remains an accepted compatibility input but the current editor-side trigger ignores it. When Live Coding reports NoChanges or another fallback state, the result includes fallbackRecommended, reason, and the last external build context when available.',
       '- restart_editor requests an editor restart, then waits for Remote Control to disconnect and reconnect. When save_dirty_assets is true, all dirty packages are saved before the restart to prevent modal save dialogs.',
       '- wait_for_editor polls Remote Control once per second and returns a normalized readiness result that callers can use after restart windows or transient disconnects.',

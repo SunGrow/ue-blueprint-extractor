@@ -19,6 +19,12 @@ export function buildProjectResolutionDiagnostics(resolved: ResolvedProjectInput
     `target=${resolved.sources.target}`,
   ];
 
+  if (resolved.projectEngineAssociation) {
+    diagnostics.push(`project_engine_association=${resolved.projectEngineAssociation}`);
+  }
+  if (resolved.engineRootConflict) {
+    diagnostics.push(`engine_root_conflict=${resolved.engineRootConflict}`);
+  }
   if (resolved.contextError) {
     diagnostics.push(`editor_context_error=${resolved.contextError}`);
   }
@@ -27,5 +33,7 @@ export function buildProjectResolutionDiagnostics(resolved: ResolvedProjectInput
 }
 
 export function explainProjectResolutionFailure(prefix: string, resolved: ResolvedProjectInputs): Error {
-  return new Error(`${prefix}; attempted explicit args -> editor context -> environment (${buildProjectResolutionDiagnostics(resolved).join(', ')})`);
+  return new Error(
+    `${prefix}; attempted explicit args -> project association -> editor context -> environment (${buildProjectResolutionDiagnostics(resolved).join(', ')})`,
+  );
 }

@@ -50,7 +50,14 @@ export type EditorContextSnapshot = {
   unsupportedSections?: string[];
 };
 
-export type ProjectInputSource = 'explicit' | 'editor_context' | 'workspace' | 'environment' | 'filesystem_heuristic' | 'missing';
+export type ProjectInputSource =
+  | 'explicit'
+  | 'editor_context'
+  | 'workspace'
+  | 'environment'
+  | 'project_association'
+  | 'filesystem_heuristic'
+  | 'missing';
 
 export type ResolvedProjectInputs = {
   engineRoot?: string;
@@ -58,6 +65,8 @@ export type ResolvedProjectInputs = {
   target?: string;
   context: ProjectAutomationContext | null;
   contextError?: string;
+  projectEngineAssociation?: string;
+  engineRootConflict?: string;
   sources: {
     engineRoot: ProjectInputSource;
     projectPath: ProjectInputSource;
