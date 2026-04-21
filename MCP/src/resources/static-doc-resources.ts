@@ -168,6 +168,7 @@ export function registerStaticDocResources(server: Pick<McpServer, 'resource'>):
       '- Writes mutate the live editor but do not save automatically; call save_assets when you want disk persistence.',
       '- Use the narrowest mutation tool that fits: patch one widget/member first, replace whole trees only when structure is changing broadly.',
       '- Keep payloads small by sending only changed fields, not full extracted objects, unless the tool explicitly expects a full replacement payload.',
+      '- TMap properties patch with MERGE semantics: keys you include are added/updated; keys you omit are preserved. When a map value is a struct with UPROPERTY(Instanced) fields, patch individual fields with {"classPath": "...", "properties": {...}} to swap class, or {"properties": {...}} to keep class and edit fields.',
       '- Re-extract after mutation when you need confirmation; do not assume UE normalized fields exactly as sent.',
       '- For fidelity-sensitive menu work, normalize text, image, Figma-export, or HTML/CSS inputs into design_spec_json before authoring assets.',
       '- Start in the default tool profile unless you explicitly need the full flat surface. Use activate_tool_profile with profile="expert" for compatibility or low-level discovery, then switch back to profile="default" to return to the curated scoped surface.',

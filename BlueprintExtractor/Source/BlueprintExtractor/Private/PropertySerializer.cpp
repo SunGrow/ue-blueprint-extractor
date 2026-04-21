@@ -1290,6 +1290,12 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 
 	if (const FMapProperty* MapProp = CastField<FMapProperty>(Property))
 	{
+		// MERGE SEMANTICS (documented in authoring-conventions):
+		// - Keys present in JSON are added or updated in place (existing value reused so
+		//   Instanced subobjects survive and can be patched without recreation).
+		// - Keys absent from JSON are preserved untouched.
+		// The previous implementation called MapHelper.EmptyValues(...) which destroyed
+		// all entries and prevented partial TMap patches entirely.
 		const TSharedPtr<FJsonObject> JsonObject = JsonValue->AsObject();
 		if (!JsonObject.IsValid())
 		{
@@ -1301,18 +1307,31 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 		if (!bValidationOnly)
 		{
 			FScriptMapHelper MapHelper(MapProp, WorkingPtr);
-			MapHelper.EmptyValues(JsonObject->Values.Num());
 
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : JsonObject->Values)
 			{
-				const int32 AddedIndex = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
-				FString KeyText = Pair.Key;
-				if (!MapProp->KeyProp->ImportText_Direct(*KeyText, MapHelper.GetKeyPtr(AddedIndex), OwnerObject, PPF_None))
+				// Materialise the key into a temporary so we can look it up in the live map.
+				FTemporaryPropertyStorage KeyStorage(MapProp->KeyProp);
+				if (!MapProp->KeyProp->ImportText_Direct(*Pair.Key, KeyStorage.Data, OwnerObject, PPF_None))
 				{
 					AddError(OutErrors, FString::Printf(TEXT("Property '%s': failed to parse map key '%s'"),
 						*Property->GetName(), *Pair.Key));
 					bMapSuccess = false;
+					continue;
 				}
+
+				// Look up existing entry by key; update it in place when present.
+				uint8* ExistingValuePtr = MapHelper.FindValueFromHash(KeyStorage.Data);
+				if (ExistingValuePtr != nullptr)
+				{
+					bMapSuccess &= ApplyJsonValueToPropertyInternal(MapProp->ValueProp,
+						ExistingValuePtr, OwnerObject, Pair.Value, OutErrors, false);
+					continue;
+				}
+
+				// Key is new — allocate a default slot, copy key into it, apply value.
+				const int32 AddedIndex = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
+				MapProp->KeyProp->CopyCompleteValue(MapHelper.GetKeyPtr(AddedIndex), KeyStorage.Data);
 				bMapSuccess &= ApplyJsonValueToPropertyInternal(MapProp->ValueProp,
 					MapHelper.GetValuePtr(AddedIndex), OwnerObject, Pair.Value, OutErrors, false);
 			}
@@ -1361,17 +1380,30 @@ static bool ApplyJsonValueToPropertyInternal(const FProperty* Property,
 		if (JsonValue->Type == EJson::Object)
 		{
 			const TSharedPtr<FJsonObject> StructValue = JsonValue->AsObject();
-			// Try FJsonObjectConverter first (handles simple structs: FVector, FRotator, etc.)
-			const bool bConverted = FJsonObjectConverter::JsonObjectToUStruct(
-				StructValue.ToSharedRef(), StructProp->Struct, WorkingPtr);
-			if (bConverted)
+
+			// Structs containing UPROPERTY(Instanced) object references (e.g. FCameraOperatorActionRule
+			// holds Instanced TObjectPtr<> to UObject). FJsonObjectConverter::JsonObjectToUStruct is a
+			// generic deserialiser that does NOT understand our {"classPath": ..., "properties": ...}
+			// inline-object envelope — it would silently clobber those fields with defaults and return
+			// success. Force the recursive field-by-field path so ApplyObjectReference handles inline
+			// object creation/patching through our convention.
+			const bool bStructContainsInstanced = StructProp->HasAnyPropertyFlags(
+				CPF_ContainsInstancedReference | CPF_InstancedReference | CPF_PersistentInstance);
+
+			if (!bStructContainsInstanced)
 			{
-				return true;
+				// Try FJsonObjectConverter first (handles simple structs: FVector, FRotator, etc.)
+				const bool bConverted = FJsonObjectConverter::JsonObjectToUStruct(
+					StructValue.ToSharedRef(), StructProp->Struct, WorkingPtr);
+				if (bConverted)
+				{
+					return true;
+				}
 			}
 
-			// Fallback: recursive field-by-field application for complex structs
-			// (e.g. FAnimNode_ModifyBone) where bulk conversion fails due to
-			// internal properties that are not safe for JSON deserialization.
+			// Fallback / mandatory path: recursive field-by-field application for complex structs
+			// (e.g. FAnimNode_ModifyBone) or structs with Instanced UObject members where bulk
+			// conversion fails or silently drops inline-object data.
 			bool bFieldSuccess = true;
 			for (const auto& FieldPair : StructValue->Values)
 			{

@@ -502,6 +502,33 @@ export const exampleCatalog: Record<string, ExampleFamily> = {
           },
         },
       },
+      {
+        title: 'patch_tmap_entry_with_class_swap',
+        tool: 'modify_data_asset',
+        arguments: {
+          asset_path: '/Game/Data/DA_RuleTable.DA_RuleTable',
+          properties: {
+            // TMap patches MERGE: keys NOT listed here stay untouched.
+            // Here we update only entry "FirstLine" and keep "SecondLine" / "Serve" / etc. intact.
+            ActionRules: {
+              FirstLine: {
+                // Struct fields patched in place (existing TriggerTemplates / Conditions preserved).
+                Description: 'Updated first-line rule',
+                // InlineAction is UPROPERTY(Instanced) TObjectPtr: classPath swaps the class,
+                // properties seeds / overrides fields on the new instance.
+                // Omit classPath (send only properties) to keep the existing class and only edit fields.
+                InlineAction: {
+                  classPath: '/Script/MyModule.ActionTracking',
+                  properties: {
+                    TrackingStiffness: 12,
+                    DampingRatio: 1,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     ],
   },
   window_ui_polish: {

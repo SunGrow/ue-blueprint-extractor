@@ -62,6 +62,7 @@ static constexpr TCHAR EnginePreviewMeshPath[] = TEXT("/Engine/EngineMeshes/Skel
 static constexpr TCHAR StateTreeSchemaPath[] = TEXT("/Script/GameplayStateTreeModule.StateTreeComponentSchema");
 static constexpr TCHAR FixtureDataAssetClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureDataAsset");
 static constexpr TCHAR FixtureInlineObjectClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureInlineObject");
+static constexpr TCHAR FixtureInlineObjectAltClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureInlineObjectAlt");
 static constexpr TCHAR FixtureRowStructPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRow");
 static constexpr TCHAR FixtureBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureBindWidgetParent");
 static constexpr TCHAR FixtureRenameBindWidgetParentClassPath[] = TEXT("/Script/BlueprintExtractorFixture.BlueprintExtractorFixtureRenameBindWidgetParent");
@@ -1990,6 +1991,162 @@ static bool RunInlineInstancedDataAssetCoverage(FAutomationTestBase& Test)
 
 	Test.TestEqual(TEXT("Modified inline child label round-trips"), ModifiedInlineChildProperties->GetStringField(TEXT("Label")), FString(TEXT("LeafModified")));
 	Test.TestEqual(TEXT("Modified inline child count round-trips"), static_cast<int32>(ModifiedInlineChildProperties->GetNumberField(TEXT("Count"))), 14);
+
+	return true;
+}
+
+/**
+ * Covers the regression addressed by the 2026-04 PropertySerializer patch:
+ *   1. modify_data_asset on a TMap must MERGE the payload (keys absent from JSON are preserved),
+ *      not wipe the map and recreate only the keys it mentions.
+ *   2. Struct-typed TMap values that contain UPROPERTY(Instanced) UObject fields must route
+ *      through the recursive field path instead of FJsonObjectConverter::JsonObjectToUStruct,
+ *      which does not understand the {classPath, properties} inline-object envelope and used
+ *      to clobber those references to default / null.
+ *   3. Class swap on an existing inline UObject (entry A's InlineValue) must land correctly
+ *      when paired with the merge semantics.
+ */
+static bool RunInlineInstancedMapCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	const FString DataAssetPath = MakeUniqueAssetPath(TEXT("DA_InlineInstancedMap"));
+	const FString DataAssetObjectPath = MakeObjectPath(DataAssetPath);
+
+	// Create: two entries (A, B), each with an Instanced InlineValue of the base class.
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->CreateDataAsset(
+			DataAssetPath,
+			FixtureDataAssetClassPath,
+			FString::Printf(
+				TEXT(R"json({"InlineObjectMap":{"A":{"Description":"EntryA","InlineValue":{"classPath":"%s","properties":{"Label":"ValueA","Count":10}}},"B":{"Description":"EntryB","InlineValue":{"classPath":"%s","properties":{"Label":"ValueB","Count":20}}}}})json"),
+				FixtureInlineObjectClassPath,
+				FixtureInlineObjectClassPath),
+			false),
+		TEXT("CreateDataAsset TMap<Name,StructWithInstanced>"));
+
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->SaveAssets(SerializeStringArray({ DataAssetObjectPath })),
+		TEXT("SaveAssets TMap inline instanced coverage"));
+
+	// Partial patch: only entry A — swap class to Alt and change Label/Count.
+	// Entry B MUST be preserved (merge semantics).
+	ExpectSuccessfulResult(
+		Test,
+		Subsystem->ModifyDataAsset(
+			DataAssetObjectPath,
+			FString::Printf(
+				TEXT(R"json({"InlineObjectMap":{"A":{"Description":"EntryAModified","InlineValue":{"classPath":"%s","properties":{"Label":"ValueAModified","Count":11,"AltTag":"AltOnA"}}}}})json"),
+				FixtureInlineObjectAltClassPath),
+			false),
+		TEXT("ModifyDataAsset partial TMap patch"));
+
+	const TSharedPtr<FJsonObject> Extract = ExpectSuccessfulResult(
+		Test,
+		Subsystem->ExtractDataAsset(DataAssetObjectPath),
+		TEXT("ExtractDataAsset after partial TMap patch"));
+	if (!Extract.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> DataAssetJson;
+	Test.TestTrue(TEXT("Extract returns dataAsset payload"),
+		TryGetObjectFieldCopy(Extract, TEXT("dataAsset"), DataAssetJson) && DataAssetJson.IsValid());
+	if (!DataAssetJson.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> MapProperty = FindArrayObjectByStringField(
+		DataAssetJson, TEXT("properties"), TEXT("name"), TEXT("InlineObjectMap"));
+	Test.TestNotNull(TEXT("InlineObjectMap property is present"), MapProperty.Get());
+	if (!MapProperty.IsValid())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> MapValue;
+	Test.TestTrue(TEXT("InlineObjectMap exposes nested value"),
+		TryGetObjectFieldCopy(MapProperty, TEXT("value"), MapValue) && MapValue.IsValid());
+	if (!MapValue.IsValid())
+	{
+		return false;
+	}
+
+	// Both keys must still be present (merge preserved B).
+	Test.TestTrue(TEXT("Merge preserves entry B after partial patch"), MapValue->HasField(TEXT("B")));
+	Test.TestTrue(TEXT("Merge updates entry A after partial patch"), MapValue->HasField(TEXT("A")));
+	Test.TestEqual(TEXT("Merge keeps TMap size at 2"), MapValue->Values.Num(), 2);
+
+	TSharedPtr<FJsonObject> EntryA;
+	Test.TestTrue(TEXT("Entry A struct present"),
+		TryGetObjectFieldCopy(MapValue, TEXT("A"), EntryA) && EntryA.IsValid());
+
+	TSharedPtr<FJsonObject> EntryB;
+	Test.TestTrue(TEXT("Entry B struct present"),
+		TryGetObjectFieldCopy(MapValue, TEXT("B"), EntryB) && EntryB.IsValid());
+
+	if (!EntryA.IsValid() || !EntryB.IsValid())
+	{
+		return false;
+	}
+
+	// Entry A: Description should be updated AND InlineValue class should be swapped to Alt.
+	FString EntryADescription;
+	Test.TestTrue(TEXT("Entry A Description serialises"),
+		EntryA->TryGetStringField(TEXT("description"), EntryADescription));
+	Test.TestEqual(TEXT("Entry A Description updated"), EntryADescription, FString(TEXT("EntryAModified")));
+
+	TSharedPtr<FJsonObject> EntryAInline;
+	Test.TestTrue(TEXT("Entry A InlineValue serialises as object"),
+		TryGetObjectFieldCopy(EntryA, TEXT("inlineValue"), EntryAInline) && EntryAInline.IsValid());
+	if (!EntryAInline.IsValid())
+	{
+		return false;
+	}
+
+	FString EntryAClassName;
+	Test.TestTrue(TEXT("Entry A InlineValue reports class"),
+		EntryAInline->TryGetStringField(TEXT("_ClassName"), EntryAClassName));
+	Test.TestTrue(
+		TEXT("Entry A InlineValue class is swapped to Alt subclass"),
+		EntryAClassName.Contains(TEXT("BlueprintExtractorFixtureInlineObjectAlt")));
+
+	FString EntryALabel;
+	EntryAInline->TryGetStringField(TEXT("label"), EntryALabel);
+	Test.TestEqual(TEXT("Entry A InlineValue Label updated"), EntryALabel, FString(TEXT("ValueAModified")));
+
+	// Entry B: must be unchanged by the partial patch.
+	FString EntryBDescription;
+	Test.TestTrue(TEXT("Entry B Description serialises"),
+		EntryB->TryGetStringField(TEXT("description"), EntryBDescription));
+	Test.TestEqual(TEXT("Entry B Description preserved"), EntryBDescription, FString(TEXT("EntryB")));
+
+	TSharedPtr<FJsonObject> EntryBInline;
+	Test.TestTrue(TEXT("Entry B InlineValue serialises as object"),
+		TryGetObjectFieldCopy(EntryB, TEXT("inlineValue"), EntryBInline) && EntryBInline.IsValid());
+	if (!EntryBInline.IsValid())
+	{
+		return false;
+	}
+
+	FString EntryBClassName;
+	EntryBInline->TryGetStringField(TEXT("_ClassName"), EntryBClassName);
+	Test.TestTrue(
+		TEXT("Entry B InlineValue retains original base class"),
+		EntryBClassName.Contains(TEXT("BlueprintExtractorFixtureInlineObject"))
+			&& !EntryBClassName.Contains(TEXT("BlueprintExtractorFixtureInlineObjectAlt")));
+
+	FString EntryBLabel;
+	EntryBInline->TryGetStringField(TEXT("label"), EntryBLabel);
+	Test.TestEqual(TEXT("Entry B InlineValue Label preserved"), EntryBLabel, FString(TEXT("ValueB")));
 
 	return true;
 }
@@ -4621,6 +4778,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("DataAssetInlineInstancedGraph"), [this]()
 		{
 			TestTrue(TEXT("Inline instanced DataAsset coverage completes"), RunInlineInstancedDataAssetCoverage(*this));
+		});
+
+		It(TEXT("DataAssetInlineInstancedMap"), [this]()
+		{
+			TestTrue(TEXT("Inline instanced TMap coverage completes"), RunInlineInstancedMapCoverage(*this));
 		});
 
 		It(TEXT("MaterialGraphRoundTrip"), [this]()

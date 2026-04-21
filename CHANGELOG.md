@@ -1,5 +1,11 @@
 # Changelog
 
+## 8.2.6
+### Bug fixes
+- **`modify_data_asset` TMap merge** — partial patches on `FMapProperty` no longer wipe entries that are not present in the payload. `FPropertySerializer` now looks up each JSON key via `FScriptMapHelper::FindValueFromHash` and updates existing values in place, adding entries only for previously-unknown keys. Previously the generic code called `MapHelper.EmptyValues(...)` before re-inserting, so any partial TMap patch destroyed unrelated entries.
+- **`modify_data_asset` structs with Instanced UObject fields** — struct-typed TMap values or nested struct properties that contain `UPROPERTY(Instanced) TObjectPtr<...>` members now go through the recursive field-by-field application path instead of `FJsonObjectConverter::JsonObjectToUStruct`. The generic UE converter did not understand the `{classPath, properties}` inline-object envelope and silently clobbered those pointers to null/default. Detected via `CPF_ContainsInstancedReference | CPF_InstancedReference | CPF_PersistentInstance` on the struct property. Simple structs (FVector, FRotator, FGameplayTag, etc.) remain on the original fast path.
+- **Authoring convention doc** — `blueprint://authoring-conventions` now documents TMap merge semantics explicitly; the `data_asset_instanced_graph` example catalog shows a TMap-entry class swap pattern.
+
 ## 7.0.4
 ### Features
 - **`addTasks` and `addChildren`** — `patch_state` now supports `addTasks` and `addChildren` fields that append to existing tasks/children instead of replacing them. Use `tasks`/`children` to replace all, `addTasks`/`addChildren` to append.

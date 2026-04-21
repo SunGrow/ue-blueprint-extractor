@@ -5,6 +5,18 @@ All notable changes to the Blueprint Extractor MCP are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.2.6] - 2026-04-21
+
+### Fixed
+
+- `modify_data_asset` on `TMap` properties now merges payloads instead of wiping unrelated keys. Partial patches add/update only the keys present in the JSON; absent keys survive untouched.
+- `modify_data_asset` on structs that contain `UPROPERTY(Instanced)` UObject fields (e.g. struct-typed TMap values) now routes through the recursive field-by-field path so the `{classPath, properties}` inline-object envelope is honoured. Previously, generic `FJsonObjectConverter::JsonObjectToUStruct` silently clobbered those pointers to null/default.
+
+### Docs
+
+- `blueprint://authoring-conventions` documents TMap merge semantics and the inline-object envelope explicitly.
+- `data_asset_instanced_graph` catalog adds a `patch_tmap_entry_with_class_swap` example covering the partial-TMap + class-swap flow.
+
 ## [8.0.0] - 2026-04-05
 
 ### Breaking
