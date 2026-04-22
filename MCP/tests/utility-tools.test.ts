@@ -21,6 +21,7 @@ describe('registerUtilityTools', () => {
       summarizeOutputSchema: vi.fn(),
       collectRelatedResources: vi.fn(),
       collectToolExampleFamilies: vi.fn(),
+      getToolExecutionCompatibility: vi.fn(),
     });
 
     const result = await registry.getTool('save_assets').handler({
@@ -47,6 +48,7 @@ describe('registerUtilityTools', () => {
       summarizeOutputSchema: vi.fn(),
       collectRelatedResources: vi.fn(),
       collectToolExampleFamilies: vi.fn(),
+      getToolExecutionCompatibility: vi.fn(),
     });
 
     const result = await registry.getTool('get_tool_help').handler({
@@ -65,6 +67,12 @@ describe('registerUtilityTools', () => {
     const summarizeOutputSchema = vi.fn(() => ({ type: 'object', properties: ['saved'] }));
     const collectRelatedResources = vi.fn(() => ['resource://save-assets']);
     const collectToolExampleFamilies = vi.fn(() => [{ family: 'basic-save' }]);
+    const getToolExecutionCompatibility = vi.fn(() => ({
+      tool_mode: 'both',
+      supported_modes: ['editor', 'commandlet'],
+      requires_live_editor: false,
+      headless_safe: true,
+    }));
 
     registerUtilityTools({
       server: registry.server,
@@ -82,6 +90,7 @@ describe('registerUtilityTools', () => {
       summarizeOutputSchema,
       collectRelatedResources,
       collectToolExampleFamilies,
+      getToolExecutionCompatibility,
     });
 
     const result = await registry.getTool('get_tool_help').handler({
@@ -92,6 +101,7 @@ describe('registerUtilityTools', () => {
     expect(summarizeOutputSchema).toHaveBeenCalledTimes(1);
     expect(collectRelatedResources).toHaveBeenCalledWith('save_assets');
     expect(collectToolExampleFamilies).toHaveBeenCalledWith('save_assets');
+    expect(getToolExecutionCompatibility).toHaveBeenCalledWith('save_assets');
     expect(parseDirectToolResult(result)).toEqual({
       success: true,
       operation: 'get_tool_help',
@@ -100,6 +110,12 @@ describe('registerUtilityTools', () => {
         title: 'Save Assets',
         description: 'Persist dirty packages.',
         annotations: { readOnlyHint: false },
+        executionCompatibility: {
+          tool_mode: 'both',
+          supported_modes: ['editor', 'commandlet'],
+          requires_live_editor: false,
+          headless_safe: true,
+        },
         parameters: [{ name: 'asset_paths', required: true }],
         output: { type: 'object', properties: ['saved'] },
         relatedResources: ['resource://save-assets'],

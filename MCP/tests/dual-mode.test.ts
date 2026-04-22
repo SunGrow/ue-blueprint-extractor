@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ExecutionAdapter, ToolCapability, ExecutionMode } from '../src/execution/execution-adapter.js';
 import { ALL_CAPABILITIES, COMMANDLET_CAPABILITIES } from '../src/execution/execution-adapter.js';
 import { EditorAdapter } from '../src/execution/adapters/editor-adapter.js';
+import { CommandletAdapter } from '../src/execution/adapters/commandlet-adapter.js';
 import { LazyCommandletAdapter } from '../src/execution/adapters/lazy-commandlet-adapter.js';
 import { ExecutionModeDetector } from '../src/execution/execution-mode-detector.js';
 import { AdaptiveExecutor, ExecutorError } from '../src/execution/adaptive-executor.js';
 import { TOOL_MODE_ANNOTATIONS, classifyRecoverableToolFailure } from '../src/server-config.js';
 import { createBlueprintExtractorServer } from '../src/server-factory.js';
+import { EventEmitter } from 'node:events';
 
 // ── Mock helpers ──
 
@@ -25,6 +27,85 @@ function createMockUEClient() {
     callSubsystem: vi.fn().mockResolvedValue(JSON.stringify({ success: true, data: 'test' })),
     checkConnection: vi.fn().mockResolvedValue(true),
   };
+}
+
+class MockReadable extends EventEmitter {
+  private bufferedChunks: Buffer[] = [];
+
+  setEncoding(): this {
+    return this;
+  }
+
+  override emit(eventName: string | symbol, ...args: any[]): boolean {
+    if (eventName === 'data' && this.listenerCount('data') === 0) {
+      const [chunk] = args;
+      this.bufferedChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      return true;
+    }
+
+    return super.emit(eventName, ...args);
+  }
+
+  override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    const result = super.on(eventName, listener);
+    if (eventName === 'data') {
+      this.flushBufferedChunks();
+    }
+    return result;
+  }
+
+  override addListener(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    return this.on(eventName, listener);
+  }
+
+  private flushBufferedChunks(): void {
+    if (this.bufferedChunks.length === 0 || this.listenerCount('data') === 0) {
+      return;
+    }
+
+    const bufferedChunks = [...this.bufferedChunks];
+    this.bufferedChunks = [];
+    for (const chunk of bufferedChunks) {
+      super.emit('data', chunk);
+    }
+  }
+}
+
+class MockWritable extends EventEmitter {
+  writes: string[] = [];
+  ended = false;
+
+  write(chunk: string): boolean {
+    this.writes.push(chunk);
+    return true;
+  }
+
+  end(): void {
+    this.ended = true;
+  }
+}
+
+function createMockChildProcess() {
+  const stdout = new MockReadable();
+  const stderr = new MockReadable();
+  const stdin = new MockWritable();
+  const process = new EventEmitter() as EventEmitter & {
+    stdout: MockReadable;
+    stderr: MockReadable;
+    stdin: MockWritable;
+    killed: boolean;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  process.stdout = stdout;
+  process.stderr = stderr;
+  process.stdin = stdin;
+  process.killed = false;
+  process.kill = vi.fn(() => {
+    process.killed = true;
+    process.emit('exit', 0);
+    return true;
+  });
+  return process;
 }
 
 // ── 1. EditorAdapter wraps UEClient ──
@@ -105,6 +186,99 @@ describe('LazyCommandletAdapter', () => {
     });
 
     await expect(adapter.isAvailable()).resolves.toBe(false);
+  });
+});
+
+describe('CommandletAdapter', () => {
+  it('waits for the ready JSON-RPC envelope and ignores non-JSON stdout/stderr noise', async () => {
+    const child = createMockChildProcess();
+    const spawnProcess = vi.fn(() => child as any);
+
+    const adapter = new CommandletAdapter({
+      engineRoot: 'C:/Program Files/Epic Games/UE_5.7',
+      projectPath: 'D:/Development/V2/CyberVolleyball6vs6.uproject',
+      platform: 'win32',
+      spawnProcess: spawnProcess as any,
+      startupTimeoutMs: 500,
+    });
+
+    const initPromise = adapter.initialize();
+    child.stdout.emit('data', Buffer.from('LogTemp: Display: booting commandlet\n'));
+    child.stderr.emit('data', Buffer.from('LogTemp: Warning: warming up stderr\n'));
+
+    let resolved = false;
+    initPromise.then(() => {
+      resolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(resolved).toBe(false);
+
+    child.stdout.emit('data', Buffer.from('{"jsonrpc":"2.0","id":0,"result":{"ready":true}}\n'));
+    await expect(initPromise).resolves.toBeUndefined();
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes recent stdout/stderr log tail in request timeout errors', async () => {
+    const child = createMockChildProcess();
+    const spawnProcess = vi.fn(() => child as any);
+
+    const adapter = new CommandletAdapter({
+      engineRoot: 'C:/Program Files/Epic Games/UE_5.7',
+      projectPath: 'D:/Development/V2/CyberVolleyball6vs6.uproject',
+      platform: 'win32',
+      spawnProcess: spawnProcess as any,
+      startupTimeoutMs: 500,
+      requestTimeoutMs: 30,
+    });
+
+    const initPromise = adapter.initialize();
+    child.stdout.emit('data', Buffer.from('{"jsonrpc":"2.0","id":0,"result":{"ready":true}}\n'));
+    await initPromise;
+
+    child.stdout.emit('data', Buffer.from('LogBlueprint: Display: compiling widget blueprint\n'));
+    child.stderr.emit('data', Buffer.from('LogSavePackage: Warning: package still dirty\n'));
+
+    const executePromise = adapter.execute('BlueprintExtractor', 'CompileWidgetBlueprint', { AssetPath: '/Game/UI/WBP_Menu' });
+
+    await expect(
+      executePromise,
+    ).rejects.toThrow(/Recent commandlet logs:/);
+    await expect(
+      executePromise,
+    ).rejects.toThrow(/LogBlueprint: Display: compiling widget blueprint/);
+    await expect(executePromise).rejects.toThrow(/LogSavePackage: Warning: package still dirty/);
+  });
+
+  it('restarts the commandlet process after an unexpected exit before the next execute call', async () => {
+    const firstChild = createMockChildProcess();
+    const secondChild = createMockChildProcess();
+    const spawnProcess = vi
+      .fn()
+      .mockReturnValueOnce(firstChild as any)
+      .mockReturnValueOnce(secondChild as any);
+
+    const adapter = new CommandletAdapter({
+      engineRoot: 'C:/Program Files/Epic Games/UE_5.7',
+      projectPath: 'D:/Development/V2/CyberVolleyball6vs6.uproject',
+      platform: 'win32',
+      spawnProcess: spawnProcess as any,
+      startupTimeoutMs: 500,
+      requestTimeoutMs: 200,
+    });
+
+    const firstInit = adapter.initialize();
+    firstChild.stdout.emit('data', Buffer.from('{"jsonrpc":"2.0","id":0,"result":{"ready":true}}\n'));
+    await firstInit;
+
+    firstChild.emit('exit', 1);
+
+    const executePromise = adapter.execute('BlueprintExtractor', 'ExtractBlueprint', { AssetPath: '/Game/BP_Test' });
+    secondChild.stdout.emit('data', Buffer.from('{"jsonrpc":"2.0","id":0,"result":{"ready":true}}\n'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    secondChild.stdout.emit('data', Buffer.from('{"jsonrpc":"2.0","id":1,"result":{"success":true,"from":"restarted-commandlet"}}\n'));
+
+    await expect(executePromise).resolves.toEqual({ success: true, from: 'restarted-commandlet' });
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -347,11 +521,102 @@ describe('TOOL_MODE_ANNOTATIONS', () => {
     }
   });
 
-  it('marks all modify_* tools as editor_only', () => {
-    for (const [toolName, mode] of TOOL_MODE_ANNOTATIONS) {
-      if (toolName.startsWith('modify_')) {
-        expect(mode).toBe('editor_only');
-      }
+  it('marks the explicit headless-safe authoring matrix as both', () => {
+    const bothModeTools = [
+      'create_widget_blueprint',
+      'replace_widget_tree',
+      'replace_widget_class',
+      'insert_widget_child',
+      'remove_widget',
+      'move_widget',
+      'wrap_widget',
+      'patch_widget',
+      'patch_widget_class_defaults',
+      'batch_widget_operations',
+      'apply_widget_diff',
+      'compile_widget',
+      'create_blueprint',
+      'modify_blueprint_members',
+      'modify_blueprint_graphs',
+      'scaffold_blueprint',
+      'create_material',
+      'modify_material',
+      'material_graph_operation',
+      'compile_material_asset',
+      'create_material_instance',
+      'modify_material_instance',
+      'create_data_asset',
+      'modify_data_asset',
+      'create_data_table',
+      'modify_data_table',
+      'create_input_action',
+      'modify_input_action',
+      'create_input_mapping_context',
+      'modify_input_mapping_context',
+      'create_curve',
+      'modify_curve',
+      'create_curve_table',
+      'modify_curve_table',
+      'create_user_defined_struct',
+      'modify_user_defined_struct',
+      'create_user_defined_enum',
+      'modify_user_defined_enum',
+      'create_blackboard',
+      'modify_blackboard',
+      'create_behavior_tree',
+      'modify_behavior_tree',
+      'create_state_tree',
+      'modify_state_tree',
+      'create_anim_sequence',
+      'modify_anim_sequence',
+      'create_anim_montage',
+      'modify_anim_montage',
+      'create_blend_space',
+      'modify_blend_space',
+      'create_widget_animation',
+      'modify_widget_animation',
+      'create_menu_screen',
+      'apply_widget_patch',
+      'create_material_setup',
+      'save_assets',
+      'create_commonui_button_style',
+      'apply_commonui_button_style',
+      'modify_commonui_button_style',
+    ] as const;
+
+    for (const toolName of bothModeTools) {
+      expect(TOOL_MODE_ANNOTATIONS.get(toolName), `${toolName} should be dual-mode`).toBe('both');
+    }
+  });
+
+  it('keeps editor-bound interactive workflows as editor_only', () => {
+    const editorOnlyTools = [
+      'read_output_log',
+      'list_message_log_listings',
+      'read_message_log',
+      'get_editor_context',
+      'start_statetree_debugger',
+      'stop_statetree_debugger',
+      'read_statetree_debugger',
+      'restart_editor',
+      'trigger_live_coding',
+      'wait_for_editor',
+      'start_pie',
+      'stop_pie',
+      'relaunch_pie',
+      'import_assets',
+      'capture_widget_preview',
+      'capture_editor_screenshot',
+      'capture_widget_motion_checkpoints',
+      'compare_capture_to_reference',
+      'compare_motion_capture_bundle',
+      'cleanup_captures',
+      'apply_window_ui_changes',
+      'execute_widget_recipe',
+    ] as const;
+
+    for (const toolName of editorOnlyTools) {
+      expect(TOOL_MODE_ANNOTATIONS.get(toolName), `${toolName} should remain editor-only`).toBe('editor_only');
     }
   });
 
@@ -368,7 +633,9 @@ describe('TOOL_MODE_ANNOTATIONS', () => {
     expect(executor.getToolMode('list_assets')).toBe('both');
 
     // Spot-check: editor_only tools
-    expect(executor.getToolMode('patch_widget')).toBe('editor_only');
+    expect(executor.getToolMode('patch_widget')).toBe('both');
+    expect(executor.getToolMode('create_widget_blueprint')).toBe('both');
+    expect(executor.getToolMode('modify_blueprint_members')).toBe('both');
     expect(executor.getToolMode('restart_editor')).toBe('editor_only');
     expect(executor.getToolMode('capture_widget_preview')).toBe('editor_only');
     expect(executor.getToolMode('start_pie')).toBe('editor_only');

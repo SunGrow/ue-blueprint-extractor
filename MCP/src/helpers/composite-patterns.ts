@@ -20,6 +20,9 @@ export interface CompositeToolResult {
     task_support: 'optional' | 'required' | 'forbidden';
     status?: string;
     progress_message?: string;
+    runtime_mode?: 'editor' | 'commandlet';
+    supported_modes?: Array<'editor' | 'commandlet'>;
+    fallback_used?: boolean;
   };
 }
 

@@ -1,11 +1,13 @@
 #include "Authoring/AssetMutationHelpers.h"
 
+#include "CoreGlobals.h"
 #include "FileHelpers.h"
 #include "ScopedTransaction.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Misc/PackageName.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -41,6 +43,19 @@ static TArray<TSharedPtr<FJsonValue>> ToDiagnosticsArray(const TArray<FAssetMuta
 		Result.Add(MakeShared<FJsonValueObject>(DiagnosticObject));
 	}
 	return Result;
+}
+
+static FString GetPackageFilename(UPackage* Package)
+{
+	if (!Package)
+	{
+		return FString();
+	}
+
+	const FString Extension = Package->ContainsMap()
+		? FPackageName::GetMapPackageExtension()
+		: FPackageName::GetAssetPackageExtension();
+	return FPackageName::LongPackageNameToFilename(Package->GetName(), Extension);
 }
 
 } // namespace AssetMutationHelpersInternal
@@ -438,10 +453,42 @@ TSharedPtr<FJsonObject> FAssetMutationContext::SaveAssets(const TArray<FString>&
 	bool bSaved = false;
 	if (PackagesToSave.Num() > 0)
 	{
-		bSaved = UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
-		if (!bSaved)
+		if (IsRunningCommandlet())
 		{
-			Context.AddError(TEXT("save_failed"), TEXT("Failed to save one or more packages."));
+			bSaved = true;
+
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			SaveArgs.Error = GWarn;
+
+			for (UPackage* PackageToSave : PackagesToSave)
+			{
+				const FString PackageFileName = AssetMutationHelpersInternal::GetPackageFilename(PackageToSave);
+				if (PackageFileName.IsEmpty())
+				{
+					Context.AddError(TEXT("package_filename_not_found"),
+					                 FString::Printf(TEXT("Failed to resolve package filename for '%s'."), PackageToSave ? *PackageToSave->GetName() : TEXT("<null>")),
+					                 PackageToSave ? PackageToSave->GetName() : FString());
+					bSaved = false;
+					continue;
+				}
+
+				if (!UPackage::SavePackage(PackageToSave, nullptr, *PackageFileName, SaveArgs))
+				{
+					Context.AddError(TEXT("save_failed"),
+					                 FString::Printf(TEXT("Failed to save package '%s'."), *PackageFileName),
+					                 PackageToSave ? PackageToSave->GetName() : FString());
+					bSaved = false;
+				}
+			}
+		}
+		else
+		{
+			bSaved = UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+			if (!bSaved)
+			{
+				Context.AddError(TEXT("save_failed"), TEXT("Failed to save one or more packages."));
+			}
 		}
 	}
 

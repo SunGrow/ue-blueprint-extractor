@@ -17,6 +17,20 @@ type JsonSubsystemCaller = (
   params: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>;
 
+type ScaffoldPinTypeInput = string | Record<string, unknown>;
+
+type ScaffoldVariableInput = {
+  name: string;
+  type: ScaffoldPinTypeInput;
+  default_value?: unknown;
+};
+
+type ScaffoldFunctionInput = {
+  name: string;
+  access?: string;
+  access_specifier?: string;
+};
+
 type RegisterCompositeWorkflowToolsOptions = {
   server: Pick<McpServer, 'registerTool'>;
   callSubsystemJson: JsonSubsystemCaller;
@@ -34,6 +48,156 @@ function compositeResult(composite: CompositeToolResult, options?: { isError?: b
     return { ...result, isError: true };
   }
   return result;
+}
+
+const SCAFFOLD_PRIMITIVE_PIN_TYPES: Record<string, Record<string, unknown>> = {
+  bool: { category: 'bool' },
+  byte: { category: 'byte' },
+  int: { category: 'int' },
+  int64: { category: 'int64' },
+  float: { category: 'real', subCategory: 'float' },
+  double: { category: 'real', subCategory: 'double' },
+  name: { category: 'name' },
+  string: { category: 'string' },
+  text: { category: 'text' },
+};
+
+function splitTopLevelTypeArguments(source: string): [string, string] | null {
+  let depth = 0;
+  for (let index = 0; index < source.length; index++) {
+    const ch = source[index];
+    if (ch === '<') {
+      depth += 1;
+      continue;
+    }
+    if (ch === '>') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (ch === ',' && depth === 0) {
+      const left = source.slice(0, index).trim();
+      const right = source.slice(index + 1).trim();
+      if (left.length > 0 && right.length > 0) {
+        return [left, right];
+      }
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function normalizeScaffoldPinType(typeInput: ScaffoldPinTypeInput, variableName: string): Record<string, unknown> {
+  if (typeof typeInput !== 'string') {
+    return { ...typeInput };
+  }
+
+  const trimmed = typeInput.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`Variable '${variableName}' requires a non-empty type.`);
+  }
+
+  const arrayMatch = trimmed.match(/^array<(.+)>$/i);
+  if (arrayMatch) {
+    return {
+      ...normalizeScaffoldPinType(arrayMatch[1], variableName),
+      containerType: 'Array',
+    };
+  }
+
+  const setMatch = trimmed.match(/^set<(.+)>$/i);
+  if (setMatch) {
+    return {
+      ...normalizeScaffoldPinType(setMatch[1], variableName),
+      containerType: 'Set',
+    };
+  }
+
+  const mapMatch = trimmed.match(/^map<(.+)>$/i);
+  if (mapMatch) {
+    const typeArgs = splitTopLevelTypeArguments(mapMatch[1]);
+    if (!typeArgs) {
+      throw new Error(
+        `Variable '${variableName}' uses invalid map type shorthand '${trimmed}'. Use map<KeyType, ValueType> or a full pinType object.`,
+      );
+    }
+
+    const [keyType, valueType] = typeArgs;
+    return {
+      ...normalizeScaffoldPinType(keyType, variableName),
+      containerType: 'Map',
+      valueType: normalizeScaffoldPinType(valueType, variableName),
+    };
+  }
+
+  const normalized = SCAFFOLD_PRIMITIVE_PIN_TYPES[trimmed.toLowerCase()];
+  if (normalized) {
+    return { ...normalized };
+  }
+
+  const supportedTypes = Object.keys(SCAFFOLD_PRIMITIVE_PIN_TYPES).join(', ');
+  throw new Error(
+    `Variable '${variableName}' type '${trimmed}' is not supported as shorthand. Use one of [${supportedTypes}], array/set/map wrappers, or pass a full pinType object.`,
+  );
+}
+
+function normalizeScaffoldDefaultValue(defaultValue: unknown, variableName: string): string {
+  if (typeof defaultValue === 'string') {
+    return defaultValue;
+  }
+  if (typeof defaultValue === 'number' || typeof defaultValue === 'boolean' || typeof defaultValue === 'bigint') {
+    return String(defaultValue);
+  }
+
+  throw new Error(
+    `Variable '${variableName}' default_value must be a string, number, or boolean. For complex Blueprint export text, pass a string literal.`,
+  );
+}
+
+function normalizeScaffoldVariable(variable: ScaffoldVariableInput): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {
+    name: variable.name,
+    pinType: normalizeScaffoldPinType(variable.type, variable.name),
+  };
+
+  if (variable.default_value !== undefined) {
+    normalized.defaultValue = normalizeScaffoldDefaultValue(variable.default_value, variable.name);
+  }
+
+  return normalized;
+}
+
+function normalizeScaffoldFunction(func: ScaffoldFunctionInput): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {
+    graphName: func.name,
+  };
+
+  const accessSpecifier = func.access_specifier ?? func.access;
+  if (accessSpecifier) {
+    normalized.accessSpecifier = accessSpecifier;
+  }
+
+  return normalized;
+}
+
+function buildScaffoldCreatePayload(
+  variables?: ScaffoldVariableInput[],
+  functions?: ScaffoldFunctionInput[],
+): { payload: Record<string, unknown>; memberCount: number } {
+  const payload: Record<string, unknown> = {};
+  let memberCount = 0;
+
+  if (variables && variables.length > 0) {
+    payload.variables = variables.map(normalizeScaffoldVariable);
+    memberCount += variables.length;
+  }
+
+  if (functions && functions.length > 0) {
+    payload.functionStubs = functions.map(normalizeScaffoldFunction);
+    memberCount += functions.length;
+  }
+
+  return { payload, memberCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -113,10 +277,19 @@ export function registerCompositeWorkflowTools({
 
       // Step 2: Build widget tree from DSL
       const dslResult = parseWidgetDsl(dsl);
+      if (dslResult.nodes.length === 0) {
+        steps.push({ step: 'build_tree', status: 'failure', message: 'DSL produced no widget nodes' });
+        return compositeResult(
+          compositePartialFailure('create_menu_screen', steps, 'build_tree',
+            buildPartialState(steps, 'build_tree', 'Widget blueprint created but DSL produced no widget tree'),
+            EXECUTION),
+          { isError: true },
+        );
+      }
       const buildResult = await safeCall(() =>
         callSubsystemJson('BuildWidgetTree', {
           AssetPath: asset_path,
-          TreeJson: JSON.stringify(dslResult.nodes),
+          WidgetTreeJson: JSON.stringify(dslResult.nodes[0]),
         }),
       );
 
@@ -142,7 +315,7 @@ export function registerCompositeWorkflowTools({
           callSubsystemJson('ModifyWidgetBlueprintStructure', {
             AssetPath: asset_path,
             Operation: 'patch_class_defaults',
-            PayloadJson: JSON.stringify(class_defaults),
+            PayloadJson: JSON.stringify({ classDefaults: class_defaults }),
             bValidateOnly: false,
           }),
         );
@@ -415,14 +588,19 @@ export function registerCompositeWorkflowTools({
 
       // Step 2: Set material properties (domain, blend mode, shading model)
       const settingsResult = await safeCall(() =>
-        callSubsystemJson('MaterialGraphOperation', {
+        callSubsystemJson('ModifyMaterial', {
           AssetPath: asset_path,
-          Operation: 'set_material_properties',
           PayloadJson: JSON.stringify({
-            MaterialDomain: domain,
-            BlendMode: blend_mode,
-            ShadingModel: shading_model,
+            operations: [{
+              operation: 'set_material_settings',
+              settings: {
+                materialDomain: domain,
+                blendMode: blend_mode,
+                shadingModel: shading_model,
+              },
+            }],
           }),
+          bValidateOnly: false,
         }),
       );
 
@@ -442,7 +620,8 @@ export function registerCompositeWorkflowTools({
         const graphOpsResult = await safeCall(() =>
           callSubsystemJson('ModifyMaterial', {
             AssetPath: asset_path,
-            OperationsJson: JSON.stringify(operations),
+            PayloadJson: JSON.stringify({ operations }),
+            bValidateOnly: false,
           }),
         );
 
@@ -515,15 +694,18 @@ export function registerCompositeWorkflowTools({
         'Create a blueprint asset, add variables and function stubs, and save — all in one call.',
       inputSchema: {
         asset_path: z.string().describe('UE content path for the new blueprint.'),
-        parent_class: z.string().default('Actor').describe('Parent class.'),
+        parent_class: z.string().default('/Script/Engine.Actor').describe('Parent class path.'),
         variables: z.array(z.object({
           name: z.string(),
-          type: z.string(),
+          type: z.union([z.string(), z.record(z.string(), z.unknown())]).describe(
+            'Primitive shorthand (e.g. int, float, array<int>) or a full extractor pinType object.',
+          ),
           default_value: z.unknown().optional(),
         })).optional().describe('Variables to add.'),
         functions: z.array(z.object({
           name: z.string(),
           access: z.string().optional(),
+          access_specifier: z.string().optional(),
         })).optional().describe('Function stubs to add.'),
       },
       annotations: {
@@ -538,18 +720,35 @@ export function registerCompositeWorkflowTools({
       const { asset_path, parent_class, variables, functions } = args as {
         asset_path: string;
         parent_class: string;
-        variables?: Array<{ name: string; type: string; default_value?: unknown }>;
-        functions?: Array<{ name: string; access?: string }>;
+        variables?: ScaffoldVariableInput[];
+        functions?: ScaffoldFunctionInput[];
       };
 
       const steps: CompositeStepResult[] = [];
+      let createPayload: Record<string, unknown> = {};
+      let scaffoldMemberCount = 0;
+
+      try {
+        const normalizedPayload = buildScaffoldCreatePayload(variables, functions);
+        createPayload = normalizedPayload.payload;
+        scaffoldMemberCount = normalizedPayload.memberCount;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        steps.push({ step: 'create', status: 'failure', message });
+        return compositeResult(
+          compositePartialFailure('scaffold_blueprint', steps, 'create',
+            buildPartialState(steps, 'create', 'No mutations performed; scaffold payload validation failed'),
+            EXECUTION),
+          { isError: true },
+        );
+      }
 
       // Step 1: Create blueprint
       const createResult = await safeCall(() =>
         callSubsystemJson('CreateBlueprint', {
           AssetPath: asset_path,
           ParentClassPath: parent_class,
-          PayloadJson: JSON.stringify({}),
+          PayloadJson: JSON.stringify(createPayload),
           bValidateOnly: false,
         }),
       );
@@ -565,54 +764,15 @@ export function registerCompositeWorkflowTools({
       }
       steps.push({ step: 'create', status: 'success', message: `Created ${asset_path}`, data: createResult.value });
 
-      // Step 2: Add members (variables + functions)
-      const hasVariables = variables && variables.length > 0;
-      const hasFunctions = functions && functions.length > 0;
-
-      if (hasVariables || hasFunctions) {
-        const memberOps: Array<Record<string, unknown>> = [];
-
-        if (hasVariables) {
-          for (const v of variables) {
-            memberOps.push({
-              operation: 'add_variable',
-              name: v.name,
-              type: v.type,
-              ...(v.default_value !== undefined ? { default_value: v.default_value } : {}),
-            });
-          }
-        }
-
-        if (hasFunctions) {
-          for (const f of functions) {
-            memberOps.push({
-              operation: 'add_function',
-              name: f.name,
-              ...(f.access ? { access: f.access } : {}),
-            });
-          }
-        }
-
-        const membersResult = await safeCall(() =>
-          callSubsystemJson('ModifyBlueprintMembers', {
-            AssetPath: asset_path,
-            OperationsJson: JSON.stringify(memberOps),
-          }),
-        );
-
-        if (!membersResult.ok) {
-          steps.push({ step: 'add_members', status: 'failure', message: membersResult.error.message });
-          return compositeResult(
-            compositePartialFailure('scaffold_blueprint', steps, 'add_members',
-              buildPartialState(steps, 'add_members', 'Blueprint created but members not added'),
-              EXECUTION),
-            { isError: true },
-          );
-        }
+      // Step 2: Report member seeding status
+      if (scaffoldMemberCount > 0) {
         steps.push({
-          step: 'add_members', status: 'success',
-          message: `Added ${memberOps.length} member(s)`,
-          data: membersResult.value,
+          step: 'add_members',
+          status: 'success',
+          message: `Applied ${scaffoldMemberCount} member(s) during blueprint creation`,
+          data: {
+            memberCount: scaffoldMemberCount,
+          },
         });
       } else {
         steps.push({ step: 'add_members', status: 'skipped', message: 'No variables or functions provided' });

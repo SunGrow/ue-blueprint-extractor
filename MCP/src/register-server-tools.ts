@@ -16,6 +16,9 @@ import type {
   CompileProjectCodeResult,
 } from './project-controller.js';
 import {
+  getToolExecutionCompatibility,
+} from './server-config.js';
+import {
   AnimMontageMutationOperationSchema,
   AnimationNotifySelectorSchema,
   AnimSequenceMutationOperationSchema,
@@ -398,5 +401,6 @@ export function registerServerTools({
     summarizeOutputSchema,
     collectRelatedResources,
     collectToolExampleFamilies,
+    getToolExecutionCompatibility,
   });
 }

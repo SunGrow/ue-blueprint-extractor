@@ -21,15 +21,24 @@ export interface CommandletAdapterOptions {
 }
 
 export class CommandletAdapter implements ExecutionAdapter {
+  private static readonly MAX_LOG_TAIL_LINES = 100;
   private options: CommandletAdapterOptions;
   private process: ChildProcess | null = null;
   private requestId = 0;
   private pendingRequests = new Map<number, {
     resolve: (value: Record<string, unknown>) => void;
     reject: (error: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
+      timer: ReturnType<typeof setTimeout>;
   }>();
-  private buffer = '';
+  private stdoutBuffer = '';
+  private stderrBuffer = '';
+  private recentLogs: string[] = [];
+  private startupPromise: Promise<void> | null = null;
+  private startupState: {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
   private readonly spawnProcess: typeof spawn;
   private readonly platform: NodeJS.Platform;
   private readonly startupTimeoutMs: number;
@@ -44,55 +53,24 @@ export class CommandletAdapter implements ExecutionAdapter {
   }
 
   async initialize(): Promise<void> {
-    if (this.process) return;
-
-    const editorCmd = await resolveEditorExecutable(this.options.engineRoot, this.platform, 'commandlet');
-    this.process = this.spawnProcess(editorCmd, [
-      this.options.projectPath,
-      '-run=blueprintextractor',
-      '-stdin',
-      '-unattended',
-      '-nosplash',
-      '-nullrhi',
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    this.process.stdout?.on('data', (data: Buffer) => {
-      this.buffer += data.toString();
-      this.processBuffer();
-    });
-
-    this.process.on('exit', () => {
-      this.process = null;
-      // Reject all pending requests
-      for (const [, pending] of this.pendingRequests) {
-        clearTimeout(pending.timer);
-        pending.reject(new Error('Commandlet process exited'));
+    if (this.process && !this.process.killed) {
+      if (this.startupPromise) {
+        await this.startupPromise;
       }
-      this.pendingRequests.clear();
-    });
+      return;
+    }
 
-    // Wait for startup
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Commandlet startup timed out after ${this.startupTimeoutMs}ms`));
-      }, this.startupTimeoutMs);
+    if (this.startupPromise) {
+      await this.startupPromise;
+      return;
+    }
 
-      const onData = () => {
-        clearTimeout(timer);
-        this.process?.stdout?.off('data', onData);
-        resolve();
-      };
-
-      // Resolve on first stdout output (indicating process is ready)
-      this.process?.stdout?.on('data', onData);
-
-      this.process?.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
+    this.startupPromise = this.spawnAndWaitForReady();
+    try {
+      await this.startupPromise;
+    } finally {
+      this.startupPromise = null;
+    }
   }
 
   async execute(
@@ -100,8 +78,12 @@ export class CommandletAdapter implements ExecutionAdapter {
     method: string,
     params: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    if (!this.process?.stdin) {
-      throw new Error('Commandlet process not running. Call initialize() first.');
+    if (!this.process?.stdin || this.process.killed) {
+      await this.initialize();
+    }
+
+    if (!this.process?.stdin || this.process.killed) {
+      throw new Error(this.withRecentLogs('Commandlet process not running. Call initialize() first.'));
     }
 
     const id = ++this.requestId;
@@ -110,7 +92,7 @@ export class CommandletAdapter implements ExecutionAdapter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
-        reject(new Error(`Commandlet request timed out after ${this.requestTimeoutMs}ms`));
+        reject(new Error(this.withRecentLogs(`Commandlet request timed out after ${this.requestTimeoutMs}ms`)));
       }, this.requestTimeoutMs);
 
       this.pendingRequests.set(id, { resolve, reject, timer });
@@ -131,23 +113,98 @@ export class CommandletAdapter implements ExecutionAdapter {
   }
 
   async shutdown(): Promise<void> {
-    if (this.process) {
-      this.process.stdin?.end();
-      this.process.kill();
-      this.process = null;
+    if (!this.process) {
+      return;
     }
+
+    this.process.stdin?.end();
+    this.process.kill();
+    this.process = null;
   }
 
-  private processBuffer(): void {
-    const lines = this.buffer.split('\n');
-    this.buffer = lines.pop() ?? '';
+  private async spawnAndWaitForReady(): Promise<void> {
+    this.stdoutBuffer = '';
+    this.stderrBuffer = '';
+    this.recentLogs = [];
+    const editorCmd = await resolveEditorExecutable(this.options.engineRoot, this.platform, 'commandlet');
+    const startupWaiter = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(this.withRecentLogs(`Commandlet startup timed out after ${this.startupTimeoutMs}ms`)));
+      }, this.startupTimeoutMs);
+      this.startupState = { resolve, reject, timer };
+    });
+
+    try {
+      this.process = this.spawnProcess(editorCmd, [
+        this.options.projectPath,
+        '-run=blueprintextractor',
+        '-stdin',
+        '-unattended',
+        '-nosplash',
+        '-nullrhi',
+      ], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      this.process.stdout?.on('data', (data: Buffer) => {
+        this.stdoutBuffer += data.toString();
+        this.processStdoutBuffer();
+      });
+
+      this.process.stderr?.on('data', (data: Buffer) => {
+        this.stderrBuffer += data.toString();
+        this.processStderrBuffer();
+      });
+
+      this.process.on('exit', (code, signal) => {
+        const suffix = code != null
+          ? ` with code ${code}`
+          : signal
+            ? ` with signal ${signal}`
+            : '';
+        this.handleProcessTermination(`Commandlet process exited${suffix}`);
+      });
+
+      this.process.on('error', (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.handleProcessTermination(`Commandlet process error: ${message}`);
+      });
+    } catch (error) {
+      const startupError = error instanceof Error ? error : new Error(String(error));
+      this.rejectStartup(startupError);
+      throw startupError;
+    }
+
+    await startupWaiter;
+  }
+
+  private processStdoutBuffer(): void {
+    const lines = this.stdoutBuffer.split('\n');
+    this.stdoutBuffer = lines.pop() ?? '';
 
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
 
       try {
-        const response = JSON.parse(trimmed) as { id?: number; result?: unknown; error?: unknown };
+        const response = JSON.parse(trimmed) as {
+          jsonrpc?: string;
+          id?: number;
+          result?: unknown;
+          error?: unknown;
+        };
+
+        if (
+          response.jsonrpc === '2.0'
+          && response.id === 0
+          && typeof response.result === 'object'
+          && response.result !== null
+          && (response.result as Record<string, unknown>).ready === true
+        ) {
+          this.resolveStartup();
+          continue;
+        }
+
         if (response.id != null && this.pendingRequests.has(response.id)) {
           const pending = this.pendingRequests.get(response.id)!;
           this.pendingRequests.delete(response.id);
@@ -163,13 +220,71 @@ export class CommandletAdapter implements ExecutionAdapter {
             pending.resolve(
               (typeof response.result === 'object' && response.result !== null)
                 ? response.result as Record<string, unknown>
-                : { result: response.result },
+              : { result: response.result },
             );
           }
+          continue;
         }
       } catch {
-        // Non-JSON output — skip (may be engine log lines)
+        this.appendLogLine(trimmed);
       }
     }
+  }
+
+  private processStderrBuffer(): void {
+    const lines = this.stderrBuffer.split('\n');
+    this.stderrBuffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      this.appendLogLine(trimmed);
+    }
+  }
+
+  private appendLogLine(line: string): void {
+    this.recentLogs.push(line);
+    if (this.recentLogs.length > CommandletAdapter.MAX_LOG_TAIL_LINES) {
+      this.recentLogs.splice(0, this.recentLogs.length - CommandletAdapter.MAX_LOG_TAIL_LINES);
+    }
+  }
+
+  private withRecentLogs(message: string): string {
+    if (this.recentLogs.length === 0) {
+      return message;
+    }
+    return `${message}\nRecent commandlet logs:\n${this.recentLogs.join('\n')}`;
+  }
+
+  private resolveStartup(): void {
+    if (!this.startupState) {
+      return;
+    }
+    clearTimeout(this.startupState.timer);
+    this.startupState.resolve();
+    this.startupState = null;
+  }
+
+  private rejectStartup(error: Error): void {
+    if (!this.startupState) {
+      return;
+    }
+    clearTimeout(this.startupState.timer);
+    this.startupState.reject(error);
+    this.startupState = null;
+  }
+
+  private handleProcessTermination(baseMessage: string): void {
+    const error = new Error(this.withRecentLogs(baseMessage));
+    this.rejectStartup(error);
+    this.process = null;
+
+    for (const [, pending] of this.pendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pendingRequests.clear();
   }
 }

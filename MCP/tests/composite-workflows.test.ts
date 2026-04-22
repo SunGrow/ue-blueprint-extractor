@@ -54,6 +54,8 @@ describe('create_menu_screen', () => {
     expect(calls[0].params).toMatchObject({ AssetPath: '/Game/UI/WBP_Menu', ParentClassPath: 'CommonActivatableWidget' });
     expect(calls[1].method).toBe('BuildWidgetTree');
     expect(calls[1].params.AssetPath).toBe('/Game/UI/WBP_Menu');
+    expect(typeof calls[1].params.WidgetTreeJson).toBe('string');
+    expect(JSON.parse(calls[1].params.WidgetTreeJson as string)).toMatchObject({ class: 'CanvasPanel', name: 'Root' });
     expect(calls[2].method).toBe('CompileWidgetBlueprint');
     expect(calls[3].method).toBe('SaveAssets');
   });
@@ -88,6 +90,9 @@ describe('create_menu_screen', () => {
     const modifyCall = calls.find(c => c.method === 'ModifyWidgetBlueprintStructure');
     expect(modifyCall).toBeDefined();
     expect(modifyCall!.params.Operation).toBe('patch_class_defaults');
+    expect(JSON.parse(modifyCall!.params.PayloadJson as string)).toMatchObject({
+      classDefaults: { bIsFocusable: true },
+    });
   });
 
   it('reports partial failure when build_tree fails', async () => {
@@ -250,7 +255,7 @@ describe('create_material_setup', () => {
     const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params });
       if (method === 'CreateMaterial') return { success: true, asset_path: '/Game/Materials/M_Test' };
-      if (method === 'MaterialGraphOperation') return { success: true };
+      if (method === 'ModifyMaterial') return { success: true };
       if (method === 'CompileMaterialAsset') return { compile: { success: true } };
       if (method === 'SaveAssets') return { success: true };
       return {};
@@ -277,11 +282,19 @@ describe('create_material_setup', () => {
     expect(parsed.steps[4].status).toBe('success');
 
     // Verify settings call
-    const settingsCall = calls.find(c => c.method === 'MaterialGraphOperation');
+    const settingsCall = calls.find(c => c.method === 'ModifyMaterial');
     expect(settingsCall).toBeDefined();
-    expect(settingsCall!.params.Operation).toBe('set_material_properties');
     const payload = JSON.parse(settingsCall!.params.PayloadJson as string);
-    expect(payload).toMatchObject({ MaterialDomain: 'Surface', BlendMode: 'Translucent', ShadingModel: 'Unlit' });
+    expect(payload).toMatchObject({
+      operations: [{
+        operation: 'set_material_settings',
+        settings: {
+          materialDomain: 'Surface',
+          blendMode: 'Translucent',
+          shadingModel: 'Unlit',
+        },
+      }],
+    });
   });
 
   it('applies graph operations when provided', async () => {
@@ -289,7 +302,6 @@ describe('create_material_setup', () => {
     const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params });
       if (method === 'CreateMaterial') return { success: true };
-      if (method === 'MaterialGraphOperation') return { success: true };
       if (method === 'ModifyMaterial') return { success: true };
       if (method === 'CompileMaterialAsset') return { compile: { success: true } };
       if (method === 'SaveAssets') return { success: true };
@@ -314,14 +326,19 @@ describe('create_material_setup', () => {
     expect(graphOpsStep?.status).toBe('success');
     expect(graphOpsStep?.message).toBe('Applied 1 operation(s)');
 
-    const modifyCall = calls.find(c => c.method === 'ModifyMaterial');
-    expect(modifyCall).toBeDefined();
+    const modifyCalls = calls.filter(c => c.method === 'ModifyMaterial');
+    expect(modifyCalls).toHaveLength(2);
+    expect(JSON.parse(modifyCalls[1].params.PayloadJson as string)).toMatchObject({
+      operations: [
+        { operation: 'add_node', class: 'MaterialExpressionConstant3Vector' },
+      ],
+    });
   });
 
   it('reports partial failure when compile fails', async () => {
     const callSubsystemJson = vi.fn(async (method: string) => {
       if (method === 'CreateMaterial') return { success: true };
-      if (method === 'MaterialGraphOperation') return { success: true };
+      if (method === 'ModifyMaterial') return { success: true };
       if (method === 'CompileMaterialAsset') throw new Error('Shader compile error');
       return {};
     });
@@ -370,7 +387,6 @@ describe('scaffold_blueprint', () => {
     const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params });
       if (method === 'CreateBlueprint') return { success: true, asset_path: '/Game/BP_Enemy' };
-      if (method === 'ModifyBlueprintMembers') return { success: true };
       if (method === 'SaveAssets') return { success: true };
       return {};
     });
@@ -378,7 +394,7 @@ describe('scaffold_blueprint', () => {
     const registry = setupRegistry(callSubsystemJson);
     const result = await registry.getTool('scaffold_blueprint').handler({
       asset_path: '/Game/BP_Enemy',
-      parent_class: 'Actor',
+      parent_class: '/Script/Engine.Actor',
       variables: [
         { name: 'Health', type: 'float', default_value: 100.0 },
         { name: 'Speed', type: 'float' },
@@ -396,22 +412,35 @@ describe('scaffold_blueprint', () => {
     expect(stepNames).toEqual(['create', 'add_members', 'save']);
     expect(parsed.steps[0].status).toBe('success');
     expect(parsed.steps[1].status).toBe('success');
-    expect(parsed.steps[1].message).toBe('Added 3 member(s)');
+    expect(parsed.steps[1].message).toBe('Applied 3 member(s) during blueprint creation');
     expect(parsed.steps[2].status).toBe('success');
 
     // Verify call sequence
     expect(calls[0].method).toBe('CreateBlueprint');
     expect(calls[0].params.AssetPath).toBe('/Game/BP_Enemy');
-    expect(calls[0].params.ParentClassPath).toBe('Actor');
+    expect(calls[0].params.ParentClassPath).toBe('/Script/Engine.Actor');
+    const createPayload = JSON.parse(calls[0].params.PayloadJson as string);
+    expect(createPayload).toMatchObject({
+      variables: [
+        {
+          name: 'Health',
+          pinType: { category: 'real', subCategory: 'float' },
+          defaultValue: '100',
+        },
+        {
+          name: 'Speed',
+          pinType: { category: 'real', subCategory: 'float' },
+        },
+      ],
+      functionStubs: [
+        {
+          graphName: 'OnTakeDamage',
+          accessSpecifier: 'Public',
+        },
+      ],
+    });
 
-    expect(calls[1].method).toBe('ModifyBlueprintMembers');
-    const memberOps = JSON.parse(calls[1].params.OperationsJson as string);
-    expect(memberOps).toHaveLength(3);
-    expect(memberOps[0]).toMatchObject({ operation: 'add_variable', name: 'Health', type: 'float', default_value: 100.0 });
-    expect(memberOps[1]).toMatchObject({ operation: 'add_variable', name: 'Speed', type: 'float' });
-    expect(memberOps[2]).toMatchObject({ operation: 'add_function', name: 'OnTakeDamage', access: 'Public' });
-
-    expect(calls[2].method).toBe('SaveAssets');
+    expect(calls[1].method).toBe('SaveAssets');
   });
 
   it('skips add_members when no variables or functions provided', async () => {
@@ -435,28 +464,26 @@ describe('scaffold_blueprint', () => {
     const memberStep = parsed.steps.find(s => s.step === 'add_members');
     expect(memberStep?.status).toBe('skipped');
 
-    // Should not call ModifyBlueprintMembers
     expect(calls.map(c => c.method)).toEqual(['CreateBlueprint', 'SaveAssets']);
   });
 
-  it('reports partial failure when add_members fails', async () => {
-    const callSubsystemJson = vi.fn(async (method: string) => {
-      if (method === 'CreateBlueprint') return { success: true };
-      if (method === 'ModifyBlueprintMembers') throw new Error('Invalid variable type');
-      return {};
+  it('reports failure before create when short type normalization is unsupported', async () => {
+    const callSubsystemJson = vi.fn(async () => {
+      throw new Error('should not be called');
     });
 
     const registry = setupRegistry(callSubsystemJson);
     const result = await registry.getTool('scaffold_blueprint').handler({
       asset_path: '/Game/BP_Enemy',
-      parent_class: 'Actor',
+      parent_class: '/Script/Engine.Actor',
       variables: [{ name: 'Bad', type: 'InvalidType' }],
     });
 
     const parsed = parseDirectToolResult(result) as CompositeToolResult;
     expect(parsed.success).toBe(false);
-    expect(parsed.partial_state?.completed_steps).toEqual(['create']);
-    expect(parsed.partial_state?.failed_step).toBe('add_members');
+    expect(parsed.partial_state?.completed_steps).toEqual([]);
+    expect(parsed.partial_state?.failed_step).toBe('create');
+    expect(callSubsystemJson).not.toHaveBeenCalled();
   });
 
   it('reports failure when save fails', async () => {
@@ -469,7 +496,7 @@ describe('scaffold_blueprint', () => {
     const registry = setupRegistry(callSubsystemJson);
     const result = await registry.getTool('scaffold_blueprint').handler({
       asset_path: '/Game/BP_Enemy',
-      parent_class: 'Actor',
+      parent_class: '/Script/Engine.Actor',
     });
 
     const parsed = parseDirectToolResult(result) as CompositeToolResult;
@@ -483,7 +510,6 @@ describe('scaffold_blueprint', () => {
     const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params });
       if (method === 'CreateBlueprint') return { success: true };
-      if (method === 'ModifyBlueprintMembers') return { success: true };
       if (method === 'SaveAssets') return { success: true };
       return {};
     });
@@ -491,18 +517,61 @@ describe('scaffold_blueprint', () => {
     const registry = setupRegistry(callSubsystemJson);
     const result = await registry.getTool('scaffold_blueprint').handler({
       asset_path: '/Game/BP_Interface',
-      parent_class: 'Actor',
+      parent_class: '/Script/Engine.Actor',
       functions: [{ name: 'Initialize' }, { name: 'Shutdown' }],
     });
 
     const parsed = parseDirectToolResult(result) as CompositeToolResult;
     expect(parsed.success).toBe(true);
 
-    const memberOps = JSON.parse(
-      (calls.find(c => c.method === 'ModifyBlueprintMembers')!.params.OperationsJson as string),
-    );
-    expect(memberOps).toHaveLength(2);
-    expect(memberOps[0]).toMatchObject({ operation: 'add_function', name: 'Initialize' });
-    expect(memberOps[1]).toMatchObject({ operation: 'add_function', name: 'Shutdown' });
+    const createPayload = JSON.parse(calls[0].params.PayloadJson as string);
+    expect(createPayload).toMatchObject({
+      functionStubs: [
+        { graphName: 'Initialize' },
+        { graphName: 'Shutdown' },
+      ],
+    });
+    expect(calls.map(c => c.method)).toEqual(['CreateBlueprint', 'SaveAssets']);
+  });
+
+  it('passes through full pinType objects unchanged', async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params });
+      if (method === 'CreateBlueprint') return { success: true };
+      if (method === 'SaveAssets') return { success: true };
+      return {};
+    });
+
+    const registry = setupRegistry(callSubsystemJson);
+    const result = await registry.getTool('scaffold_blueprint').handler({
+      asset_path: '/Game/BP_Data',
+      parent_class: '/Script/Engine.Actor',
+      variables: [
+        {
+          name: 'Ids',
+          type: {
+            category: 'int',
+            containerType: 'Array',
+          },
+        },
+      ],
+    });
+
+    const parsed = parseDirectToolResult(result) as CompositeToolResult;
+    expect(parsed.success).toBe(true);
+
+    const createPayload = JSON.parse(calls[0].params.PayloadJson as string);
+    expect(createPayload).toMatchObject({
+      variables: [
+        {
+          name: 'Ids',
+          pinType: {
+            category: 'int',
+            containerType: 'Array',
+          },
+        },
+      ],
+    });
   });
 });

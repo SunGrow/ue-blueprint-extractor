@@ -4303,18 +4303,20 @@ static bool RunCommonUIWidgetCoverage(FAutomationTestBase& Test)
 	return true;
 }
 
-static bool RunCommonUIButtonStyleCoverage(FAutomationTestBase& Test)
+struct FCommonUIButtonStyleRoundTripArtifacts
 {
-	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	FString StyleObjectPath;
+	FString StyleClassPath;
+	FString ButtonObjectPath;
+};
+
+static bool RunCommonUIButtonStyleAuthoringFlow(FAutomationTestBase& Test,
+                                                UBlueprintExtractorSubsystem* Subsystem,
+                                                FCommonUIButtonStyleRoundTripArtifacts& OutArtifacts)
+{
 	if (!Subsystem)
 	{
 		return false;
-	}
-
-	if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
-	{
-		Test.AddInfo(TEXT("Skipping CommonUI button style visual coverage because rendering is unavailable. Run this test with -NoNullRHI."));
-		return true;
 	}
 
 	const FString StyleAssetPath = MakeUniqueAssetPath(TEXT("BP_CommonUIButtonStyle"));
@@ -4405,44 +4407,47 @@ static bool RunCommonUIButtonStyleCoverage(FAutomationTestBase& Test)
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->SaveAssets(SerializeStringArray({ ButtonObjectPath })),
-		TEXT("SaveAssets CommonUI styled button before baseline capture"));
+		TEXT("SaveAssets CommonUI styled button before style apply"));
 
-	const TSharedPtr<FJsonObject> BeforeCapture = ExpectSuccessfulResult(
-		Test,
-		Subsystem->CaptureWidgetPreview(ButtonObjectPath, 320, 180),
-		TEXT("CaptureWidgetPreview before CommonUI style apply"));
-	if (!BeforeCapture.IsValid())
+	OutArtifacts.StyleObjectPath = StyleObjectPath;
+	OutArtifacts.StyleClassPath = StyleClassPath;
+	OutArtifacts.ButtonObjectPath = ButtonObjectPath;
+	return true;
+}
+
+static bool ApplyCommonUIButtonStyleAndVerify(FAutomationTestBase& Test,
+                                              UBlueprintExtractorSubsystem* Subsystem,
+                                              const FCommonUIButtonStyleRoundTripArtifacts& Artifacts)
+{
+	if (!Subsystem)
 	{
 		return false;
 	}
 
-	FString BeforeCaptureId;
-	Test.TestTrue(TEXT("Baseline CommonUI button capture returns a captureId"), BeforeCapture->TryGetStringField(TEXT("captureId"), BeforeCaptureId) && !BeforeCaptureId.IsEmpty());
-
 	ExpectSuccessfulResult(
 		Test,
 		Subsystem->ModifyWidgetBlueprintStructure(
-			ButtonObjectPath,
+			Artifacts.ButtonObjectPath,
 			TEXT("patch_class_defaults"),
 			FString::Printf(
 				TEXT(R"json({"classDefaults":{"Style":"%s"}})json"),
-				*StyleClassPath),
+				*Artifacts.StyleClassPath),
 			false),
 		TEXT("ModifyWidgetBlueprintStructure patch_class_defaults Style for CommonUI button"));
 
 	ExpectSuccessfulResult(
 		Test,
-		Subsystem->CompileWidgetBlueprint(ButtonObjectPath),
+		Subsystem->CompileWidgetBlueprint(Artifacts.ButtonObjectPath),
 		TEXT("CompileWidgetBlueprint after CommonUI style apply"));
 
 	ExpectSuccessfulResult(
 		Test,
-		Subsystem->SaveAssets(SerializeStringArray({ StyleObjectPath, ButtonObjectPath })),
+		Subsystem->SaveAssets(SerializeStringArray({ Artifacts.StyleObjectPath, Artifacts.ButtonObjectPath })),
 		TEXT("SaveAssets CommonUI styled button after style apply"));
 
 	const TSharedPtr<FJsonObject> StyledExtract = ExpectSuccessfulResult(
 		Test,
-		Subsystem->ExtractWidgetBlueprint(ButtonObjectPath, true),
+		Subsystem->ExtractWidgetBlueprint(Artifacts.ButtonObjectPath, true),
 		TEXT("ExtractWidgetBlueprint after CommonUI style apply"));
 	if (!StyledExtract.IsValid())
 	{
@@ -4455,12 +4460,65 @@ static bool RunCommonUIButtonStyleCoverage(FAutomationTestBase& Test)
 	{
 		FString AppliedStylePath;
 		Test.TestTrue(TEXT("CommonUI styled button classDefaults surfaces Style"), StyledClassDefaults->TryGetStringField(TEXT("Style"), AppliedStylePath));
-		Test.TestEqual(TEXT("CommonUI styled button preserves the applied Style class reference"), AppliedStylePath, StyleClassPath);
+		Test.TestEqual(TEXT("CommonUI styled button preserves the applied Style class reference"), AppliedStylePath, Artifacts.StyleClassPath);
+	}
+
+	return true;
+}
+
+static bool RunCommonUIButtonStyleAuthoringCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	FCommonUIButtonStyleRoundTripArtifacts Artifacts;
+	return RunCommonUIButtonStyleAuthoringFlow(Test, Subsystem, Artifacts)
+		&& ApplyCommonUIButtonStyleAndVerify(Test, Subsystem, Artifacts);
+}
+
+static bool RunCommonUIButtonStyleCoverage(FAutomationTestBase& Test)
+{
+	UBlueprintExtractorSubsystem* Subsystem = GetSubsystem(Test);
+	if (!Subsystem)
+	{
+		return false;
+	}
+
+	if (!FApp::CanEverRender() || !FSlateApplication::IsInitialized())
+	{
+		Test.AddInfo(TEXT("Skipping CommonUI button style visual coverage because rendering is unavailable. Run this test with -NoNullRHI."));
+		return true;
+	}
+
+	FCommonUIButtonStyleRoundTripArtifacts Artifacts;
+	if (!RunCommonUIButtonStyleAuthoringFlow(Test, Subsystem, Artifacts))
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> BeforeCapture = ExpectSuccessfulResult(
+		Test,
+		Subsystem->CaptureWidgetPreview(Artifacts.ButtonObjectPath, 320, 180),
+		TEXT("CaptureWidgetPreview before CommonUI style apply"));
+	if (!BeforeCapture.IsValid())
+	{
+		return false;
+	}
+
+	FString BeforeCaptureId;
+	Test.TestTrue(TEXT("Baseline CommonUI button capture returns a captureId"), BeforeCapture->TryGetStringField(TEXT("captureId"), BeforeCaptureId) && !BeforeCaptureId.IsEmpty());
+
+	if (!ApplyCommonUIButtonStyleAndVerify(Test, Subsystem, Artifacts))
+	{
+		return false;
 	}
 
 	const TSharedPtr<FJsonObject> AfterCapture = ExpectSuccessfulResult(
 		Test,
-		Subsystem->CaptureWidgetPreview(ButtonObjectPath, 320, 180),
+		Subsystem->CaptureWidgetPreview(Artifacts.ButtonObjectPath, 320, 180),
 		TEXT("CaptureWidgetPreview after CommonUI style apply"));
 	if (!AfterCapture.IsValid())
 	{
@@ -4883,6 +4941,11 @@ void FBlueprintExtractorAutomationSpec::Define()
 		It(TEXT("CommonUIWidgetRoundTrip"), [this]()
 		{
 			TestTrue(TEXT("CommonUI widget coverage completes"), RunCommonUIWidgetCoverage(*this));
+		});
+
+		It(TEXT("CommonUIButtonStyleAuthoring"), [this]()
+		{
+			TestTrue(TEXT("CommonUI button style authoring coverage completes"), RunCommonUIButtonStyleAuthoringCoverage(*this));
 		});
 
 		It(TEXT("CommonUIButtonStyleRoundTrip"), [this]()

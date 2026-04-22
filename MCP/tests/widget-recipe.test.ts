@@ -269,7 +269,7 @@ describe('execute_widget_recipe', () => {
     const callSubsystemJson = vi.fn(async (method: string) => {
       if (method === 'CreateWidgetBlueprint') return { success: true, assetPath: '/Game/UI/WBP_Test' };
       if (method === 'BuildWidgetTree') return { success: true };
-      if (method === 'PatchWidgetClassDefaults') return { success: true };
+      if (method === 'ModifyWidgetBlueprintStructure') return { success: true };
       if (method === 'CompileWidgetBlueprint') return { success: true };
       if (method === 'SaveAssets') return { success: true };
       if (method === 'ExtractWidgetBlueprint') return { widgetTree: { root: 'CanvasPanel' } };
@@ -319,8 +319,10 @@ compile, save
     expect(callSubsystemJson).toHaveBeenCalledWith('BuildWidgetTree', expect.objectContaining({
       AssetPath: '/Game/UI/WBP_Test',
     }));
-    expect(callSubsystemJson).toHaveBeenCalledWith('PatchWidgetClassDefaults', expect.objectContaining({
+    expect(callSubsystemJson).toHaveBeenCalledWith('ModifyWidgetBlueprintStructure', expect.objectContaining({
       AssetPath: '/Game/UI/WBP_Test',
+      Operation: 'patch_class_defaults',
+      bValidateOnly: false,
     }));
     expect(callSubsystemJson).toHaveBeenCalledWith('CompileWidgetBlueprint', {
       AssetPath: '/Game/UI/WBP_Test',
@@ -388,7 +390,9 @@ compile, save
     expect(defaultsStep).toBeDefined();
     expect(defaultsStep!.status).toBe('skipped');
 
-    expect(callSubsystemJson).not.toHaveBeenCalledWith('PatchWidgetClassDefaults', expect.anything());
+    expect(callSubsystemJson).not.toHaveBeenCalledWith('ModifyWidgetBlueprintStructure', expect.objectContaining({
+      Operation: 'patch_class_defaults',
+    }));
   });
 
   it('handles compile failure gracefully with partial state', async () => {

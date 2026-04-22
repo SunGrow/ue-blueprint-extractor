@@ -7,7 +7,7 @@ import { createToolResultNormalizers } from '../src/helpers/tool-results.js';
 import type { ToolHelpEntry } from '../src/helpers/tool-help.js';
 import { connectInMemoryServer } from './test-helpers.js';
 
-function createTestHarness() {
+function createTestHarness(executor?: any) {
   const server = new McpServer({ name: 'alias-test', version: '1.0.0' });
   const toolHelpRegistry = new Map<string, ToolHelpEntry>();
   const registeredToolMap = new Map<string, RegisteredTool>();
@@ -28,6 +28,7 @@ function createTestHarness() {
     defaultOutputSchema,
     normalizeToolError,
     normalizeToolSuccess,
+    executor,
   });
 
   return { server, toolHelpRegistry };
@@ -133,6 +134,62 @@ describe('alias-delegation', () => {
 
       const structured = result.structuredContent as Record<string, unknown>;
       expect(structured.operation).toBe('alias_tool');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('injects execution lane metadata for dual-mode tools without breaking the success envelope', async () => {
+    const fakeExecutor = {
+      activeToolName: null as string | null,
+      setActiveToolName(name: string | null) {
+        this.activeToolName = name;
+      },
+      getActiveToolExecutionMetadata() {
+        return this.activeToolName === 'dual_tool'
+          ? {
+              runtime_mode: 'commandlet',
+              supported_modes: ['editor', 'commandlet'],
+              fallback_used: true,
+            }
+          : null;
+      },
+      getSupportedExecutionModes() {
+        return ['editor', 'commandlet'];
+      },
+      getToolMode() {
+        return 'both';
+      },
+    };
+    const { server } = createTestHarness(fakeExecutor);
+
+    server.registerTool('dual_tool', {
+      description: 'Dual-mode tool',
+      inputSchema: {},
+    }, async () => ({ success: true, payload: 'ok' }));
+
+    const harness = await connectInMemoryServer(server);
+    try {
+      const result = await harness.client.callTool({
+        name: 'dual_tool',
+        arguments: {},
+      });
+
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured).toMatchObject({
+        success: true,
+        operation: 'dual_tool',
+        payload: 'ok',
+        execution: {
+          runtime_mode: 'commandlet',
+          supported_modes: ['editor', 'commandlet'],
+          fallback_used: true,
+        },
+      });
+      const text = (result.content?.[0] as { text?: string } | undefined)?.text;
+      expect(typeof text).toBe('string');
+      expect(text ? JSON.parse(text) : null).toMatchObject(structured);
     } finally {
       await harness.close();
     }

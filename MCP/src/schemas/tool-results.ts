@@ -15,11 +15,14 @@ export const toolResultSchema = z.object({
     path: z.string().optional(),
   })).optional(),
   execution: z.object({
-    mode: z.enum(['immediate', 'task_aware']),
-    task_support: z.enum(['optional', 'required', 'forbidden']),
+    mode: z.enum(['immediate', 'task_aware']).optional(),
+    task_support: z.enum(['optional', 'required', 'forbidden']).optional(),
     status: z.string().optional(),
     progress_message: z.string().optional(),
-  }).optional(),
+    runtime_mode: z.enum(['editor', 'commandlet']).optional(),
+    supported_modes: z.array(z.enum(['editor', 'commandlet'])).optional(),
+    fallback_used: z.boolean().optional(),
+  }).catchall(z.unknown()).optional(),
 });
 
 export const windowUiVerificationSchema = z.object({

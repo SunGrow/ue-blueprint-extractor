@@ -2,7 +2,7 @@
   <h1 align="center">Blueprint Extractor MCP</h1>
   <p align="center">
     Give AI assistants full read/write access to Unreal Engine projects<br>
-    through a live editor connection.
+    through a live editor or headless commandlet lane.
   </p>
 </p>
 
@@ -17,7 +17,10 @@
 
 ## Overview
 
-Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that bridges AI coding assistants (Claude Code, Codex, OpenCode, etc.) to a running Unreal Editor instance via the Remote Control HTTP API.
+Blueprint Extractor MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that bridges AI coding assistants (Claude Code, Codex, OpenCode, etc.) to Unreal Engine through two execution lanes:
+
+- **Editor lane** via the Remote Control HTTP API for editor-bound and interactive workflows
+- **Commandlet lane** for headless-safe extraction and authoring when no reachable editor session is available
 
 For compatible tools, the server can also execute through a commandlet lane when no reachable editor session is available. When an editor is already running, editor execution stays preferred for editor-only flows and for save paths that need to avoid package-lock contention.
 
@@ -49,11 +52,13 @@ For compatible tools, the server can also execute through a commandlet lane when
 
 ### Prerequisites
 
-You need three things running:
+You need these prerequisites:
 
 1. **Node.js 18+**
-2. **Unreal Editor** with the **Remote Control API** plugin enabled
-3. **[BlueprintExtractor](https://github.com/SunGrow/ue-blueprint-extractor)** plugin installed in your project
+2. **[BlueprintExtractor](https://github.com/SunGrow/ue-blueprint-extractor)** plugin installed in your project
+3. One execution lane configured:
+   - **Editor lane**: Unreal Editor running with the **Remote Control API** plugin enabled
+   - **Commandlet lane**: resolvable `UE_ENGINE_ROOT` and `UE_PROJECT_PATH` so headless-safe tools can launch `UnrealEditor-Cmd`
 
 ### Run
 
@@ -62,6 +67,8 @@ npx blueprint-extractor-mcp
 ```
 
 Connects to the editor at `127.0.0.1:30010` by default.
+
+For headless-safe tools, also set `UE_ENGINE_ROOT` and `UE_PROJECT_PATH` so the MCP server can resolve the commandlet lane when no editor is reachable.
 
 ### Add to Your AI Client
 
@@ -81,6 +88,15 @@ claude mcp add -s user -t stdio blueprint-extractor \
 
 ```bash
 codex mcp add --env UE_REMOTE_CONTROL_PORT=30010 \
+  blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
+```
+
+```bash
+# Optional for headless-safe tools when no editor is running
+codex mcp add \
+  --env UE_REMOTE_CONTROL_PORT=30010 \
+  --env UE_ENGINE_ROOT="C:\\Program Files\\Epic Games\\UE_5.7" \
+  --env UE_PROJECT_PATH="D:\\Development\\V2\\CyberVolleyball6vs6.uproject" \
   blueprint-extractor -- npx -y blueprint-extractor-mcp@latest
 ```
 
@@ -167,6 +183,8 @@ See [../docs/CURRENT_STATUS.md](../docs/CURRENT_STATUS.md) for the current valid
 | `UE_PROJECT_TARGET` | &mdash; | Build target name (or `UE_EDITOR_TARGET`) |
 | `UE_BUILD_PLATFORM` | &mdash; | e.g. `Win64` |
 | `UE_BUILD_CONFIGURATION` | &mdash; | e.g. `Development` |
+
+`get_tool_help` now reports execution compatibility per tool, including whether the tool is editor-only or headless-safe.
 
 `get_project_automation_context` surfaces the coarse editor-derived `engineRoot`, `projectFilePath`, `editorTarget`, and `isPlayingInEditor` state that project-control and verification flows use for fallback or guard logic.
 

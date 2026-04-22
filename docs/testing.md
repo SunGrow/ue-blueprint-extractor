@@ -72,11 +72,11 @@ Two automation lanes are part of the current contract:
 - Headless/default lane:
   - uses `-NullRHI`
   - default filter is `BlueprintExtractor`
-  - covers extraction, create/modify/save flows, blueprint graph authoring, state trees, montages, sequences, data assets/data tables, inline instanced DataAsset graphs, property diagnostics, compile-failure extraction, CommonUI logical round-trips, and project-control smoke
+  - covers extraction, create/modify/save flows, blueprint graph authoring, state trees, montages, sequences, data assets/data tables, inline instanced DataAsset graphs, property diagnostics, compile-failure extraction, CommonUI logical round-trips including `BlueprintExtractor.Authoring.CommonUIButtonStyleAuthoring`, and project-control smoke
 - Rendered verification lane:
   - uses `-NoNullRHI`
   - can add `-AllowSoftwareRendering` on Windows when needed
-  - covers screenshot-backed or render-dependent flows such as `BlueprintExtractor.ProjectControl.PIEAndScreenshots`, `BlueprintExtractor.Authoring.WidgetCaptureVerification`, and `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
+  - covers screenshot-backed or render-dependent flows such as `BlueprintExtractor.ProjectControl.PIEAndScreenshots`, `BlueprintExtractor.Authoring.WidgetCaptureVerification`, and the visual-diff half of `BlueprintExtractor.Authoring.CommonUIButtonStyleRoundTrip`
 
 Screenshot assertions and rendered comparison work belong in the rendered lane, not the default `-NullRHI` lane.
 

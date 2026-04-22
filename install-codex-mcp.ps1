@@ -66,5 +66,6 @@ Write-Info "Done! MCP server '$ServerName' registered with Codex."
 Write-Info "Open a new Codex session or restart the Codex app to pick up the new server."
 Write-Host ''
 Write-Info 'Prerequisites:'
-Write-Info "  1. Enable 'Remote Control API' plugin in UE5 Editor (Edit > Plugins)"
-Write-Info '  2. Start the UE5 Editor before using the tools'
+Write-Info "  1. Install the BlueprintExtractor plugin in your Unreal project"
+Write-Info "  2. For editor-only workflows: enable 'Remote Control API' in UE5 Editor and start the editor"
+Write-Info '  3. For headless-safe workflows: set UE_ENGINE_ROOT and UE_PROJECT_PATH so commandlet mode can start UnrealEditor-Cmd'

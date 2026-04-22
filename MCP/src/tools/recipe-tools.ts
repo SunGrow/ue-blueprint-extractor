@@ -161,9 +161,11 @@ export function registerRecipeTools({
       // Step 3: Patch class defaults (if provided)
       if (parsed.classDefaults && Object.keys(parsed.classDefaults).length > 0) {
         const defaultsResult = await safeCall(() =>
-          callSubsystemJson('PatchWidgetClassDefaults', {
+          callSubsystemJson('ModifyWidgetBlueprintStructure', {
             AssetPath: parsed.asset.path,
-            ClassDefaultsJson: JSON.stringify(parsed.classDefaults),
+            Operation: 'patch_class_defaults',
+            PayloadJson: JSON.stringify({ classDefaults: parsed.classDefaults }),
+            bValidateOnly: false,
           }),
         );
         if (defaultsResult.ok) {

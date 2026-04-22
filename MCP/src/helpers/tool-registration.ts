@@ -20,11 +20,14 @@ const normalizedToolResultEnvelopeSchema = z.object({
     path: z.string().optional(),
   })).optional(),
   execution: z.object({
-    mode: z.enum(['immediate', 'task_aware']),
-    task_support: z.enum(['optional', 'required', 'forbidden']),
+    mode: z.enum(['immediate', 'task_aware']).optional(),
+    task_support: z.enum(['optional', 'required', 'forbidden']).optional(),
     status: z.string().optional(),
     progress_message: z.string().optional(),
-  }).optional(),
+    runtime_mode: z.enum(['editor', 'commandlet']).optional(),
+    supported_modes: z.array(z.enum(['editor', 'commandlet'])).optional(),
+    fallback_used: z.boolean().optional(),
+  }).passthrough().optional(),
 }).passthrough();
 
 function wrapOutputSchemaWithNormalizedErrors(outputSchema: z.ZodTypeAny): z.ZodTypeAny {
@@ -56,6 +59,62 @@ export function installNormalizedToolRegistration({
   normalizeToolSuccess,
   executor,
 }: InstallNormalizedToolRegistrationOptions): void {
+  function attachExecutionMetadata(
+    toolName: string,
+    result: unknown,
+  ): unknown {
+    if (!executor || !isPlainObject(result) || !isPlainObject(result.structuredContent)) {
+      return result;
+    }
+
+    const runtime = executor.getActiveToolExecutionMetadata();
+    const supportedModes = executor.getSupportedExecutionModes(toolName);
+    const toolMode = executor.getToolMode(toolName);
+    if (toolMode === 'editor_only' && !runtime?.runtime_mode) {
+      return result;
+    }
+
+    const existingExecution = isPlainObject(result.structuredContent.execution)
+      ? { ...result.structuredContent.execution }
+      : {};
+    const mergedExecution: Record<string, unknown> = {
+      ...existingExecution,
+      supported_modes: runtime?.supported_modes ?? supportedModes,
+    };
+
+    if (runtime?.runtime_mode) {
+      mergedExecution.runtime_mode = runtime.runtime_mode;
+    }
+    if (typeof runtime?.fallback_used === 'boolean') {
+      mergedExecution.fallback_used = runtime.fallback_used;
+    }
+
+    const structuredContent = {
+      ...result.structuredContent,
+      execution: mergedExecution,
+    };
+    const shouldRewriteTextMirror = result.isError !== true;
+    const content = shouldRewriteTextMirror && Array.isArray(result.content) && result.content.length > 0
+      ? result.content.map((entry, index) => (
+        index === 0
+        && isPlainObject(entry)
+        && entry.type === 'text'
+        && typeof entry.text === 'string'
+          ? {
+              ...entry,
+              text: JSON.stringify(structuredContent),
+            }
+          : entry
+      ))
+      : result.content;
+
+    return {
+      ...result,
+      structuredContent,
+      ...(Array.isArray(content) ? { content } : {}),
+    };
+  }
+
   const rawRegisterTool = server.registerTool.bind(server) as typeof server.registerTool;
   (server as typeof server & { registerTool: typeof server.registerTool }).registerTool = ((name, config, cb) => {
     const declaredOutputSchema = (config.outputSchema ?? defaultOutputSchema) as z.ZodTypeAny;
@@ -79,12 +138,18 @@ export function installNormalizedToolRegistration({
       try {
         const result = await (cb as (args: unknown, extra: unknown) => Promise<unknown> | unknown)(args, extra);
         if (isPlainObject(result) && result.isError === true) {
-          return normalizeToolError(name, extractToolPayload(result), result);
+          return attachExecutionMetadata(
+            name,
+            normalizeToolError(name, extractToolPayload(result), result),
+          );
         }
 
-        return normalizeToolSuccess(name, extractToolPayload(result), extractExtraContent(result));
+        return attachExecutionMetadata(
+          name,
+          normalizeToolSuccess(name, extractToolPayload(result), extractExtraContent(result)),
+        );
       } catch (error) {
-        return normalizeToolError(name, error);
+        return attachExecutionMetadata(name, normalizeToolError(name, error));
       } finally {
         if (executor) executor.setActiveToolName(null);
       }

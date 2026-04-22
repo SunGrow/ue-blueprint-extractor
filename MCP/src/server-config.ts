@@ -5,12 +5,13 @@ export const EDITOR_POLL_INTERVAL_MS = 1_000;
 
 export const serverInstructions = [
   'Blueprint Extractor MCP uses a v2 public contract with tool profiles, workflow-scoped tool surfaces, snake_case arguments, prompt workflows, and structured JSON results.',
+  'Execution is dual-lane: editor-only workflows require a reachable Unreal Editor, while headless-safe tools can run through the BlueprintExtractor commandlet when UE_ENGINE_ROOT and UE_PROJECT_PATH resolve.',
   // Tool discovery
   'Use activate_tool_profile with profile: "default" for the compact scoped surface or profile: "expert" for the full flat tool list. Clients with tool-list change support start in default; fallback clients start in expert.',
   'A compact retrieval-first core tool set is visible in the default profile: search_assets, find_and_extract, extract_blueprint, extract_asset, check_asset_exists, save_assets, get_tool_help, and the profile/scope switches.',
   'Use activate_workflow_scope to load specialized tool families: widget_authoring (or sub-scopes: widget_authoring_structure, widget_authoring_visual, widget_verification), material_authoring, blueprint_authoring, schema_ai_authoring, animation_authoring, data_tables, import, project_control, automation_testing, verification, analysis, and project_intelligence.',
   'Prefer find_and_extract for search plus routed extraction from the default core surface. Use search_assets when you only need to locate assets.',
-  'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance. Use activate_workflow_scope explicitly when the tool family is not in the current profile.',
+  'Call get_tool_help before the first use of a complex or polymorphic tool when you need operation-specific payload guidance, including execution compatibility. Use activate_workflow_scope explicitly when the tool family is not in the current profile.',
   // Deferred tool directory (tools available via activate_workflow_scope)
   'Deferred tool families — widget_authoring_structure: recipe-first widget authoring, tree replacement, diff/patch DSLs, and focused structural edits. widget_authoring_visual: CommonUI styles, widget animations, compile_widget, extraction, and preview capture. widget_verification: captures and comparisons. widget_authoring: activates all three widget sub-scopes. material_authoring: create_material_setup, modify_material DSL/batch authoring, material_graph_operation, and material instances. blueprint_authoring: scaffold_blueprint, modify_blueprint_graphs DSL authoring, member edits, and Live Coding trigger. schema_ai_authoring: structs, enums, blackboards, behavior trees, state trees. animation_authoring: anim sequences, montages, blend spaces, widget animations. data_tables: data assets, input actions, tables, curves. import: import_assets, job tracking. project_control: editor-session binding, launch/wait, project automation context, Output Log and Message Log inspection, PIE lifecycle control, host build/restart/sync flows, and apply_window_ui_changes. automation_testing: run/get/list automation tests. verification: widget captures, editor screenshots, runtime screenshots, and comparisons. analysis: deterministic Blueprint review and asset audits. project_intelligence: editor context, project indexing, and metadata-first context search.',
   // Extraction
@@ -25,8 +26,8 @@ export const serverInstructions = [
   // Design workflows
   'For high-fidelity menu design, first normalize text, image, Figma-export, or HTML/CSS inputs into a shared design_spec_json before authoring Unreal assets.',
   // Mutations and saving
-  'Write tools mutate the running editor but do not save automatically. Call save_assets after successful mutations you want to persist.',
-  'Each MCP session owns one active editor selection. Use list_running_editors, get_active_editor, select_editor, clear_editor_selection, and launch_editor to control which Unreal Editor instance this session targets.',
+  'Headless-safe write tools can mutate assets through the commandlet lane when project inputs resolve, but they still do not save automatically. Call save_assets after successful mutations you want to persist.',
+  'Editor-backed workflows own one active editor selection per MCP session. Use list_running_editors, get_active_editor, select_editor, clear_editor_selection, and launch_editor to control which Unreal Editor instance this session targets.',
   'Multiple simultaneous Unreal Editors must expose distinct Remote Control ports. When the workspace project matches multiple running editors, the server will reject the ambiguity until select_editor chooses one explicitly.',
   'Use wait_for_editor after restart windows or transient Remote Control disconnects before retrying editor-backed tools.',
   'Use read_output_log for buffered editor log lines, list_message_log_listings to discover registered Message Log listings, and read_message_log to inspect one listing when UE reports editor-side failures.',
@@ -63,11 +64,12 @@ export const taskAwareTools = new Set([
 /**
  * Tool mode annotations for dual-mode (editor / commandlet) execution.
  *
- * 'both'        — Tool works in editor and commandlet modes (read-only extraction + simple writes).
+ * 'both'        — Tool works in editor and commandlet modes (read-only extraction + headless-safe authoring).
  * 'editor_only' — Tool requires the live editor (complex writes, interactive, verification).
  * 'read_only'   — Tool is purely read-only (subset of 'both', used by executor for capability checks).
  */
 import type { ToolModeAnnotation } from './execution/adaptive-executor.js';
+import type { ExecutionLane } from './execution/adaptive-executor.js';
 
 export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = new Map<string, ToolModeAnnotation>([
   // ── Read-only extraction & search (both) ──
@@ -107,83 +109,83 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['stop_statetree_debugger', 'editor_only'],
   ['read_statetree_debugger', 'editor_only'],
 
-  // ── Simple writes that work in both modes ──
+  // ── Headless-safe writes that work in both modes ──
   ['save_assets', 'both'],
   ['create_blueprint', 'both'],
-  ['create_material', 'both'],
   ['create_data_asset', 'both'],
   ['create_data_table', 'both'],
 
-  // ── Widget mutation tools (editor_only) ──
-  ['create_widget_blueprint', 'editor_only'],
-  ['replace_widget_tree', 'editor_only'],
-  ['replace_widget_class', 'editor_only'],
-  ['insert_widget_child', 'editor_only'],
-  ['remove_widget', 'editor_only'],
-  ['move_widget', 'editor_only'],
-  ['wrap_widget', 'editor_only'],
-  ['patch_widget', 'editor_only'],
-  ['patch_widget_class_defaults', 'editor_only'],
-  ['batch_widget_operations', 'editor_only'],
-  ['apply_widget_diff', 'editor_only'],
-  ['compile_widget', 'editor_only'],
-  ['create_menu_screen', 'editor_only'],
-  ['apply_widget_patch', 'editor_only'],
+  // ── Widget mutation tools (both for direct structural authoring; composite recipes remain editor_only) ──
+  ['create_widget_blueprint', 'both'],
+  ['replace_widget_tree', 'both'],
+  ['replace_widget_class', 'both'],
+  ['insert_widget_child', 'both'],
+  ['remove_widget', 'both'],
+  ['move_widget', 'both'],
+  ['wrap_widget', 'both'],
+  ['patch_widget', 'both'],
+  ['patch_widget_class_defaults', 'both'],
+  ['batch_widget_operations', 'both'],
+  ['apply_widget_diff', 'both'],
+  ['compile_widget', 'both'],
+  ['create_menu_screen', 'both'],
+  ['apply_widget_patch', 'both'],
   ['execute_widget_recipe', 'editor_only'],
 
-  // ── CommonUI style mutation (editor_only) ──
-  ['create_commonui_button_style', 'editor_only'],
-  ['apply_commonui_button_style', 'editor_only'],
-  ['modify_commonui_button_style', 'editor_only'],
+  // ── CommonUI style mutation (both) ──
+  ['create_commonui_button_style', 'both'],
+  ['apply_commonui_button_style', 'both'],
+  ['modify_commonui_button_style', 'both'],
 
-  // ── Widget animation authoring (editor_only) ──
-  ['create_widget_animation', 'editor_only'],
-  ['modify_widget_animation', 'editor_only'],
+  // ── Widget animation authoring (both) ──
+  ['create_widget_animation', 'both'],
+  ['modify_widget_animation', 'both'],
 
-  // ── Material mutation tools (editor_only) ──
-  ['modify_material', 'editor_only'],
-  ['material_graph_operation', 'editor_only'],
-  ['compile_material_asset', 'editor_only'],
-  ['create_material_instance', 'editor_only'],
-  ['modify_material_instance', 'editor_only'],
-  ['create_material_setup', 'editor_only'],
+  // ── Material mutation tools (both) ──
+  ['create_material', 'both'],
+  ['modify_material', 'both'],
+  ['material_graph_operation', 'both'],
+  ['compile_material_asset', 'both'],
+  ['create_material_instance', 'both'],
+  ['modify_material_instance', 'both'],
+  ['create_material_setup', 'both'],
 
-  // ── Blueprint mutation tools (editor_only) ──
-  ['modify_blueprint_members', 'editor_only'],
-  ['modify_blueprint_graphs', 'editor_only'],
-  ['scaffold_blueprint', 'editor_only'],
+  // ── Blueprint mutation tools (both) ──
+  ['modify_blueprint_members', 'both'],
+  ['modify_blueprint_graphs', 'both'],
+  ['scaffold_blueprint', 'both'],
 
-  // ── Schema & AI authoring mutation (editor_only) ──
-  ['create_user_defined_struct', 'editor_only'],
-  ['modify_user_defined_struct', 'editor_only'],
-  ['create_user_defined_enum', 'editor_only'],
-  ['modify_user_defined_enum', 'editor_only'],
-  ['create_blackboard', 'editor_only'],
-  ['modify_blackboard', 'editor_only'],
-  ['create_behavior_tree', 'editor_only'],
-  ['modify_behavior_tree', 'editor_only'],
-  ['create_state_tree', 'editor_only'],
-  ['modify_state_tree', 'editor_only'],
+  // ── Schema & AI authoring mutation (both) ──
+  ['create_user_defined_struct', 'both'],
+  ['modify_user_defined_struct', 'both'],
+  ['create_user_defined_enum', 'both'],
+  ['modify_user_defined_enum', 'both'],
+  ['create_blackboard', 'both'],
+  ['modify_blackboard', 'both'],
+  ['create_behavior_tree', 'both'],
+  ['modify_behavior_tree', 'both'],
+  ['create_state_tree', 'both'],
+  ['modify_state_tree', 'both'],
 
-  // ── Animation authoring (editor_only) ──
-  ['create_anim_sequence', 'editor_only'],
-  ['modify_anim_sequence', 'editor_only'],
-  ['create_anim_montage', 'editor_only'],
-  ['modify_anim_montage', 'editor_only'],
-  ['create_blend_space', 'editor_only'],
-  ['modify_blend_space', 'editor_only'],
+  // ── Animation authoring (both) ──
+  ['create_anim_sequence', 'both'],
+  ['modify_anim_sequence', 'both'],
+  ['create_anim_montage', 'both'],
+  ['modify_anim_montage', 'both'],
+  ['create_blend_space', 'both'],
+  ['modify_blend_space', 'both'],
 
-  // ── Data & input mutation (editor_only) ──
-  ['modify_data_asset', 'editor_only'],
-  ['create_input_action', 'editor_only'],
-  ['modify_input_action', 'editor_only'],
-  ['create_input_mapping_context', 'editor_only'],
-  ['modify_input_mapping_context', 'editor_only'],
-  ['modify_data_table', 'editor_only'],
-  ['create_curve', 'editor_only'],
-  ['modify_curve', 'editor_only'],
-  ['create_curve_table', 'editor_only'],
-  ['modify_curve_table', 'editor_only'],
+  // ── Data & input mutation (both) ──
+  ['modify_data_asset', 'both'],
+  ['create_input_action', 'both'],
+  ['modify_input_action', 'both'],
+  ['create_input_mapping_context', 'both'],
+  ['modify_input_mapping_context', 'both'],
+  ['modify_data_table', 'both'],
+  ['create_curve', 'both'],
+  ['modify_curve', 'both'],
+  ['create_curve_table', 'both'],
+  ['modify_curve_table', 'both'],
 
   // ── Project control (editor_only) ──
   ['compile_project_code', 'both'],
@@ -218,6 +220,27 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['activate_workflow_scope', 'both'],
 ]);
 
+export type ToolExecutionCompatibility = {
+  tool_mode: ToolModeAnnotation;
+  supported_modes: ExecutionLane[];
+  requires_live_editor: boolean;
+  headless_safe: boolean;
+};
+
+export function getToolExecutionCompatibility(toolName: string): ToolExecutionCompatibility {
+  const toolMode = TOOL_MODE_ANNOTATIONS.get(toolName) ?? 'editor_only';
+  const supportedModes: ExecutionLane[] = toolMode === 'editor_only'
+    ? ['editor']
+    : ['editor', 'commandlet'];
+
+  return {
+    tool_mode: toolMode,
+    supported_modes: supportedModes,
+    requires_live_editor: toolMode === 'editor_only',
+    headless_safe: toolMode !== 'editor_only',
+  };
+}
+
 export function classifyRecoverableToolFailure(toolName: string, message: string, payload?: unknown) {
   // ── Dual-mode execution errors ──
   if (message.includes('MODE_UNAVAILABLE')) {
@@ -241,7 +264,7 @@ export function classifyRecoverableToolFailure(toolName: string, message: string
       next_steps: [
         `Tool '${toolName}' requires the Unreal Editor for full functionality.`,
         'Start the editor and call wait_for_editor before retrying.',
-        'Commandlet mode only supports read-only extraction and simple write operations.',
+        'Commandlet mode only supports the explicit headless-safe subset of tools annotated for dual-mode execution.',
       ],
     };
   }

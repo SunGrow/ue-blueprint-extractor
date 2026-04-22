@@ -7,6 +7,7 @@ import type { ExecutionAdapter, ToolCapability, ExecutionMode } from './executio
 import { ExecutionModeDetector } from './execution-mode-detector.js';
 
 export type ToolModeAnnotation = 'both' | 'editor_only' | 'read_only';
+export type ExecutionLane = 'editor' | 'commandlet';
 
 const EDITOR_FALLBACK_ERROR_FRAGMENTS = [
   'UE Editor not running or Remote Control not available',
@@ -51,6 +52,11 @@ export class AdaptiveExecutor {
    * parameter to executeRouted).
    */
   private _activeToolName: string | null = null;
+  private _activeToolExecutionMetadata: {
+    mode?: ExecutionLane;
+    supportedModes: ExecutionLane[];
+    fallbackUsed?: boolean;
+  } | null = null;
 
   constructor(
     editorAdapter: ExecutionAdapter,
@@ -70,6 +76,12 @@ export class AdaptiveExecutor {
     return this.toolModes.get(toolName) ?? 'editor_only';
   }
 
+  getSupportedExecutionModes(toolName: string): ExecutionLane[] {
+    return this.getToolMode(toolName) === 'editor_only'
+      ? ['editor']
+      : ['editor', 'commandlet'];
+  }
+
   getCurrentMode(): Promise<ExecutionMode> {
     return this.detector.detect().then((r) => r.mode);
   }
@@ -77,10 +89,44 @@ export class AdaptiveExecutor {
   /** Set the active tool name before a handler runs. Cleared after handler completes. */
   setActiveToolName(name: string | null): void {
     this._activeToolName = name;
+    this._activeToolExecutionMetadata = name
+      ? { supportedModes: this.getSupportedExecutionModes(name) }
+      : null;
   }
 
   getActiveToolName(): string | null {
     return this._activeToolName;
+  }
+
+  getActiveToolExecutionMetadata(): {
+    runtime_mode?: ExecutionLane;
+    supported_modes: ExecutionLane[];
+    fallback_used?: boolean;
+  } | null {
+    if (!this._activeToolExecutionMetadata) {
+      return null;
+    }
+
+    return {
+      runtime_mode: this._activeToolExecutionMetadata.mode,
+      supported_modes: [...this._activeToolExecutionMetadata.supportedModes],
+      ...(typeof this._activeToolExecutionMetadata.fallbackUsed === 'boolean'
+        ? { fallback_used: this._activeToolExecutionMetadata.fallbackUsed }
+        : {}),
+    };
+  }
+
+  private recordToolExecution(toolName: string, mode: ExecutionLane, fallbackUsed: boolean): void {
+    if (this._activeToolName !== toolName) {
+      return;
+    }
+
+    const current = this._activeToolExecutionMetadata ?? {
+      supportedModes: this.getSupportedExecutionModes(toolName),
+    };
+    current.mode = mode;
+    current.fallbackUsed = current.fallbackUsed === true ? true : fallbackUsed;
+    this._activeToolExecutionMetadata = current;
   }
 
   /**
@@ -128,15 +174,25 @@ export class AdaptiveExecutor {
       }
 
       this.detector.invalidateCache();
-      return this.commandletAdapter.execute('BlueprintExtractor', method, params);
+      try {
+        const result = await this.commandletAdapter.execute('BlueprintExtractor', method, params);
+        this.recordToolExecution(toolName, 'commandlet', true);
+        return result;
+      } catch (fallbackError) {
+        this.recordToolExecution(toolName, 'commandlet', true);
+        throw fallbackError;
+      }
     };
 
     // Editor mode keeps the existing direct path, with commandlet fallback for
     // compatible tools when the editor call fails.
     if (detection.mode === 'editor') {
       try {
-        return await editorFallback(method, params, options);
+        const result = await editorFallback(method, params, options);
+        this.recordToolExecution(toolName, 'editor', false);
+        return result;
       } catch (error) {
+        this.recordToolExecution(toolName, 'editor', false);
         if (toolMode === 'editor_only') {
           throw error;
         }
@@ -172,7 +228,9 @@ export class AdaptiveExecutor {
           const editorAvailable = await this.editorAdapter.isAvailable();
           if (editorAvailable) {
             this.detector.invalidateCache();
-            return await editorFallback(method, params, options);
+            const result = await editorFallback(method, params, options);
+            this.recordToolExecution(toolName, 'editor', true);
+            return result;
           }
         } catch {
           // Fall back to the commandlet path below.
@@ -180,14 +238,19 @@ export class AdaptiveExecutor {
       }
 
       try {
-        return await this.commandletAdapter.execute('BlueprintExtractor', method, params);
+        const result = await this.commandletAdapter.execute('BlueprintExtractor', method, params);
+        this.recordToolExecution(toolName, 'commandlet', false);
+        return result;
       } catch (error) {
+        this.recordToolExecution(toolName, 'commandlet', false);
         if (toolMode !== 'read_only' && shouldFallbackToEditorOnLock(error)) {
           try {
             const editorAvailable = await this.editorAdapter.isAvailable();
             if (editorAvailable) {
               this.detector.invalidateCache();
-              return await editorFallback(method, params, options);
+              const result = await editorFallback(method, params, options);
+              this.recordToolExecution(toolName, 'editor', true);
+              return result;
             }
           } catch {
             // If the editor is not actually reachable, preserve the commandlet error.
@@ -225,7 +288,14 @@ export class AdaptiveExecutor {
         : 'write_complex';
 
     if (detection.mode === 'editor') {
-      return this.editorAdapter.execute(subsystem, method, params);
+      try {
+        const result = await this.editorAdapter.execute(subsystem, method, params);
+        this.recordToolExecution(toolName, 'editor', false);
+        return result;
+      } catch (error) {
+        this.recordToolExecution(toolName, 'editor', false);
+        throw error;
+      }
     }
 
     // Try commandlet for compatible tools
@@ -256,7 +326,9 @@ export class AdaptiveExecutor {
           const editorAvailable = await this.editorAdapter.isAvailable();
           if (editorAvailable) {
             this.detector.invalidateCache();
-            return await this.editorAdapter.execute(subsystem, method, params);
+            const result = await this.editorAdapter.execute(subsystem, method, params);
+            this.recordToolExecution(toolName, 'editor', true);
+            return result;
           }
         } catch {
           // Keep the commandlet path below.
@@ -264,14 +336,19 @@ export class AdaptiveExecutor {
       }
 
       try {
-        return await this.commandletAdapter.execute(subsystem, method, params);
+        const result = await this.commandletAdapter.execute(subsystem, method, params);
+        this.recordToolExecution(toolName, 'commandlet', false);
+        return result;
       } catch (error) {
+        this.recordToolExecution(toolName, 'commandlet', false);
         if (toolMode !== 'read_only' && shouldFallbackToEditorOnLock(error)) {
           try {
             const editorAvailable = await this.editorAdapter.isAvailable();
             if (editorAvailable) {
               this.detector.invalidateCache();
-              return await this.editorAdapter.execute(subsystem, method, params);
+              const result = await this.editorAdapter.execute(subsystem, method, params);
+              this.recordToolExecution(toolName, 'editor', true);
+              return result;
             }
           } catch {
             // Preserve the original commandlet failure below.

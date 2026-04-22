@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonToolError, jsonToolSuccess } from '../helpers/subsystem.js';
+import type { ToolExecutionCompatibility } from '../server-config.js';
 
 type JsonSubsystemCaller = (
   method: string,
@@ -25,6 +26,7 @@ type RegisterUtilityToolsOptions = {
   summarizeOutputSchema: (schema: z.ZodTypeAny) => Record<string, unknown>;
   collectRelatedResources: (toolName: string) => string[];
   collectToolExampleFamilies: (toolName: string) => Array<Record<string, unknown>>;
+  getToolExecutionCompatibility: (toolName: string) => ToolExecutionCompatibility;
 };
 
 export function registerUtilityTools({
@@ -35,6 +37,7 @@ export function registerUtilityTools({
   summarizeOutputSchema,
   collectRelatedResources,
   collectToolExampleFamilies,
+  getToolExecutionCompatibility,
 }: RegisterUtilityToolsOptions): void {
   server.registerTool(
     'save_assets',
@@ -98,6 +101,7 @@ export function registerUtilityTools({
           title: entry.title,
           description: entry.description,
           annotations: entry.annotations ?? {},
+          executionCompatibility: getToolExecutionCompatibility(tool_name),
           parameters: summarizeSchemaFields(entry.inputSchema),
           output: summarizeOutputSchema(entry.outputSchema),
           relatedResources: collectRelatedResources(tool_name),
