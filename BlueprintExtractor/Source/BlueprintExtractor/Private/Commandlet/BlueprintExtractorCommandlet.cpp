@@ -3,6 +3,8 @@
 #include "BlueprintExtractorSubsystem.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Editor.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -12,6 +14,187 @@
 #include <string>
 
 DEFINE_LOG_CATEGORY_STATIC(LogBPECommandlet, Log, All);
+
+namespace
+{
+bool IsInputParameter(const FProperty* Prop)
+{
+	if (!Prop || Prop->HasAnyPropertyFlags(CPF_ReturnParm))
+	{
+		return false;
+	}
+
+	return !Prop->HasAnyPropertyFlags(CPF_OutParm) || Prop->HasAnyPropertyFlags(CPF_ReferenceParm);
+}
+
+FString ToSnakeCase(const FString& Name)
+{
+	FString Result;
+	Result.Reserve(Name.Len() + 4);
+
+	for (int32 Index = 0; Index < Name.Len(); ++Index)
+	{
+		const TCHAR Ch = Name[Index];
+		if (FChar::IsUpper(Ch))
+		{
+			if (Index > 0)
+			{
+				Result.AppendChar(TEXT('_'));
+			}
+			Result.AppendChar(FChar::ToLower(Ch));
+		}
+		else
+		{
+			Result.AppendChar(Ch);
+		}
+	}
+
+	return Result;
+}
+
+bool SetPropertyValueFromString(FProperty* Prop, uint8* ParamBuffer, const FString& Value)
+{
+	if (const FStrProperty* StrProp = CastField<FStrProperty>(Prop))
+	{
+		StrProp->SetPropertyValue_InContainer(ParamBuffer, Value);
+		return true;
+	}
+	if (const FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
+	{
+		BoolProp->SetPropertyValue_InContainer(ParamBuffer, FCString::ToBool(*Value));
+		return true;
+	}
+	if (const FIntProperty* IntProp = CastField<FIntProperty>(Prop))
+	{
+		IntProp->SetPropertyValue_InContainer(ParamBuffer, FCString::Atoi(*Value));
+		return true;
+	}
+	if (const FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop))
+	{
+		FloatProp->SetPropertyValue_InContainer(ParamBuffer, FCString::Atof(*Value));
+		return true;
+	}
+	if (const FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop))
+	{
+		DoubleProp->SetPropertyValue_InContainer(ParamBuffer, FCString::Atod(*Value));
+		return true;
+	}
+
+	return false;
+}
+
+bool SetPropertyValueFromJson(FProperty* Prop, uint8* ParamBuffer, const TSharedPtr<FJsonValue>& JsonValue)
+{
+	if (!JsonValue.IsValid())
+	{
+		return false;
+	}
+
+	if (const FStrProperty* StrProp = CastField<FStrProperty>(Prop))
+	{
+		StrProp->SetPropertyValue_InContainer(ParamBuffer, JsonValue->AsString());
+		return true;
+	}
+	if (const FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
+	{
+		BoolProp->SetPropertyValue_InContainer(ParamBuffer, JsonValue->AsBool());
+		return true;
+	}
+	if (const FIntProperty* IntProp = CastField<FIntProperty>(Prop))
+	{
+		IntProp->SetPropertyValue_InContainer(ParamBuffer, static_cast<int32>(JsonValue->AsNumber()));
+		return true;
+	}
+	if (const FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop))
+	{
+		FloatProp->SetPropertyValue_InContainer(ParamBuffer, static_cast<float>(JsonValue->AsNumber()));
+		return true;
+	}
+	if (const FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop))
+	{
+		DoubleProp->SetPropertyValue_InContainer(ParamBuffer, JsonValue->AsNumber());
+		return true;
+	}
+
+	return false;
+}
+
+void ApplyReflectedDefaultValue(UFunction* Func, FProperty* Prop, uint8* ParamBuffer)
+{
+	const FString MetadataKey = FString::Printf(TEXT("CPP_Default_%s"), *Prop->GetName());
+	if (!Func->HasMetaData(*MetadataKey))
+	{
+		return;
+	}
+
+	const FString& DefaultValue = Func->GetMetaData(*MetadataKey);
+	if (!SetPropertyValueFromString(Prop, ParamBuffer, DefaultValue))
+	{
+		UE_LOG(LogBPECommandlet, Warning, TEXT("Unsupported default parameter type for %s.%s"), *Func->GetName(), *Prop->GetName());
+	}
+}
+
+bool TryGetJsonParamValue(const TSharedPtr<FJsonObject>& Params, FProperty* Prop, TSharedPtr<FJsonValue>& OutValue)
+{
+	const FString PropName = Prop->GetName();
+	if (Params->HasField(PropName))
+	{
+		OutValue = Params->TryGetField(PropName);
+		return OutValue.IsValid();
+	}
+
+	const FString SnakeName = ToSnakeCase(PropName);
+	if (Params->HasField(SnakeName))
+	{
+		OutValue = Params->TryGetField(SnakeName);
+		return OutValue.IsValid();
+	}
+
+	if (CastField<FBoolProperty>(Prop) && PropName.Len() > 1 && PropName[0] == TCHAR('b') && FChar::IsUpper(PropName[1]))
+	{
+		const FString BoolAlias = ToSnakeCase(PropName.RightChop(1));
+		if (Params->HasField(BoolAlias))
+		{
+			OutValue = Params->TryGetField(BoolAlias);
+			return OutValue.IsValid();
+		}
+	}
+
+	return false;
+}
+
+FString CompactJsonPayloadForLineProtocol(const FString& Json)
+{
+	TSharedPtr<FJsonValue> Value;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+	if (FJsonSerializer::Deserialize(Reader, Value) && Value.IsValid())
+	{
+		FString CompactJson;
+		const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&CompactJson);
+		if (FJsonSerializer::Serialize(Value.ToSharedRef(), TEXT(""), Writer))
+		{
+			return CompactJson;
+		}
+	}
+
+	FString CompactJson = Json;
+	CompactJson.ReplaceInline(TEXT("\r"), TEXT(""));
+	CompactJson.ReplaceInline(TEXT("\n"), TEXT(""));
+	return CompactJson;
+}
+
+FString EscapeJsonStringForLineProtocol(const FString& Value)
+{
+	FString Escaped = Value;
+	Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
+	Escaped.ReplaceInline(TEXT("\""), TEXT("\\\""));
+	Escaped.ReplaceInline(TEXT("\r"), TEXT("\\r"));
+	Escaped.ReplaceInline(TEXT("\n"), TEXT("\\n"));
+	Escaped.ReplaceInline(TEXT("\t"), TEXT("\\t"));
+	return Escaped;
+}
+}
 
 UBlueprintExtractorCommandlet::UBlueprintExtractorCommandlet()
 {
@@ -25,14 +208,22 @@ int32 UBlueprintExtractorCommandlet::Main(const FString& Params)
 {
 	UE_LOG(LogBPECommandlet, Log, TEXT("BlueprintExtractor commandlet starting."));
 
-	UBlueprintExtractorSubsystem* Subsystem = NewObject<UBlueprintExtractorSubsystem>();
+	UBlueprintExtractorSubsystem* Subsystem = GEditor
+		? GEditor->GetEditorSubsystem<UBlueprintExtractorSubsystem>()
+		: nullptr;
+	if (!IsValid(Subsystem))
+	{
+		UE_LOG(LogBPECommandlet, Warning, TEXT("Editor subsystem collection did not provide UBlueprintExtractorSubsystem; falling back to a transient instance."));
+		Subsystem = NewObject<UBlueprintExtractorSubsystem>();
+	}
 	if (!IsValid(Subsystem))
 	{
 		UE_LOG(LogBPECommandlet, Error, TEXT("Failed to create UBlueprintExtractorSubsystem instance."));
 		return 1;
 	}
 
-	// Signal ready to the MCP CommandletAdapter (first stdout output = ready)
+	// Signal readiness to the MCP CommandletAdapter. UE may emit log lines to
+	// stdout before this envelope; the adapter filters for JSON-RPC frames.
 	WriteStdout(TEXT("{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"ready\":true}}"));
 
 	// Read JSON-RPC requests from stdin, one per line
@@ -116,7 +307,12 @@ FString UBlueprintExtractorCommandlet::InvokeViaReflection(
 	// Initialize default values
 	for (TFieldIterator<FProperty> It(Func); It; ++It)
 	{
-		It->InitializeValue_InContainer(ParamBuffer);
+		FProperty* Prop = *It;
+		Prop->InitializeValue_InContainer(ParamBuffer);
+		if (IsInputParameter(Prop))
+		{
+			ApplyReflectedDefaultValue(Func, Prop, ParamBuffer);
+		}
 	}
 
 	// Map JSON params to UFUNCTION parameters
@@ -124,73 +320,22 @@ FString UBlueprintExtractorCommandlet::InvokeViaReflection(
 	{
 		FProperty* Prop = *It;
 
-		// Skip return value
-		if (Prop->HasAnyPropertyFlags(CPF_ReturnParm))
+		if (!IsInputParameter(Prop))
 		{
 			continue;
 		}
 
-		// Skip output parameters
-		if (Prop->HasAnyPropertyFlags(CPF_OutParm) && !Prop->HasAnyPropertyFlags(CPF_ReferenceParm))
-		{
-			continue;
-		}
-
-		const FString PropName = Prop->GetName();
-
-		// Try exact name match, then snake_case match
 		TSharedPtr<FJsonValue> JsonValue;
-		if (Params->HasField(PropName))
+		if (!TryGetJsonParamValue(Params, Prop, JsonValue))
 		{
-			JsonValue = Params->TryGetField(PropName);
-		}
-		else
-		{
-			// Try converting snake_case to PascalCase (e.g., asset_path → AssetPath)
-			FString PascalName;
-			bool bNextUpper = true;
-			for (const TCHAR Ch : PropName)
-			{
-				if (Ch == '_')
-				{
-					bNextUpper = true;
-					continue;
-				}
-				PascalName += bNextUpper ? FChar::ToUpper(Ch) : Ch;
-				bNextUpper = false;
-			}
-			if (Params->HasField(PascalName))
-			{
-				JsonValue = Params->TryGetField(PascalName);
-			}
-		}
-
-		if (!JsonValue.IsValid())
-		{
-			// Parameter not provided — use default (already initialized)
+			// Parameter not provided: use reflected CPP_Default_* metadata when present,
+			// otherwise keep the type-initialized value.
 			continue;
 		}
 
-		// Set property value from JSON
-		if (const FStrProperty* StrProp = CastField<FStrProperty>(Prop))
+		if (!SetPropertyValueFromJson(Prop, ParamBuffer, JsonValue))
 		{
-			StrProp->SetPropertyValue_InContainer(ParamBuffer, JsonValue->AsString());
-		}
-		else if (const FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
-		{
-			BoolProp->SetPropertyValue_InContainer(ParamBuffer, JsonValue->AsBool());
-		}
-		else if (const FIntProperty* IntProp = CastField<FIntProperty>(Prop))
-		{
-			IntProp->SetPropertyValue_InContainer(ParamBuffer, static_cast<int32>(JsonValue->AsNumber()));
-		}
-		else if (const FFloatProperty* FloatProp = CastField<FFloatProperty>(Prop))
-		{
-			FloatProp->SetPropertyValue_InContainer(ParamBuffer, static_cast<float>(JsonValue->AsNumber()));
-		}
-		else if (const FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Prop))
-		{
-			DoubleProp->SetPropertyValue_InContainer(ParamBuffer, JsonValue->AsNumber());
+			UE_LOG(LogBPECommandlet, Warning, TEXT("Unsupported JSON parameter type for %s.%s"), *Func->GetName(), *Prop->GetName());
 		}
 	}
 
@@ -230,22 +375,16 @@ FString UBlueprintExtractorCommandlet::InvokeViaReflection(
 		return TEXT("{\"success\":true}");
 	}
 
-	// Escape for JSON
-	FString Escaped = ReturnValue;
-	Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
-	Escaped.ReplaceInline(TEXT("\""), TEXT("\\\""));
-	return FString::Printf(TEXT("{\"result\":\"%s\"}"), *Escaped);
+	return FString::Printf(TEXT("{\"result\":\"%s\"}"), *EscapeJsonStringForLineProtocol(ReturnValue));
 }
 
 FString UBlueprintExtractorCommandlet::MakeJsonRpcResult(int64 Id, const FString& ResultJson)
 {
-	return FString::Printf(TEXT("{\"jsonrpc\":\"2.0\",\"id\":%lld,\"result\":%s}"), Id, *ResultJson);
+	const FString ResultPayload = CompactJsonPayloadForLineProtocol(ResultJson);
+	return FString::Printf(TEXT("{\"jsonrpc\":\"2.0\",\"id\":%lld,\"result\":%s}"), Id, *ResultPayload);
 }
 
 FString UBlueprintExtractorCommandlet::MakeJsonRpcError(int64 Id, const FString& Message)
 {
-	FString Escaped = Message;
-	Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
-	Escaped.ReplaceInline(TEXT("\""), TEXT("\\\""));
-	return FString::Printf(TEXT("{\"jsonrpc\":\"2.0\",\"id\":%lld,\"error\":\"%s\"}"), Id, *Escaped);
+	return FString::Printf(TEXT("{\"jsonrpc\":\"2.0\",\"id\":%lld,\"error\":\"%s\"}"), Id, *EscapeJsonStringForLineProtocol(Message));
 }

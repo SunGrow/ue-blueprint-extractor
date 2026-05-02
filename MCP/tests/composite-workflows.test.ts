@@ -19,9 +19,17 @@ function setupRegistry(callSubsystemJson: ReturnType<typeof vi.fn>) {
 
 describe('create_menu_screen', () => {
   it('runs the full workflow: create -> build_tree -> compile -> save', async () => {
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      calls.push({ method, params });
+    const calls: Array<{
+      method: string;
+      params: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    }> = [];
+    const callSubsystemJson = vi.fn(async (
+      method: string,
+      params: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => {
+      calls.push({ method, params, options });
       if (method === 'CreateWidgetBlueprint') return { success: true, asset_path: '/Game/UI/WBP_Menu' };
       if (method === 'BuildWidgetTree') return { success: true, widgets_created: 2 };
       if (method === 'CompileWidgetBlueprint') return { compile: { success: true, messages: [] } };
@@ -51,13 +59,15 @@ describe('create_menu_screen', () => {
 
     // Verify subsystem call sequence
     expect(calls[0].method).toBe('CreateWidgetBlueprint');
-    expect(calls[0].params).toMatchObject({ AssetPath: '/Game/UI/WBP_Menu', ParentClassPath: 'CommonActivatableWidget' });
+    expect(calls[0].params).toMatchObject({ AssetPath: '/Game/UI/WBP_Menu', ParentClass: 'CommonActivatableWidget' });
     expect(calls[1].method).toBe('BuildWidgetTree');
     expect(calls[1].params.AssetPath).toBe('/Game/UI/WBP_Menu');
     expect(typeof calls[1].params.WidgetTreeJson).toBe('string');
     expect(JSON.parse(calls[1].params.WidgetTreeJson as string)).toMatchObject({ class: 'CanvasPanel', name: 'Root' });
     expect(calls[2].method).toBe('CompileWidgetBlueprint');
     expect(calls[3].method).toBe('SaveAssets');
+    expect(calls[3].params).toEqual({ AssetPathsJson: JSON.stringify(['/Game/UI/WBP_Menu']) });
+    expect(calls[3].options).toEqual({ routingToolName: 'save_assets' });
   });
 
   it('includes class_defaults step when provided', async () => {
@@ -176,9 +186,17 @@ describe('apply_widget_patch', () => {
   });
 
   it('saves when save=true and compile succeeds', async () => {
-    const calls: Array<{ method: string }> = [];
-    const callSubsystemJson = vi.fn(async (method: string) => {
-      calls.push({ method });
+    const calls: Array<{
+      method: string;
+      params: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    }> = [];
+    const callSubsystemJson = vi.fn(async (
+      method: string,
+      params: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => {
+      calls.push({ method, params, options });
       if (method === 'ExtractWidgetBlueprint') return { widget_tree: {} };
       if (method === 'ModifyWidgetBlueprintStructure') return { success: true };
       if (method === 'CompileWidgetBlueprint') return { compile: { success: true } };
@@ -201,6 +219,8 @@ describe('apply_widget_patch', () => {
 
     const saveCalls = calls.filter(c => c.method === 'SaveAssets');
     expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].params).toEqual({ AssetPathsJson: JSON.stringify(['/Game/UI/WBP_Menu']) });
+    expect(saveCalls[0].options).toEqual({ routingToolName: 'save_assets' });
   });
 
   it('reports partial failure when diff apply fails', async () => {
@@ -251,9 +271,17 @@ describe('apply_widget_patch', () => {
 
 describe('create_material_setup', () => {
   it('runs the full workflow: create -> settings -> compile -> save', async () => {
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      calls.push({ method, params });
+    const calls: Array<{
+      method: string;
+      params: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    }> = [];
+    const callSubsystemJson = vi.fn(async (
+      method: string,
+      params: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => {
+      calls.push({ method, params, options });
       if (method === 'CreateMaterial') return { success: true, asset_path: '/Game/Materials/M_Test' };
       if (method === 'ModifyMaterial') return { success: true };
       if (method === 'CompileMaterialAsset') return { compile: { success: true } };
@@ -295,6 +323,10 @@ describe('create_material_setup', () => {
         },
       }],
     });
+
+    const saveCall = calls.find(c => c.method === 'SaveAssets');
+    expect(saveCall?.params).toEqual({ AssetPathsJson: JSON.stringify(['/Game/Materials/M_Test']) });
+    expect(saveCall?.options).toEqual({ routingToolName: 'save_assets' });
   });
 
   it('applies graph operations when provided', async () => {
@@ -383,9 +415,17 @@ describe('create_material_setup', () => {
 
 describe('scaffold_blueprint', () => {
   it('runs the full workflow: create -> add_members -> save', async () => {
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const callSubsystemJson = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      calls.push({ method, params });
+    const calls: Array<{
+      method: string;
+      params: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    }> = [];
+    const callSubsystemJson = vi.fn(async (
+      method: string,
+      params: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => {
+      calls.push({ method, params, options });
       if (method === 'CreateBlueprint') return { success: true, asset_path: '/Game/BP_Enemy' };
       if (method === 'SaveAssets') return { success: true };
       return {};
@@ -441,6 +481,8 @@ describe('scaffold_blueprint', () => {
     });
 
     expect(calls[1].method).toBe('SaveAssets');
+    expect(calls[1].params).toEqual({ AssetPathsJson: JSON.stringify(['/Game/BP_Enemy']) });
+    expect(calls[1].options).toEqual({ routingToolName: 'save_assets' });
   });
 
   it('skips add_members when no variables or functions provided', async () => {

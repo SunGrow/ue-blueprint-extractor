@@ -314,7 +314,7 @@ compile, save
 
     expect(callSubsystemJson).toHaveBeenCalledWith('CreateWidgetBlueprint', {
       AssetPath: '/Game/UI/WBP_Test',
-      ParentClassPath: 'CommonActivatableWidget',
+      ParentClass: 'CommonActivatableWidget',
     });
     expect(callSubsystemJson).toHaveBeenCalledWith('BuildWidgetTree', expect.objectContaining({
       AssetPath: '/Game/UI/WBP_Test',
@@ -327,6 +327,42 @@ compile, save
     expect(callSubsystemJson).toHaveBeenCalledWith('CompileWidgetBlueprint', {
       AssetPath: '/Game/UI/WBP_Test',
     });
+    expect(callSubsystemJson).toHaveBeenCalledWith('SaveAssets', {
+      AssetPathsJson: JSON.stringify(['/Game/UI/WBP_Test']),
+    }, { routingToolName: 'save_assets' });
+  });
+
+  it('routes capture steps through the editor-only capture tool contract', async () => {
+    const callSubsystemJson = vi.fn(async (method: string) => {
+      if (method === 'CreateWidgetBlueprint') return { success: true };
+      if (method === 'CompileWidgetBlueprint') return { success: true };
+      if (method === 'CaptureWidgetPreview') return { success: true, captureId: 'capture-1' };
+      if (method === 'SaveAssets') return { success: true };
+      if (method === 'ExtractWidgetBlueprint') return { widgetTree: {} };
+      return {};
+    });
+
+    const registry = setupRegistry(callSubsystemJson);
+
+    const result = await registry.getTool('execute_widget_recipe').handler({
+      recipe: `## Asset
+path: /Game/UI/WBP_CaptureRecipe
+
+## After
+compile, capture, save
+`,
+    });
+
+    const parsed = parseDirectToolResult(result) as CompositeToolResult;
+    expect(parsed.success).toBe(true);
+    expect(parsed.steps.find((s) => s.step === 'capture')).toMatchObject({
+      status: 'success',
+      data: { captureId: 'capture-1' },
+    });
+
+    expect(callSubsystemJson).toHaveBeenCalledWith('CaptureWidgetPreview', {
+      AssetPath: '/Game/UI/WBP_CaptureRecipe',
+    }, { routingToolName: 'capture_widget_preview' });
   });
 
   it('skips tree step when Widget Tree section is absent', async () => {
@@ -532,7 +568,7 @@ compile, save
 
     expect(callSubsystemJson).toHaveBeenCalledWith('CreateWidgetBlueprint', {
       AssetPath: '/Game/UI/WBP_NoParent',
-      ParentClassPath: 'UserWidget',
+      ParentClass: 'UserWidget',
     });
   });
 

@@ -38,6 +38,11 @@ export type EditorFallbackCaller = (
   options?: { timeoutMs?: number },
 ) => Promise<Record<string, unknown>>;
 
+type RoutedSubsystemCallOptions = {
+  timeoutMs?: number;
+  routingToolName?: string;
+};
+
 export class AdaptiveExecutor {
   private editorAdapter: ExecutionAdapter;
   private commandletAdapter: ExecutionAdapter | null;
@@ -140,14 +145,22 @@ export class AdaptiveExecutor {
     editorFallback: EditorFallbackCaller,
     method: string,
     params: Record<string, unknown>,
-    options?: { timeoutMs?: number },
+    options?: RoutedSubsystemCallOptions,
   ): Promise<Record<string, unknown>> {
-    const toolName = this._activeToolName;
+    const activeToolName = this._activeToolName;
+    const { routingToolName, ...transportOptions } = options ?? {};
+    const toolName = routingToolName ?? activeToolName;
     const detection = await this.detector.detect();
 
     if (!toolName) {
-      return editorFallback(method, params, options);
+      return editorFallback(method, params, Object.keys(transportOptions).length > 0 ? transportOptions : undefined);
     }
+
+    const recordExecution = (mode: ExecutionLane, fallbackUsed: boolean): void => {
+      if (activeToolName) {
+        this.recordToolExecution(activeToolName, mode, fallbackUsed);
+      }
+    };
 
     const toolMode = this.getToolMode(toolName);
     const requiredCapability: ToolCapability = toolMode === 'read_only'
@@ -176,10 +189,10 @@ export class AdaptiveExecutor {
       this.detector.invalidateCache();
       try {
         const result = await this.commandletAdapter.execute('BlueprintExtractor', method, params);
-        this.recordToolExecution(toolName, 'commandlet', true);
+        recordExecution('commandlet', true);
         return result;
       } catch (fallbackError) {
-        this.recordToolExecution(toolName, 'commandlet', true);
+        recordExecution('commandlet', true);
         throw fallbackError;
       }
     };
@@ -188,11 +201,15 @@ export class AdaptiveExecutor {
     // compatible tools when the editor call fails.
     if (detection.mode === 'editor') {
       try {
-        const result = await editorFallback(method, params, options);
-        this.recordToolExecution(toolName, 'editor', false);
+        const result = await editorFallback(
+          method,
+          params,
+          Object.keys(transportOptions).length > 0 ? transportOptions : undefined,
+        );
+        recordExecution('editor', false);
         return result;
       } catch (error) {
-        this.recordToolExecution(toolName, 'editor', false);
+        recordExecution('editor', false);
         if (toolMode === 'editor_only') {
           throw error;
         }
@@ -228,8 +245,12 @@ export class AdaptiveExecutor {
           const editorAvailable = await this.editorAdapter.isAvailable();
           if (editorAvailable) {
             this.detector.invalidateCache();
-            const result = await editorFallback(method, params, options);
-            this.recordToolExecution(toolName, 'editor', true);
+            const result = await editorFallback(
+              method,
+              params,
+              Object.keys(transportOptions).length > 0 ? transportOptions : undefined,
+            );
+            recordExecution('editor', true);
             return result;
           }
         } catch {
@@ -239,17 +260,21 @@ export class AdaptiveExecutor {
 
       try {
         const result = await this.commandletAdapter.execute('BlueprintExtractor', method, params);
-        this.recordToolExecution(toolName, 'commandlet', false);
+        recordExecution('commandlet', false);
         return result;
       } catch (error) {
-        this.recordToolExecution(toolName, 'commandlet', false);
+        recordExecution('commandlet', false);
         if (toolMode !== 'read_only' && shouldFallbackToEditorOnLock(error)) {
           try {
             const editorAvailable = await this.editorAdapter.isAvailable();
             if (editorAvailable) {
               this.detector.invalidateCache();
-              const result = await editorFallback(method, params, options);
-              this.recordToolExecution(toolName, 'editor', true);
+              const result = await editorFallback(
+                method,
+                params,
+                Object.keys(transportOptions).length > 0 ? transportOptions : undefined,
+              );
+              recordExecution('editor', true);
               return result;
             }
           } catch {

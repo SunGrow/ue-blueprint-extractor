@@ -10,11 +10,13 @@ import {
 import { parseWidgetDsl } from '../helpers/widget-dsl-parser.js';
 import { parseWidgetDiff } from '../helpers/widget-diff-parser.js';
 import { jsonToolSuccess } from '../helpers/subsystem.js';
+import type { SubsystemCallOptions } from '../helpers/subsystem.js';
 import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
 type JsonSubsystemCaller = (
   method: string,
   params: Record<string, unknown>,
+  options?: SubsystemCallOptions,
 ) => Promise<Record<string, unknown>>;
 
 type ScaffoldPinTypeInput = string | Record<string, unknown>;
@@ -260,7 +262,7 @@ export function registerCompositeWorkflowTools({
       const createResult = await safeCall(() =>
         callSubsystemJson('CreateWidgetBlueprint', {
           AssetPath: asset_path,
-          ParentClassPath: parent_class,
+          ParentClass: parent_class,
         }),
       );
 
@@ -352,7 +354,7 @@ export function registerCompositeWorkflowTools({
 
       // Step 5: Save
       const saveResult = await safeCall(() =>
-        callSubsystemJson('SaveAssets', { AssetPaths: JSON.stringify([asset_path]) }),
+        callSubsystemJson('SaveAssets', { AssetPathsJson: JSON.stringify([asset_path]) }, { routingToolName: 'save_assets' }),
       );
 
       if (!saveResult.ok) {
@@ -487,7 +489,7 @@ export function registerCompositeWorkflowTools({
       // Step 4: Save (optional)
       if (save) {
         const saveResult = await safeCall(() =>
-          callSubsystemJson('SaveAssets', { AssetPaths: JSON.stringify([asset_path]) }),
+          callSubsystemJson('SaveAssets', { AssetPathsJson: JSON.stringify([asset_path]) }, { routingToolName: 'save_assets' }),
         );
 
         if (!saveResult.ok) {
@@ -657,7 +659,7 @@ export function registerCompositeWorkflowTools({
 
       // Step 5: Save
       const saveResult = await safeCall(() =>
-        callSubsystemJson('SaveAssets', { AssetPaths: JSON.stringify([asset_path]) }),
+        callSubsystemJson('SaveAssets', { AssetPathsJson: JSON.stringify([asset_path]) }, { routingToolName: 'save_assets' }),
       );
 
       if (!saveResult.ok) {
@@ -780,7 +782,7 @@ export function registerCompositeWorkflowTools({
 
       // Step 3: Save
       const saveResult = await safeCall(() =>
-        callSubsystemJson('SaveAssets', { AssetPaths: JSON.stringify([asset_path]) }),
+        callSubsystemJson('SaveAssets', { AssetPathsJson: JSON.stringify([asset_path]) }, { routingToolName: 'save_assets' }),
       );
 
       if (!saveResult.ok) {

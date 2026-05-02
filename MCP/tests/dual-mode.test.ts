@@ -431,6 +431,33 @@ describe('AdaptiveExecutor', () => {
     expect(result).toEqual({ success: true, from: 'commandlet' });
   });
 
+  it('honors per-call routing overrides inside dual-mode composite tools', async () => {
+    const editorAdapter = createMockAdapter({ isAvailable: vi.fn().mockResolvedValue(false) });
+    const cmdAdapter = createMockAdapter({
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getMode: vi.fn().mockReturnValue('commandlet'),
+      getCapabilities: vi.fn().mockReturnValue(COMMANDLET_CAPABILITIES),
+      execute: vi.fn().mockResolvedValue({ success: true, from: 'commandlet' }),
+    });
+    const detector = new ExecutionModeDetector(editorAdapter, cmdAdapter);
+    const executor = new AdaptiveExecutor(editorAdapter, cmdAdapter, detector);
+    executor.setToolMode('execute_widget_recipe', 'both');
+    executor.setToolMode('capture_widget_preview', 'editor_only');
+    executor.setActiveToolName('execute_widget_recipe');
+
+    await expect(
+      executor.executeRouted(
+        async () => ({ success: true, from: 'editor' }),
+        'CaptureWidgetPreview',
+        { AssetPath: '/Game/UI/WBP_Menu' },
+        { routingToolName: 'capture_widget_preview' },
+      ),
+    ).rejects.toThrow(/requires the Unreal Editor/);
+
+    expect(cmdAdapter.execute).not.toHaveBeenCalled();
+    executor.setActiveToolName(null);
+  });
+
   it('throws MODE_UNAVAILABLE when no adapter is available', async () => {
     const editorAdapter = createMockAdapter({ isAvailable: vi.fn().mockResolvedValue(false) });
     const detector = new ExecutionModeDetector(editorAdapter, null);
@@ -577,6 +604,7 @@ describe('TOOL_MODE_ANNOTATIONS', () => {
       'modify_widget_animation',
       'create_menu_screen',
       'apply_widget_patch',
+      'execute_widget_recipe',
       'create_material_setup',
       'save_assets',
       'create_commonui_button_style',
@@ -612,7 +640,6 @@ describe('TOOL_MODE_ANNOTATIONS', () => {
       'compare_motion_capture_bundle',
       'cleanup_captures',
       'apply_window_ui_changes',
-      'execute_widget_recipe',
     ] as const;
 
     for (const toolName of editorOnlyTools) {

@@ -20,7 +20,7 @@ export const serverInstructions = [
   'search_assets class_filter and list_assets class_filter accept project asset class names plus empty string for all types.',
   // Widget authoring
   'For UI redesign work, inspect the current HUD, transition widgets, and class defaults before replacing widget trees.',
-  'Use execute_widget_recipe, create_menu_screen, apply_widget_patch, apply_widget_diff, or operation-specific widget tools. The deprecated widget aliases were removed.',
+  'Use execute_widget_recipe, create_menu_screen, apply_widget_patch, apply_widget_diff, or operation-specific widget tools. execute_widget_recipe is headless-safe for create/build/defaults/compile/save steps; recipe capture steps still require a rendered editor. The deprecated widget aliases were removed.',
   // Material authoring
   'Use material_graph_operation for material settings, node creation, expression wiring, and root-property binding. Use extract_material/create_material/modify_material with asset_kind: "function" for MaterialFunctions.',
   // Design workflows
@@ -115,7 +115,7 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['create_data_asset', 'both'],
   ['create_data_table', 'both'],
 
-  // ── Widget mutation tools (both for direct structural authoring; composite recipes remain editor_only) ──
+  // ── Widget mutation tools (both for direct structural authoring and headless-safe composite steps) ──
   ['create_widget_blueprint', 'both'],
   ['replace_widget_tree', 'both'],
   ['replace_widget_class', 'both'],
@@ -130,7 +130,7 @@ export const TOOL_MODE_ANNOTATIONS: ReadonlyMap<string, ToolModeAnnotation> = ne
   ['compile_widget', 'both'],
   ['create_menu_screen', 'both'],
   ['apply_widget_patch', 'both'],
-  ['execute_widget_recipe', 'editor_only'],
+  ['execute_widget_recipe', 'both'],
 
   // ── CommonUI style mutation (both) ──
   ['create_commonui_button_style', 'both'],

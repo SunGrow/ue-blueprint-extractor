@@ -3,6 +3,11 @@ import { isPlainObject } from './formatting.js';
 
 export interface SubsystemCallOptions {
   timeoutMs?: number;
+  /**
+   * Internal MCP routing override. Composite tools use this when one
+   * subsystem call has a stricter execution contract than the parent tool.
+   */
+  routingToolName?: string;
 }
 
 type SubsystemClientLike = {
@@ -15,7 +20,12 @@ export async function callSubsystemJson(
   params: Record<string, unknown>,
   options?: SubsystemCallOptions,
 ): Promise<Record<string, unknown>> {
-  const result = await client.callSubsystem(method, params, options);
+  const { routingToolName: _routingToolName, ...transportOptions } = options ?? {};
+  const result = await client.callSubsystem(
+    method,
+    params,
+    Object.keys(transportOptions).length > 0 ? transportOptions : undefined,
+  );
 
   if (process.env.MCP_DEBUG_RESPONSES) {
     process.stderr.write(`[MCP_DEBUG] ${method} raw response: ${result}\n`);

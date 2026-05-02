@@ -172,7 +172,7 @@ export function registerStaticDocResources(server: Pick<McpServer, 'resource'>):
       '- Re-extract after mutation when you need confirmation; do not assume UE normalized fields exactly as sent.',
       '- For fidelity-sensitive menu work, normalize text, image, Figma-export, or HTML/CSS inputs into design_spec_json before authoring assets.',
       '- Start in the default tool profile unless you explicitly need the full flat surface. Use activate_tool_profile with profile="expert" for compatibility or low-level discovery, then switch back to profile="default" to return to the curated scoped surface.',
-      '- For multi-step widget work, prefer extract_widget_blueprint -> execute_widget_recipe or apply_widget_patch / patch_widget / batch_widget_operations -> compile_widget -> capture_widget_preview -> save_assets.',
+      '- For multi-step widget work, prefer extract_widget_blueprint -> execute_widget_recipe or apply_widget_patch / patch_widget / batch_widget_operations -> compile_widget -> capture_widget_preview -> save_assets. execute_widget_recipe can run create/build/defaults/compile/save through the headless lane; recipe capture steps still require a rendered editor.',
       '- For authored widget motion, prefer extract_widget_animation -> create_widget_animation or modify_widget_animation -> capture_widget_motion_checkpoints -> compare_motion_capture_bundle before save_assets.',
       '- When reference frames exist, extend the widget flow to compare_capture_to_reference before save_assets. Without reference frames, capture and report lower-confidence or partial verification explicitly.',
       '- If widget preview capture is blocked, report partial verification explicitly instead of treating compile/save as visual proof.',

@@ -267,6 +267,7 @@ Generic DataAsset reflection supports inline instanced `UObject` graphs for `UPR
 - Normalize multimodal design input into `design_spec_json` first when the redesign is fidelity-sensitive.
 - Inspect the current widget and any owning HUD/transition assets first.
 - Prefer `execute_widget_recipe`, `create_menu_screen`, `apply_widget_patch`, `apply_widget_diff`, or operation-specific widget tools such as `patch_widget`, `insert_widget_child`, `remove_widget`, `move_widget`, `wrap_widget`, `replace_widget_class`, and `batch_widget_operations`.
+- `execute_widget_recipe` can run create/build/defaults/compile/save steps through the headless commandlet lane; recipe `capture` steps still require a rendered editor session.
 - Use `replace_widget_tree` only when replacing the full tree is justified. The deprecated widget aliases were removed; use `patch_widget`, `patch_widget_class_defaults`, `batch_widget_operations`, and `compile_widget` instead.
 - `extract_widget_blueprint` now always returns `rootWidget` as an object or `null`. If extraction degrades, inspect `widgetTreeStatus`, `widgetTreeError`, and `compile.errors` before rebuilding the tree.
 - Compile immediately after structural changes with `compile_widget`.

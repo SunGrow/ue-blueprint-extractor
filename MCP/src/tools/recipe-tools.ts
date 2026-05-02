@@ -11,11 +11,13 @@ import {
 import { parseWidgetDsl } from '../helpers/widget-dsl-parser.js';
 import { parseWidgetRecipe } from '../helpers/widget-recipe-parser.js';
 import { jsonToolSuccess } from '../helpers/subsystem.js';
+import type { SubsystemCallOptions } from '../helpers/subsystem.js';
 import type { ToolHelpEntry } from '../helpers/tool-help.js';
 
 type JsonSubsystemCaller = (
   method: string,
   params: Record<string, unknown>,
+  options?: SubsystemCallOptions,
 ) => Promise<Record<string, unknown>>;
 
 type RegisterRecipeToolsOptions = {
@@ -55,7 +57,7 @@ export function registerRecipeTools({
     {
       title: 'Execute Widget Recipe',
       description:
-        'Execute a markdown widget recipe that describes the desired end state. Creates the widget, builds the tree, patches defaults, compiles, and saves — all in one call.',
+        'Execute a markdown widget recipe that describes the desired end state. Create/build/defaults/compile/save steps are headless-safe; capture steps require a rendered editor session.',
       inputSchema: {
         recipe: z.string().describe('Markdown recipe string.'),
       },
@@ -98,7 +100,7 @@ export function registerRecipeTools({
       const createResult = await safeCall(() =>
         callSubsystemJson('CreateWidgetBlueprint', {
           AssetPath: parsed.asset.path,
-          ParentClassPath: parsed.asset.parent ?? 'UserWidget',
+          ParentClass: parsed.asset.parent ?? 'UserWidget',
         }),
       );
       if (createResult.ok) {
@@ -227,7 +229,7 @@ export function registerRecipeTools({
           const captureResult = await safeCall(() =>
             callSubsystemJson('CaptureWidgetPreview', {
               AssetPath: parsed.asset.path,
-            }),
+            }, { routingToolName: 'capture_widget_preview' }),
           );
           if (captureResult.ok) {
             steps.push({ step: 'capture', status: 'success', message: 'Captured preview', data: captureResult.value });
@@ -238,8 +240,8 @@ export function registerRecipeTools({
         } else if (afterStep === 'save') {
           const saveResult = await safeCall(() =>
             callSubsystemJson('SaveAssets', {
-              AssetPaths: JSON.stringify([parsed.asset.path]),
-            }),
+              AssetPathsJson: JSON.stringify([parsed.asset.path]),
+            }, { routingToolName: 'save_assets' }),
           );
           if (saveResult.ok) {
             steps.push({ step: 'save', status: 'success', message: 'Saved', data: saveResult.value });
@@ -290,7 +292,7 @@ export function registerRecipeTools({
   toolHelpRegistry.set('execute_widget_recipe', {
     title: 'Execute Widget Recipe',
     description:
-      'Execute a markdown widget recipe that describes the desired end state. Creates the widget, builds the tree, patches defaults, compiles, and saves — all in one call.',
+      'Execute a markdown widget recipe that describes the desired end state. Create/build/defaults/compile/save steps are headless-safe; capture steps require a rendered editor session.',
     inputSchema: {} as Record<string, z.ZodTypeAny>,
     outputSchema: z.object({}).passthrough(),
   });
