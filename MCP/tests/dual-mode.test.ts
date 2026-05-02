@@ -659,10 +659,12 @@ describe('TOOL_MODE_ANNOTATIONS', () => {
     expect(executor.getToolMode('extract_blueprint')).toBe('both');
     expect(executor.getToolMode('list_assets')).toBe('both');
 
-    // Spot-check: editor_only tools
+    // Spot-check: commandlet-safe authoring tools
     expect(executor.getToolMode('patch_widget')).toBe('both');
     expect(executor.getToolMode('create_widget_blueprint')).toBe('both');
     expect(executor.getToolMode('modify_blueprint_members')).toBe('both');
+
+    // Spot-check: editor-only tools
     expect(executor.getToolMode('restart_editor')).toBe('editor_only');
     expect(executor.getToolMode('capture_widget_preview')).toBe('editor_only');
     expect(executor.getToolMode('start_pie')).toBe('editor_only');
