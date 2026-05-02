@@ -1,16 +1,39 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import {
   ProjectController,
   classifyChangedPaths,
   classifyBuildError,
   inferExecutionPlatform,
-  resolveBuildScript,
   resolveCommandInvocation,
-  resolveEditorExecutable,
 } from '../src/project-controller.js';
+
+type ProjectControllerModule = typeof import('../src/project-controller.js');
+
+async function importProjectControllerWithAccessMock(
+  allowedPaths: Set<string> | 'all' = 'all',
+): Promise<{ module: ProjectControllerModule; access: ReturnType<typeof vi.fn> }> {
+  vi.resetModules();
+  const access = vi.fn(async (candidate: string) => {
+    if (allowedPaths === 'all' || allowedPaths.has(candidate)) {
+      return undefined;
+    }
+    throw new Error(`ENOENT: ${candidate}`);
+  });
+
+  vi.doMock('node:fs/promises', async () => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    return {
+      ...actual,
+      access,
+    };
+  });
+
+  return {
+    module: await import('../src/project-controller.js'),
+    access,
+  };
+}
 
 describe('ProjectController', () => {
   const tempDirs: string[] = [];
@@ -57,17 +80,13 @@ describe('ProjectController', () => {
   });
 
   it('builds the correct command line from explicit inputs and env fallbacks', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-'));
-    tempDirs.push(root);
+    const root = '/tmp/bpx-project-controller';
+    const engineRoot = `${root}/UE_5.7`;
+    const buildScript = `${engineRoot}/Engine/Build/BatchFiles/Build.sh`;
+    const projectPath = `${root}/MyGame.uproject`;
+    const { module } = await importProjectControllerWithAccessMock(new Set([buildScript]));
 
-    const engineRoot = join(root, 'UE_5.7');
-    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
-    const projectPath = join(root, 'MyGame.uproject');
-    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
-    await writeFile(buildScript, '#!/usr/bin/env bash\n');
-    await writeFile(projectPath, '{}');
-
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
         UE_ENGINE_ROOT: engineRoot,
         UE_PROJECT_PATH: projectPath,
@@ -254,18 +273,14 @@ describe('ProjectController', () => {
   });
 
   it('launches the editor from the host as a detached process', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-launch-'));
-    tempDirs.push(root);
-
-    const engineRoot = join(root, 'UE_5.7');
-    const editorExecutable = join(engineRoot, 'Engine', 'Binaries', 'Linux', 'UnrealEditor');
-    const projectPath = join(root, 'MyGame.uproject');
-    await mkdir(join(engineRoot, 'Engine', 'Binaries', 'Linux'), { recursive: true });
-    await writeFile(editorExecutable, '#!/usr/bin/env bash\n');
-    await writeFile(projectPath, '{}');
+    const root = '/tmp/bpx-project-controller-launch';
+    const engineRoot = `${root}/UE_5.7`;
+    const editorExecutable = `${engineRoot}/Engine/Binaries/Linux/UnrealEditor`;
+    const projectPath = `${root}/MyGame.uproject`;
+    const { module } = await importProjectControllerWithAccessMock();
 
     const spawnCalls: Array<Record<string, unknown>> = [];
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
         UE_ENGINE_ROOT: engineRoot,
         UE_PROJECT_PATH: projectPath,
@@ -297,18 +312,14 @@ describe('ProjectController', () => {
   });
 
   it('does not duplicate default launch switches when explicit overrides are provided', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-launch-args-'));
-    tempDirs.push(root);
-
-    const engineRoot = join(root, 'UE_5.7');
-    const editorExecutable = join(engineRoot, 'Engine', 'Binaries', 'Linux', 'UnrealEditor');
-    const projectPath = join(root, 'MyGame.uproject');
-    await mkdir(join(engineRoot, 'Engine', 'Binaries', 'Linux'), { recursive: true });
-    await writeFile(editorExecutable, '#!/usr/bin/env bash\n');
-    await writeFile(projectPath, '{}');
+    const root = '/tmp/bpx-project-controller-launch-args';
+    const engineRoot = `${root}/UE_5.7`;
+    const editorExecutable = `${engineRoot}/Engine/Binaries/Linux/UnrealEditor`;
+    const projectPath = `${root}/MyGame.uproject`;
+    const { module } = await importProjectControllerWithAccessMock();
 
     const spawnCalls: Array<Record<string, unknown>> = [];
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
         UE_ENGINE_ROOT: engineRoot,
         UE_PROJECT_PATH: projectPath,
@@ -350,31 +361,20 @@ describe('ProjectController', () => {
   });
 
   it('resolves platform-specific build scripts and commandlet executables', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-platforms-'));
-    tempDirs.push(root);
+    const root = '/tmp/bpx-project-controller-platforms';
+    const linuxEngineRoot = `${root}/UE_5.7-linux`;
+    const macEngineRoot = `${root}/UE_5.7-mac`;
 
-    const linuxEngineRoot = join(root, 'UE_5.7-linux');
-    const macEngineRoot = join(root, 'UE_5.7-mac');
+    const linuxBuild = `${linuxEngineRoot}/Engine/Build/BatchFiles/Linux/Build.sh`;
+    const linuxCmd = `${linuxEngineRoot}/Engine/Binaries/Linux/UnrealEditor-Cmd`;
+    const macBuild = `${macEngineRoot}/Engine/Build/BatchFiles/Mac/Build.sh`;
+    const macCmd = `${macEngineRoot}/Engine/Binaries/Mac/UnrealEditor-Cmd`;
+    const { module } = await importProjectControllerWithAccessMock();
 
-    const linuxBuild = join(linuxEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh');
-    const linuxCmd = join(linuxEngineRoot, 'Engine', 'Binaries', 'Linux', 'UnrealEditor-Cmd');
-    const macBuild = join(macEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Mac', 'Build.sh');
-    const macCmd = join(macEngineRoot, 'Engine', 'Binaries', 'Mac', 'UnrealEditor-Cmd');
-
-    await mkdir(join(linuxEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux'), { recursive: true });
-    await mkdir(join(linuxEngineRoot, 'Engine', 'Binaries', 'Linux'), { recursive: true });
-    await mkdir(join(macEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Mac'), { recursive: true });
-    await mkdir(join(macEngineRoot, 'Engine', 'Binaries', 'Mac'), { recursive: true });
-
-    await writeFile(linuxBuild, '#!/usr/bin/env bash\n');
-    await writeFile(linuxCmd, '#!/usr/bin/env bash\n');
-    await writeFile(macBuild, '#!/usr/bin/env bash\n');
-    await writeFile(macCmd, '#!/usr/bin/env bash\n');
-
-    await expect(resolveBuildScript(linuxEngineRoot, 'linux')).resolves.toBe(linuxBuild);
-    await expect(resolveEditorExecutable(linuxEngineRoot, 'linux', 'commandlet')).resolves.toBe(linuxCmd);
-    await expect(resolveBuildScript(macEngineRoot, 'darwin')).resolves.toBe(macBuild);
-    await expect(resolveEditorExecutable(macEngineRoot, 'darwin', 'commandlet')).resolves.toBe(macCmd);
+    await expect(module.resolveBuildScript(linuxEngineRoot, 'linux')).resolves.toBe(linuxBuild);
+    await expect(module.resolveEditorExecutable(linuxEngineRoot, 'linux', 'commandlet')).resolves.toBe(linuxCmd);
+    await expect(module.resolveBuildScript(macEngineRoot, 'darwin')).resolves.toBe(macBuild);
+    await expect(module.resolveEditorExecutable(macEngineRoot, 'darwin', 'commandlet')).resolves.toBe(macCmd);
   });
 
   it('waits for the editor to disconnect and reconnect after restart', async () => {
@@ -441,17 +441,13 @@ describe('ProjectController', () => {
   });
 
   it('sets compilationSucceeded true when errorCategory is locked_file', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-locked-'));
-    tempDirs.push(root);
+    const root = '/tmp/bpx-project-controller-locked';
+    const engineRoot = `${root}/UE_5.7`;
+    const buildScript = `${engineRoot}/Engine/Build/BatchFiles/Build.sh`;
+    const projectPath = `${root}/MyGame.uproject`;
+    const { module } = await importProjectControllerWithAccessMock(new Set([buildScript]));
 
-    const engineRoot = join(root, 'UE_5.7');
-    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
-    const projectPath = join(root, 'MyGame.uproject');
-    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
-    await writeFile(buildScript, '#!/usr/bin/env bash\n');
-    await writeFile(projectPath, '{}');
-
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
         UE_ENGINE_ROOT: engineRoot,
         UE_PROJECT_PATH: projectPath,
@@ -472,17 +468,13 @@ describe('ProjectController', () => {
   });
 
   it('sets compilationSucceeded false when errorCategory is compilation', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-comperr-'));
-    tempDirs.push(root);
+    const root = '/tmp/bpx-project-controller-comperr';
+    const engineRoot = `${root}/UE_5.7`;
+    const buildScript = `${engineRoot}/Engine/Build/BatchFiles/Build.sh`;
+    const projectPath = `${root}/MyGame.uproject`;
+    const { module } = await importProjectControllerWithAccessMock(new Set([buildScript]));
 
-    const engineRoot = join(root, 'UE_5.7');
-    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
-    const projectPath = join(root, 'MyGame.uproject');
-    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
-    await writeFile(buildScript, '#!/usr/bin/env bash\n');
-    await writeFile(projectPath, '{}');
-
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
         UE_ENGINE_ROOT: engineRoot,
         UE_PROJECT_PATH: projectPath,
@@ -503,17 +495,13 @@ describe('ProjectController', () => {
   });
 
   it('sets compilationSucceeded true when build succeeds', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-ok-'));
-    tempDirs.push(root);
+    const root = '/tmp/bpx-project-controller-ok';
+    const engineRoot = `${root}/UE_5.7`;
+    const buildScript = `${engineRoot}/Engine/Build/BatchFiles/Build.sh`;
+    const projectPath = `${root}/MyGame.uproject`;
+    const { module } = await importProjectControllerWithAccessMock(new Set([buildScript]));
 
-    const engineRoot = join(root, 'UE_5.7');
-    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
-    const projectPath = join(root, 'MyGame.uproject');
-    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
-    await writeFile(buildScript, '#!/usr/bin/env bash\n');
-    await writeFile(projectPath, '{}');
-
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
         UE_ENGINE_ROOT: engineRoot,
         UE_PROJECT_PATH: projectPath,
@@ -545,17 +533,13 @@ describe('ProjectController', () => {
   });
 
   it('falls back to environment variables when explicit inputs are missing', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bpx-project-controller-env-'));
-    tempDirs.push(root);
+    const root = '/tmp/bpx-project-controller-env';
+    const engineRoot = `${root}/UE_5.7`;
+    const buildScript = `${engineRoot}/Engine/Build/BatchFiles/Build.sh`;
+    const projectPath = `${root}/MyGame.uproject`;
+    const { module } = await importProjectControllerWithAccessMock(new Set([buildScript]));
 
-    const engineRoot = join(root, 'UE_5.7');
-    const buildScript = join(engineRoot, 'Engine', 'Build', 'BatchFiles', 'Build.sh');
-    const projectPath = join(root, 'MyGame.uproject');
-    await mkdir(join(engineRoot, 'Engine', 'Build', 'BatchFiles'), { recursive: true });
-    await writeFile(buildScript, '#!/usr/bin/env bash\n');
-    await writeFile(projectPath, '{}');
-
-    const controller = new ProjectController({
+    const controller = new module.ProjectController({
       env: {
         UE_ENGINE_ROOT: engineRoot,
         UE_PROJECT_PATH: projectPath,

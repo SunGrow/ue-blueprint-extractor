@@ -19,6 +19,18 @@ import {
   toWindowsStylePath,
 } from '../src/helpers/workspace-project.js';
 
+function buildScriptMarkerSegments(platform: NodeJS.Platform): string[] {
+  if (platform === 'win32') {
+    return ['Engine', 'Build', 'BatchFiles', 'Build.bat'];
+  }
+
+  if (platform === 'darwin') {
+    return ['Engine', 'Build', 'BatchFiles', 'Mac', 'Build.sh'];
+  }
+
+  return ['Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh'];
+}
+
 describe('rememberExternalBuild', () => {
   it('maps CompileProjectCodeResult fields into a flat summary object', () => {
     const result = rememberExternalBuild({
@@ -247,9 +259,10 @@ describe('resolveProjectInputs', () => {
     scratchDirs.push(scratchRoot);
 
     const associatedEngineRoot = path.join(scratchRoot, 'UE_5.7');
-    await mkdir(path.join(associatedEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux'), { recursive: true });
+    const markerSegments = buildScriptMarkerSegments(process.platform);
+    await mkdir(path.join(associatedEngineRoot, ...markerSegments.slice(0, -1)), { recursive: true });
     await writeFile(
-      path.join(associatedEngineRoot, 'Engine', 'Build', 'BatchFiles', 'Linux', 'Build.sh'),
+      path.join(associatedEngineRoot, ...markerSegments),
       '#!/bin/sh\n',
       'utf8',
     );
@@ -272,7 +285,7 @@ describe('resolveProjectInputs', () => {
         env: {
           UE_ENGINE_ROOT: staleImplicitRoot,
         } as NodeJS.ProcessEnv,
-        platform: 'linux',
+        platform: process.platform,
       },
     );
 
